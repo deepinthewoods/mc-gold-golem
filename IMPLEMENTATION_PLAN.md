@@ -5,10 +5,13 @@
 - Dependencies: Geckolib set to `geckolib-fabric-1.21.10:5.3-alpha-1`; Owo removed.
 - Entity: `GoldGolemEntity` registered with required 1.21.10 attributes (waypoint_transmit_range, step_height, movement_efficiency, gravity, safe_fall_distance, fall_damage_multiplier, jump_strength). Basic goals; right-click opens UI.
 - Summoning: Pumpkin-on-gold callback spawns a golem and assigns owner.
-- UI: Single-screen `GolemScreen` works. Gradient ghost slots (clickable buttons) + width +/-; state syncs via payloads (C2S set-slot/set-width; S2C sync on open and after changes).
-- Networking: New Fabric Custom Payloads registered; client receiver updates UI.
+- UI: Single-screen `GolemScreen` now uses a vanilla chest look with a dynamic control band. Top-to-bottom: label, gradient ghost row, width slider, golem inventory grid, player inventory, hotbar. Ghost slots are clickable; width uses a slider.
+- Networking: Fabric Custom Payloads registered; client receiver updates the open screen.
 - Rendering: Temporary `EmptyEntityRenderer` registered (entity is invisible) until GeckoLib renderer arrives.
-- Persistence: Not implemented yet (gradient/width/inventory reset on reload).
+- Persistence: Implemented with 1.21.10 storage API (ReadView/WriteView). Saves width, gradient, inventory, and owner UUID.
+- Ownership: Owner-only UI enforced; in singleplayer, if the saved owner is offline, right-click claims the golem.
+- Dynamic layout: No‑lib UI spec (`GolemOpenData`) drives gradient rows, golem slot count, and slider presence; handler places slots with a computed controls margin to keep hitboxes aligned with background.
+- Golem inventory: 27 slots (3x9) for now.
 
 ### Scope
 Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
@@ -44,14 +47,13 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
 - DataTracker: track `PathWidth` (int, 1–9). Gradient synced via packets.
 
 5) UI (Vanilla)
-- Screen handler: `GolemInventoryScreenHandler` (56 golem slots + player inv). Registered via `ExtendedScreenHandlerType` with `VAR_INT` entity id.
-- Client screen: `GolemScreen` (`HandledScreen`), single-screen layout:
-  - Top: 9 “ghost” slots for gradient (store block ID, no item transfer) with clickable overlay buttons; width +/- buttons (1–9).
-  - Middle: chest-like layout for the golem’s 56-slot inventory using the handler.
-  - Bottom: standard player inventory/hotbar.
+- Screen handler: `GolemInventoryScreenHandler` (dynamic golem slots + player inv). Registered via `ExtendedScreenHandlerType` with `GolemOpenData` open data (entityId, gradientRows, golemSlots, slider).
+- Client screen: `GolemScreen` (`HandledScreen`), chest-style layout:
+  - Control band (inside the window): label (title), one or more ghost rows (9 per row), width slider.
+  - Body: golem grid (rows × 9) drawn from chest body slice; slots aligned to background; then standard player inventory/hotbar at the bottom slice.
 - Interactions implemented:
-  - Click ghost slot with a block on cursor -> C2S `set_gradient_slot` payload; server stores and S2C-syncs back.
-  - Click width +/- -> C2S `set_path_width` payload; server clamps [1,9] and S2C-syncs back.
+  - Click ghost slot with a block in hand -> C2S `set_gradient_slot` payload; server stores and S2C-syncs back.
+  - Width slider -> C2S `set_path_width` payload; server clamps [1,9] and S2C-syncs back.
 
 6) Networking & Sync
 - C2S payloads: `set_gradient_slot`, `set_path_width`.
@@ -79,15 +81,17 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
 ### Completed
 - Dependencies aligned; Owo removed; Geckolib updated.
 - Entity registered with required attributes; summon-by-pumpkin implemented; owner tracked.
-- Screen handler + screen implemented; ghost slots + width; payload networking + initial sync.
+- Persistence implemented via ReadView/WriteView; saves gradient, width, inventory, owner.
+- Owner-only UI gate implemented; SP auto-claim when previous owner is offline.
+- UI overhauled to a chest-style single screen with ghost slots + slider; proper vanilla textures; hover/click hitboxes aligned with grid; labels grid-aligned.
+- Dynamic layout spec added (no external UI lib), with adjustable gradient rows and golem inventory size; golem inventory set to 27 slots.
 - Temporary renderer registered to stabilize client.
 
 ### Next Up
-- Persistence: Save/load gradient, width, and inventory NBT; reintroduce NBT hooks with 1.21.10 signatures.
-- Ownership gates: Limit UI open to owner; keep server authoritative checks in C2S.
-- Path logic: Implement placement algorithm and inventory consumption; handle block validation.
+- Path logic: Implement placement algorithm and inventory consumption; handle block validation and throttling.
 - Renderer: Add GeckoLib placeholder model/anim and swap off `EmptyEntityRenderer`.
-- UX polish: Hover tooltips on ghost slots, visual width indicator, invalid block feedback.
+- UI dynamics: Wire gradientRows to entity state; add +/- to add/remove rows dynamically; consider multi-row filler/spacing.
+- UX polish: Ghost slot tooltips, invalid block feedback, show current block names; small hover highlight for ghost slots.
 
 ### Dev Flow
 - Build: `gradlew build`
@@ -98,5 +102,6 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
 ### Risks & Notes
 - GeckoLib coordinates vary per MC minor; confirm exact 1.21.10 artifact (currently alpha).
 - Vanilla UI ghost slots need careful cursor handling; keep server authoritative.
+- UI alignment: ensure future layout tweaks always adjust both handler slot positions and background slices together.
 - Path placement must avoid griefing unbreakables; check hardness/replaceability.
 - Performance: throttle placement rate (e.g., every few ticks) if needed.

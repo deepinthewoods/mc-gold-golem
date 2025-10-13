@@ -5,8 +5,8 @@ import net.fabricmc.api.Environment;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.SliderWidget;
+import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.BlockItem;
 import net.minecraft.registry.Registries;
@@ -34,10 +34,10 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
 
     public GolemScreen(GolemInventoryScreenHandler handler, PlayerInventory inventory, Text title) {
         super(handler, inventory, title);
-        this.golemRows = (GolemInventoryScreenHandler.GOLEM_SLOT_COUNT + 8) / 9; // 3 rows for 27 slots
+        this.golemRows = handler.getGolemRows();
         this.topHeight = 17 + this.golemRows * SLOT_SIZE; // rows*18 + 17
         this.backgroundWidth = 176; // standard chest width
-        this.backgroundHeight = topHeight + 97 + GolemInventoryScreenHandler.CONTROLS_MARGIN; // add margin for controls
+        this.backgroundHeight = topHeight + 97 + handler.getControlsMargin();
     }
 
     public int getEntityId() { return this.handler.getEntityId(); }
@@ -50,6 +50,11 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
     @Override
     protected void init() {
         super.init();
+        // Align labels like vanilla relative to this screen's background
+        this.titleX = 8;
+        this.titleY = 6;
+        this.playerInventoryTitleX = 8;
+        this.playerInventoryTitleY = this.backgroundHeight - 96 + 2 - 18; // shift up by one slot height
         // Compute anchors
         int titleY = this.y + 6;
         int gradientY = titleY + this.textRenderer.fontHeight + 4;
@@ -73,17 +78,19 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
         };
         this.addDrawableChild(slider);
 
-        // Invisible buttons over ghost slots to handle clicks
+        // Add transparent click regions over the gradient slots for input handling
         int ghostY = gradientY;
         int startX = this.x + PANEL_LEFT;
         for (int i = 0; i < 9; i++) {
             int idx = i;
             int gx = startX + i * SLOT_SIZE;
-            this.addDrawableChild(ButtonWidget.builder(Text.empty(), b -> {
+            var btn = ButtonWidget.builder(Text.empty(), b -> {
                 var player = this.client != null ? this.client.player : null;
                 if (player == null) return;
-                var held = player.getMainHandStack();
-                if (held.getItem() instanceof net.minecraft.item.BlockItem bi) {
+                // Prefer cursor stack in GUI, fall back to main hand
+                net.minecraft.item.ItemStack cursor = this.handler.getCursorStack();
+                net.minecraft.item.ItemStack held = cursor.isEmpty() ? player.getMainHandStack() : cursor;
+                if (held != null && !held.isEmpty() && held.getItem() instanceof net.minecraft.item.BlockItem bi) {
                     var id = Registries.BLOCK.getId(bi.getBlock());
                     ClientPlayNetworking.send(new SetGradientSlotC2SPayload(idx, java.util.Optional.of(id)));
                     this.gradient[idx] = id.toString();
@@ -91,7 +98,9 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
                     ClientPlayNetworking.send(new SetGradientSlotC2SPayload(idx, java.util.Optional.empty()));
                     this.gradient[idx] = "";
                 }
-            }).dimensions(gx, ghostY, 16, 14).build());
+            }).dimensions(gx, ghostY, 18, 18).build();
+            btn.setAlpha(0f);
+            this.addDrawableChild(btn);
         }
     }
 
@@ -101,16 +110,19 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
         int top = this.y;
         int bodyHeight = this.golemRows * 18; // only body area (no header)
         // Controls band: draw chest header and filler (vanilla style)
-        int margin = GolemInventoryScreenHandler.CONTROLS_MARGIN;
+        int margin = handler.getControlsMargin();
         float texW = 256f, texH = 256f;
         int headerH = 17;
         // Header (u=0,v=0,h=17)
         context.drawTexturedQuad(CHEST_TEX, left, top, left + this.backgroundWidth, top + headerH,
                 0f / texW, 176f / texW, 0f / texH, headerH / texH);
-        // Filler under header up to margin using neutral tone (avoid grid under controls)
+        // Filler under header up to margin using a 1px band from the vanilla header (stretched)
         int fillerH = Math.max(0, margin - headerH);
         if (fillerH > 0) {
-            context.fill(left, top + headerH, left + this.backgroundWidth, top + headerH + fillerH, 0xFF3A3A3A);
+            float v1 = 10f / texH;
+            float v2 = 11f / texH;
+            context.drawTexturedQuad(CHEST_TEX, left, top + headerH, left + this.backgroundWidth, top + headerH + fillerH,
+                    0f / texW, 176f / texW, v1, v2);
         }
         // Texture is 256x256; draw body (v=17) and bottom (v=126)
         int bodyY = top + margin; // start body exactly at margin
@@ -122,36 +134,51 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
         int bottomH = 96;
         context.drawTexturedQuad(CHEST_TEX, left, bottomY, left + this.backgroundWidth, bottomY + bottomH,
                 0f / texW, 176f / texW, bottomV / texH, (bottomV + bottomH) / texH);
+
+        // Draw gradient slot frames in background so items and cursor draw above
+        int titleY = this.y + 6;
+        int gradientY = titleY + this.textRenderer.fontHeight + 4;
+        int startX = this.x + PANEL_LEFT;
+        for (int i = 0; i < 9; i++) {
+            int gx = startX + i * SLOT_SIZE;
+            int gy = gradientY;
+            int bg = 0xFF2B2B2B;    // darker fill
+            int border = 0xFF000000; // dark outline
+            // Outer border
+            context.fill(gx, gy, gx + 18, gy + 18, border);
+            // Inner background (16x16 area inset by 1px)
+            context.fill(gx + 1, gy + 1, gx + 17, gy + 17, bg);
+        }
     }
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         this.renderBackground(context, mouseX, mouseY, delta);
         super.render(context, mouseX, mouseY, delta);
-        // Titles at the top of window
+        // Titles are drawn by HandledScreen (foreground) using titleX/Y fields
         int titleY = this.y + 6;
-        context.drawText(this.textRenderer, this.title, this.x + 8, titleY, 0x404040, false);
-        int bodyHeightForLabel = this.golemRows * 18;
-        context.drawText(this.textRenderer, this.playerInventoryTitle, this.x + 8, this.y + GolemInventoryScreenHandler.CONTROLS_MARGIN + bodyHeightForLabel + 6, 0x404040, false);
-        // Ghost gradient slots and previews
+        // Gradient items preview (draw at high Z to ensure on top of children)
         int gradientY = titleY + this.textRenderer.fontHeight + 4;
-        int ghostY = gradientY;
+        int slotY = gradientY;
         int startX = this.x + PANEL_LEFT;
         for (int i = 0; i < 9; i++) {
             int gx = startX + i * SLOT_SIZE;
-            context.fill(gx - 1, ghostY - 1, gx - 1 + 18, ghostY - 1 + 16, 0x40FFFFFF);
-            context.fill(gx, ghostY, gx + 16, ghostY + 14, 0x40000000);
+            int gy = slotY;
             String id = (i < gradient.length) ? gradient[i] : "";
             if (id != null && !id.isEmpty()) {
                 var ident = Identifier.tryParse(id);
                 if (ident != null) {
-                    var block = Registries.BLOCK.get(ident);
-                    if (block != null) {
-                        var stack = new net.minecraft.item.ItemStack(block.asItem());
-                        var player = this.client != null ? this.client.player : null;
-                        if (player != null) {
-                            context.drawItem(player, stack, gx, ghostY - 1, 0);
-                        }
+                    net.minecraft.item.ItemStack stack = net.minecraft.item.ItemStack.EMPTY;
+                    var item = Registries.ITEM.get(ident);
+                    if (item != net.minecraft.item.Items.AIR) {
+                        stack = new net.minecraft.item.ItemStack(item);
+                    } else {
+                        var block = Registries.BLOCK.get(ident);
+                        if (block != null) stack = new net.minecraft.item.ItemStack(block.asItem());
+                    }
+                    if (!stack.isEmpty()) {
+                        // Render item within the slot (offset by 1px to center in 16x16 area)
+                        context.drawItem(stack, gx + 1, gy + 1);
                     }
                 }
             }
@@ -159,5 +186,7 @@ public class GolemScreen extends HandledScreen<GolemInventoryScreenHandler> {
         this.drawMouseoverTooltip(context, mouseX, mouseY);
     }
 
-    // Input handled via invisible buttons in init() and standard widget routing.
+    // Use default drawForeground to render titles at configured positions
+
+    // Input handled by transparent widgets added in init().
 }

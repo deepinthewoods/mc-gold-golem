@@ -14,10 +14,16 @@ public final class GolemScreens {
     private GolemScreens() {}
 
     public static void open(ServerPlayerEntity player, int entityId, Inventory golemInventory) {
-        player.openHandledScreen(new ExtendedScreenHandlerFactory<Integer>() {
+        // Build dynamic UI spec
+        int gradientRows = 1;
+        int golemSlots = golemInventory.size();
+        int slider = 1;
+        var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
+
+        player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {
             @Override
-            public Integer getScreenOpeningData(ServerPlayerEntity player) {
-                return entityId;
+            public GolemOpenData getScreenOpeningData(ServerPlayerEntity player) {
+                return openData;
             }
 
             @Override
@@ -27,7 +33,7 @@ public final class GolemScreens {
 
             @Override
             public ScreenHandler createMenu(int syncId, PlayerInventory playerInventory, PlayerEntity ignored) {
-                return new GolemInventoryScreenHandler(syncId, playerInventory, golemInventory, entityId);
+                return new GolemInventoryScreenHandler(syncId, playerInventory, golemInventory, openData);
             }
         });
         // Send initial sync of width/gradient to the opener

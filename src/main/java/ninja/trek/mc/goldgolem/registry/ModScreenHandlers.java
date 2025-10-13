@@ -18,8 +18,9 @@ public final class ModScreenHandlers {
         GOLEM_SCREEN_HANDLER = Registry.register(
                 Registries.SCREEN_HANDLER,
                 GoldGolem.id("golem_inventory"),
-                new ExtendedScreenHandlerType<GolemInventoryScreenHandler, Integer>((syncId, playerInv, data) ->
-                        new GolemInventoryScreenHandler(syncId, playerInv, data), PacketCodecs.VAR_INT)
+                new ExtendedScreenHandlerType<>((syncId, playerInv, data) ->
+                        new GolemInventoryScreenHandler(syncId, playerInv, data),
+                        ninja.trek.mc.goldgolem.screen.GolemOpenData.CODEC)
         );
     }
 }

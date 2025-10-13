@@ -10,24 +10,32 @@ import ninja.trek.mc.goldgolem.registry.ModScreenHandlers;
 import net.minecraft.item.ItemStack;
 
 public class GolemInventoryScreenHandler extends ScreenHandler {
-    public static final int GOLEM_SLOT_COUNT = 27;
-    public static final int CONTROLS_MARGIN = 59; // title(6+font) +4 +ghost(16) +6 +slider(12) +6 gap
     private final Inventory golemInventory;
-    private final int entityId; // links to the golem entity
+    private final int entityId;
+    private final int golemSlotCount;
+    private final int controlsMargin;
+    private final int golemRows;
 
-    // Client-side constructor (from ExtendedScreenHandlerType buffer): use a client-side simple inventory
-    public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, int entityId) {
+    // Client-side constructor (from ExtendedScreenHandlerType buffer)
+    public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, GolemOpenData data) {
         super(ModScreenHandlers.GOLEM_SCREEN_HANDLER, syncId);
-        this.entityId = entityId;
-        this.golemInventory = new SimpleInventory(GOLEM_SLOT_COUNT);
+        this.entityId = data.entityId();
+        this.golemSlotCount = Math.max(0, data.golemSlots());
+        this.golemRows = (this.golemSlotCount + 8) / 9;
+        int titleLine = 10;
+        this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), titleLine);
+        this.golemInventory = new SimpleInventory(this.golemSlotCount);
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
     }
 
     // Server-side constructor: use the actual golem inventory
-    public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, Inventory golemInventory, int entityId) {
+    public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, Inventory golemInventory, GolemOpenData data) {
         super(ModScreenHandlers.GOLEM_SCREEN_HANDLER, syncId);
-        this.entityId = entityId;
+        this.entityId = data.entityId();
+        this.golemSlotCount = Math.min(golemInventory.size(), Math.max(0, data.golemSlots()));
+        this.golemRows = (this.golemSlotCount + 8) / 9;
+        this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), 10);
         this.golemInventory = golemInventory;
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -36,16 +44,15 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     private void setupSlots(PlayerInventory playerInventory) {
         // Layout golem inventory in a chest-like 9-column grid (rows = ceil(56/9) = 7)
         int index = 0;
-        int rows = (GOLEM_SLOT_COUNT + 8) / 9;
-        for (int row = 0; row < rows; row++) {
+        for (int row = 0; row < golemRows; row++) {
             for (int col = 0; col < 9; col++) {
-                if (index >= GOLEM_SLOT_COUNT) break;
-                addSlot(new Slot(golemInventory, index++, 8 + col * 18, 18 + CONTROLS_MARGIN + row * 18));
+                if (index >= golemSlotCount) break;
+                addSlot(new Slot(golemInventory, index++, 8 + col * 18, 1 + controlsMargin + row * 18));
             }
         }
 
         // Player inventory (3 rows x 9), positioned below golem rows similar to chest
-        int baseY = 18 + CONTROLS_MARGIN + rows * 18 + 14;
+        int baseY = controlsMargin + golemRows * 18 + 15;
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 9; ++col) {
                 addSlot(new Slot(playerInventory, col + row * 9 + 9, 8 + col * 18, baseY + row * 18));
@@ -67,6 +74,10 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         return entityId;
     }
 
+    public int getControlsMargin() { return controlsMargin; }
+    public int getGolemSlotCount() { return golemSlotCount; }
+    public int getGolemRows() { return golemRows; }
+
     @Override
     public ItemStack quickMove(PlayerEntity player, int index) {
         // Basic shift-click behavior between golem inventory and player inventory
@@ -75,7 +86,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         if (slot != null && slot.hasStack()) {
             ItemStack stack = slot.getStack();
             newStack = stack.copy();
-            int golemEnd = GOLEM_SLOT_COUNT;
+            int golemEnd = this.golemSlotCount;
             if (index < golemEnd) {
                 if (!this.insertItem(stack, golemEnd, this.slots.size(), true)) return ItemStack.EMPTY;
             } else {
