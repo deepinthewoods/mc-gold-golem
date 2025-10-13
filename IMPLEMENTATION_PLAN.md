@@ -5,20 +5,24 @@
 - Dependencies: Geckolib set to `geckolib-fabric-1.21.10:5.3-alpha-1`; Owo removed.
 - Entity: `GoldGolemEntity` registered with required 1.21.10 attributes (waypoint_transmit_range, step_height, movement_efficiency, gravity, safe_fall_distance, fall_damage_multiplier, jump_strength). Basic goals; right-click opens UI.
 - Summoning: Pumpkin-on-gold callback spawns a golem and assigns owner.
-- UI: Single-screen `GolemScreen` now uses a vanilla chest look with a dynamic control band. Top-to-bottom: label, gradient ghost row, width slider, golem inventory grid, player inventory, hotbar. Ghost slots are clickable; width uses a slider.
+- UI: Single-screen `GolemScreen` now uses a vanilla chest look with a dynamic control band. Top-to-bottom: label, gradient ghost row, width slider, golem inventory grid, player inventory, hotbar. Ghost slots are clickable (inventory-style visuals with darker background); width uses a slider.
 - Networking: Fabric Custom Payloads registered; client receiver updates the open screen.
-- Rendering: Temporary `EmptyEntityRenderer` registered (entity is invisible) until GeckoLib renderer arrives.
+- Rendering: Temporary `EmptyEntityRenderer` registered (entity is invisible) until GeckoLib renderer arrives. Queued path lines are visualized via server-side particles for the owner while holding a gold nugget.
 - Persistence: Implemented with 1.21.10 storage API (ReadView/WriteView). Saves width, gradient, inventory, and owner UUID.
 - Ownership: Owner-only UI enforced; in singleplayer, if the saved owner is offline, right-click claims the golem.
 - Dynamic layout: No‑lib UI spec (`GolemOpenData`) drives gradient rows, golem slot count, and slider presence; handler places slots with a computed controls margin to keep hitboxes aligned with background.
 - Golem inventory: 27 slots (3x9) for now.
+- Follow behavior: Golem follows only its owner when they hold a gold nugget, stopping at ~1.5 blocks; disabled during build mode.
+- Build mode: Feeding a gold nugget starts building (hearts). Hitting the golem stops building (angry villager). While building, the golem looks at the owner and tracks 3m segments (owner must be on ground and within 8 blocks). It enqueues multiple segments, navigates along the current segment, and places path strips from gradient perpendicular to the segment.
+- Placement rules: Ground-aware placement finds the nearest full-cube ground below and replaces that block plus one above and below (only full cubes; skips air/plants). Consumes matching items from the golem inventory.
+- Networking (additions): `LinesS2CPayload` registered; server sends queued segment endpoints to the owner (currently leveraged for particle preview; client scaffolding exists for future renderer).
 
 ### Scope
 Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
 - Summons by placing a Carved Pumpkin on a Gold Block (both removed, golem spawns).
 - Follows the summoner (owner), teleports if far.
-- Right-click opens a single screen: gradient controls (9 ghost slots + width slider) on top, golem inventory (56 slots) below, and player inventory at the bottom.
-- Builds paths while moving, consuming its inventory according to a 9-slot gradient and path width. Replaces solid blocks underfoot. If out of blocks, stops and displays “!”.
+- Right-click opens a single screen: gradient controls (9 ghost slots + width slider) on top, golem inventory (27 slots) below, and player inventory at the bottom.
+- Builds paths while moving along 3m tracked segments, consuming its inventory according to a 9-slot gradient and path width. Replaces solid blocks underfoot (ground-aware, only full cubes; includes one above/below). If out of blocks, stops and displays “!” (todo).
 - Uses vanilla UI screens (no external UI libs); GeckoLib for model/animations (placeholder gray box first).
 
 ### Milestones
@@ -54,20 +58,22 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
 - Interactions implemented:
   - Click ghost slot with a block in hand -> C2S `set_gradient_slot` payload; server stores and S2C-syncs back.
   - Width slider -> C2S `set_path_width` payload; server clamps [1,9] and S2C-syncs back.
+  - Cursor stack is preferred over main-hand for ghost slot selection.
 
 6) Networking & Sync
 - C2S payloads: `set_gradient_slot`, `set_path_width`.
-- S2C payload: `sync_gradient` (entityId, width, 9 strings). Sent on open and after changes. Nulls sanitized to empty strings.
+- S2C payloads: `sync_gradient` (entityId, width, 9 strings) and `lines` (entityId, list of segment endpoints). `sync_gradient` is sent on open and after changes; `lines` is sent on build start, each new segment, and on stop (empty list clears).
 - Client: updates the open screen when IDs match.
+ - Client state scaffolding exists to cache lines for a future client-side renderer.
 
 7) Path Building Logic
-- Tick server-side when has owner:
-  - Determine movement vector; compute perpendicular (nx, nz).
-  - Path width N = [1..9], half = (N-1)/2. For offsets i ∈ [-half..half], map to gradient index:
-    - Leftmost slot = center; rightmost = outer edges (abs(i) scaled to [0..8]).
-  - For each position: target = floor(center + i*(nx,nz)) at Y under golem.
-  - Replace solid blocks (skip unbreakable/void). Place chosen block if present in inventory; decrement stack.
-  - If no placements occurred due to lack of blocks: stop navigation and show name “!”. Hide name when able to place again.
+- Build mode (owner-fed):
+  - Tracks 3m line segments of the owner’s movement while the owner is grounded and within 8 blocks. Queues segments.
+  - While a segment is active, the golem navigates along it and places path strips perpendicular to the segment.
+  - Path width N = [1..9], half = (N-1)/2. For offsets j ∈ [-half..half], map to gradient index 0..8.
+  - Ground-aware placement: find nearest full-cube ground block; replace it, plus one above/below, only if full cubes; skip air/plants. Consume inventory.
+  - Throttle placement at one step per tick (tunable).
+  - If no placements occurred due to lack of blocks: (todo) stop navigation and show name “!”.
 - Respect dimensions: none (works everywhere).
 
 8) Rendering & Assets (GeckoLib)
@@ -77,6 +83,7 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
   - `assets/gold-golem/geo/gold_golem.geo.json` (box model)
   - `assets/gold-golem/animations/gold_golem.animation.json` (idle/walk stub)
 - Then wire `GoldGolemModel` (GeoModel) + `GoldGolemRenderer` (GeoEntityRenderer) and register in `GoldGolemClient`.
+- For path previews, currently using server-side particles for the owner holding a nugget; a future client renderer can switch to lines using the `lines` payload/state.
 
 ### Completed
 - Dependencies aligned; Owo removed; Geckolib updated.
@@ -86,9 +93,16 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
 - UI overhauled to a chest-style single screen with ghost slots + slider; proper vanilla textures; hover/click hitboxes aligned with grid; labels grid-aligned.
 - Dynamic layout spec added (no external UI lib), with adjustable gradient rows and golem inventory size; golem inventory set to 27 slots.
 - Temporary renderer registered to stabilize client.
+- Owner-only follow (gold nugget) with 1.5 block stop distance; disabled during build mode.
+- Build controls: feed nugget to start (hearts); hit golem to stop (angry villager); damage is canceled for owner-hit.
+- Line tracking in 3m segments with queue; movement along lines.
+- Ground-aware placement replacing only full cubes (ground ±1), consuming inventory.
+- Network: `lines` S2C payload registered; server emits on start/segment/stop; client handler present; particles preview queued lines to owner holding nugget.
 
 ### Next Up
-- Path logic: Implement placement algorithm and inventory consumption; handle block validation and throttling.
+- Turn gap filling: add extra blocks between segments at sharp angles to avoid gaps.
+- Replaceability refinement: allow replacing snow layers; explicitly skip slabs/stairs/leaves; consider whitelist of replaceable blocks above ground.
+- Placement robustness: place on top of ground when y varies significantly; handle stairs/descents gracefully.
 - Renderer: Add GeckoLib placeholder model/anim and swap off `EmptyEntityRenderer`.
 - UI dynamics: Wire gradientRows to entity state; add +/- to add/remove rows dynamically; consider multi-row filler/spacing.
 - UX polish: Ghost slot tooltips, invalid block feedback, show current block names; small hover highlight for ghost slots.

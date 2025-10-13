@@ -10,6 +10,7 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetGradientSlotC2SPayload.ID, SetGradientSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetPathWidthC2SPayload.ID, SetPathWidthC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncGradientS2CPayload.ID, SyncGradientS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
