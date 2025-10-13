@@ -19,8 +19,9 @@ public final class GoldGolemEntities {
 
     public static void init() {
         var key = RegistryKey.of(RegistryKeys.ENTITY_TYPE, GoldGolem.id("gold_golem"));
+        // Hitbox: 13x13x13 pixels (0.8125 blocks cubed)
         EntityType<GoldGolemEntity> built = (EntityType<GoldGolemEntity>) FabricEntityTypeBuilder.create(SpawnGroup.CREATURE, GoldGolemEntity::new)
-                .dimensions(EntityDimensions.fixed(1.4f, 2.7f))
+                .dimensions(EntityDimensions.fixed(13f/16f, 13f/16f))
                 .trackRangeChunks(8)
                 .build(key);
         GOLD_GOLEM = Registry.register(Registries.ENTITY_TYPE, GoldGolem.id("gold_golem"), built);

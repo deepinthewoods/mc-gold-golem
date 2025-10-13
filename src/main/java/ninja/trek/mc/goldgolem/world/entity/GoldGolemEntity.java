@@ -5,6 +5,7 @@ import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
 import net.minecraft.entity.ai.goal.LookAroundGoal;
 import net.minecraft.entity.ai.goal.WanderAroundFarGoal;
+import net.minecraft.entity.ai.goal.Goal;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.mob.PathAwareEntity;
@@ -50,6 +51,8 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     @Override
     protected void initGoals() {
+        // Follow players holding gold nuggets (approach within 1.5 blocks)
+        this.goalSelector.add(3, new FollowGoldNuggetHolderGoal(this, 1.1, 1.5));
         this.goalSelector.add(5, new WanderAroundFarGoal(this, 0.8));
         this.goalSelector.add(6, new LookAtEntityGoal(this, PlayerEntity.class, 8.0f));
         this.goalSelector.add(7, new LookAroundGoal(this));
@@ -134,5 +137,65 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         GolemScreens.open(sp, this.getId(), this.inventory);
         return ActionResult.CONSUME;
+    }
+}
+
+class FollowGoldNuggetHolderGoal extends Goal {
+    private final GoldGolemEntity golem;
+    private final double speed;
+    private final double stopDistance;
+    private PlayerEntity target;
+
+    public FollowGoldNuggetHolderGoal(GoldGolemEntity golem, double speed, double stopDistance) {
+        this.golem = golem;
+        this.speed = speed;
+        this.stopDistance = stopDistance;
+    }
+
+    @Override
+    public boolean canStart() {
+        // Only follow the owner; find the owner player in-world
+        PlayerEntity owner = null;
+        for (PlayerEntity player : golem.getEntityWorld().getPlayers()) {
+            if (golem.isOwner(player)) { owner = player; break; }
+        }
+        if (owner == null) return false;
+        if (!isHoldingNugget(owner)) return false;
+        if (golem.squaredDistanceTo(owner) > (24.0 * 24.0)) return false;
+        this.target = owner;
+        return true;
+    }
+
+    @Override
+    public boolean shouldContinue() {
+        if (target == null || !target.isAlive()) return false;
+        // Ensure target remains the owner
+        if (!golem.isOwner(target)) return false;
+        if (!isHoldingNugget(target)) return false;
+        double distSq = golem.squaredDistanceTo(target);
+        return distSq > (stopDistance * stopDistance);
+    }
+
+    @Override
+    public void stop() {
+        this.target = null;
+        this.golem.getNavigation().stop();
+    }
+
+    @Override
+    public void tick() {
+        if (target == null) return;
+        this.golem.getLookControl().lookAt(target, 30.0f, 30.0f);
+        double distSq = golem.squaredDistanceTo(target);
+        if (distSq > (stopDistance * stopDistance)) {
+            this.golem.getNavigation().startMovingTo(target, this.speed);
+        } else {
+            this.golem.getNavigation().stop();
+        }
+    }
+
+    private static boolean isHoldingNugget(PlayerEntity player) {
+        var nugget = net.minecraft.item.Items.GOLD_NUGGET;
+        return player.getMainHandStack().isOf(nugget) || player.getOffHandStack().isOf(nugget);
     }
 }
