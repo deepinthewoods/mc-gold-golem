@@ -13,9 +13,16 @@
 - Dynamic layout: No‑lib UI spec (`GolemOpenData`) drives gradient rows, golem slot count, and slider presence; handler places slots with a computed controls margin to keep hitboxes aligned with background.
 - Golem inventory: 27 slots (3x9) for now.
 - Follow behavior: Golem follows only its owner when they hold a gold nugget, stopping at ~1.5 blocks; disabled during build mode.
-- Build mode: Feeding a gold nugget starts building (hearts). Hitting the golem stops building (angry villager). While building, the golem looks at the owner and tracks 3m segments (owner must be on ground and within 8 blocks). It enqueues multiple segments, navigates along the current segment, and places path strips from gradient perpendicular to the segment.
+- Build mode: Feeding a gold nugget starts building (hearts). Hitting the golem stops building (angry villager). While building, the golem looks at the owner and tracks 3m segments (owner must be on ground; no distance gate while building). Segments are sampled with a supercover Bresenham so diagonal corners are included. The golem navigates along the current segment to ground-snapped targets, places path strips perpendicular to the segment, disables wandering during build mode, and teleports to the next target cell with portal particles if pathfinding stalls.
 - Placement rules: Ground-aware placement finds the nearest full-cube ground below and replaces that block plus one above and below (only full cubes; skips air/plants). Consumes matching items from the golem inventory.
 - Networking (additions): `LinesS2CPayload` registered; server sends queued segment endpoints to the owner (currently leveraged for particle preview; client scaffolding exists for future renderer).
+
+### Recent Changes (2025-10-14)
+- Line sampling switched to supercover Bresenham to include corner cells on diagonals and eliminate gaps.
+- Build-mode tracking no longer has the 8-block distance gate; segments enqueue whenever the owner moves ≥ 3m while grounded.
+- Movement targets are snapped to local ground with headroom to reduce pathfinding detours.
+- Wandering is disabled during build mode; when idle in build mode the golem stays put.
+- Stuck recovery added: if navigation is idle and far from the target for ~1s, the golem teleports to the next target cell and emits portal particles at origin and destination.
 
 ### Scope
 Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
@@ -75,6 +82,16 @@ Adds a tameable Gold Golem for 1.21.10 (Fabric + Yarn) that:
   - Throttle placement at one step per tick (tunable).
   - If no placements occurred due to lack of blocks: (todo) stop navigation and show name “!”.
 - Respect dimensions: none (works everywhere).
+
+7) Path Building Logic (Updated)
+- Build mode (owner-fed):
+  - Tracks 3m line segments of the owner's movement while the owner is grounded; no distance gate in build mode. Segments are sampled with a supercover Bresenham so diagonal corners are included.
+  - While a segment is active, the golem navigates along it and places path strips perpendicular to the segment direction. Basic corner fill reduces gaps at turns.
+  - Movement targets are snapped to local ground with clear headroom; wandering is disabled during build mode.
+  - If navigation stalls for ~1s while more than ~2 blocks from the target, the golem teleports to the next target cell and emits portal particles at origin and destination.
+  - Path width N = [1..9], half = (N-1)/2. For offsets j ∈ [-half..half], map to gradient index 0..8.
+  - Ground-aware placement: find nearest full-cube ground block; replace it, plus one above/below, only if full cubes; skip air/plants. Consume inventory.
+  - Throttle placement at one step per tick (tunable). If out of blocks, (todo) stop and indicate "!".
 
 8) Rendering & Assets (GeckoLib)
 - Current: temporary `EmptyEntityRenderer` registered to avoid client crash before model is ready (entity invisible).

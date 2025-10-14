@@ -7,7 +7,7 @@ import ninja.trek.mc.goldgolem.client.screen.GolemScreen;
 import ninja.trek.mc.goldgolem.net.ClientNet;
 import ninja.trek.mc.goldgolem.registry.GoldGolemEntities;
 import ninja.trek.mc.goldgolem.registry.ModScreenHandlers;
-import ninja.trek.mc.goldgolem.client.render.DebugLineParticles;
+import ninja.trek.mc.goldgolem.client.render.LineOverlayRenderer;
 
 public class GoldGolemClient implements ClientModInitializer {
     @Override
@@ -15,6 +15,6 @@ public class GoldGolemClient implements ClientModInitializer {
         HandledScreens.register(ModScreenHandlers.GOLEM_SCREEN_HANDLER, GolemScreen::new);
         ClientNet.init();
         EntityRendererRegistry.register(GoldGolemEntities.GOLD_GOLEM, net.minecraft.client.render.entity.EmptyEntityRenderer::new);
-        DebugLineParticles.init();
+        LineOverlayRenderer.init();
     }
 }

@@ -9,12 +9,14 @@
 - Output: built JARs in `build/libs`.
 
 ## Build, Test, and Development Commands
-- `./gradlew build`: Compiles, remaps, and packages the mod JAR.
+- `./gradlew build`: Compiles, remaps, and packages the mod JAR. ALWAYS run via cmd
 - `./gradlew runClient`: Launches a Fabric dev client with the mod.
 - `./gradlew clean`: Removes build outputs.
 - `./gradlew tasks`: Lists available Gradle/Loom tasks.
 
-Example: Windows PowerShell `./gradlew.bat runClient`.
+search the javadocs for correct api usage: https://maven.fabricmc.net/docs/fabric-api-0.135.0+1.21.10/ https://maven.fabricmc.net/docs/fabric-loader-0.17.3/ https://maven.fabricmc.net/docs/yarn-25w41a+build.2/
+
+Always run gradlew build via cmd, and use search to look up api methods.
 
 ## Coding Style & Naming Conventions
 - Language: Java 21 (see `build.gradle`).

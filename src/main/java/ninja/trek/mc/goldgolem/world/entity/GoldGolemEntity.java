@@ -45,6 +45,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private final long[] placedRing = new long[8192];
     private int placedHead = 0;
     private int placedSize = 0;
+    private int stuckTicks = 0;
     public boolean isBuildingPaths() { return buildingPaths; }
 
     public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
@@ -71,7 +72,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     protected void initGoals() {
         // Follow players holding gold nuggets (approach within 1.5 blocks)
         this.goalSelector.add(3, new FollowGoldNuggetHolderGoal(this, 1.1, 1.5));
-        this.goalSelector.add(5, new WanderAroundFarGoal(this, 0.8));
+        this.goalSelector.add(5, new PathingAwareWanderGoal(this, 0.8));
         this.goalSelector.add(6, new LookAtEntityGoal(this, PlayerEntity.class, 8.0f));
         this.goalSelector.add(7, new LookAroundGoal(this));
     }
@@ -109,8 +110,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                     }
                 }
             }
-            // Track lines only if owner is grounded and within 8 blocks
-            if (owner != null && owner.isOnGround() && this.squaredDistanceTo(owner) <= 8.0 * 8.0) {
+            // Track lines while owner moves (require grounded for stability, no distance gate in pathing mode)
+            if (owner != null && owner.isOnGround()) {
                 Vec3d p = new Vec3d(owner.getX(), owner.getY(), owner.getZ());
                 if (trackStart == null) {
                     trackStart = p;
@@ -137,10 +138,59 @@ public class GoldGolemEntity extends PathAwareEntity {
                 // Move along the current line towards next interpolation point
                 if (currentLine != null) {
                     Vec3d next = currentLine.currentPoint();
-                    this.getNavigation().startMovingTo(next.x, next.y, next.z, 1.0);
+                    double ty = computeGroundTargetY(next);
+                    this.getNavigation().startMovingTo(next.x, ty, next.z, 1.0);
+                    // Detect stuck navigation and recover by teleporting to the next target cell
+                    double dx = this.getX() - next.x;
+                    double dz = this.getZ() - next.z;
+                    double distSq = dx * dx + dz * dz;
+                    if (this.getNavigation().isIdle() && distSq > 4.0) {
+                        stuckTicks++;
+                        if (stuckTicks >= 20) {
+                            // Enderman-like teleport particles at origin and destination
+                            if (this.getEntityWorld() instanceof ServerWorld sw) {
+                                sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
+                                sw.spawnParticles(ParticleTypes.PORTAL, next.x, ty + 0.5, next.z, 40, 0.5, 0.5, 0.5, 0.2);
+                            }
+                            this.refreshPositionAndAngles(next.x, ty, next.z, this.getYaw(), this.getPitch());
+                            this.getNavigation().stop();
+                            stuckTicks = 0;
+                        }
+                    } else {
+                        stuckTicks = 0;
+                    }
+                } else {
+                    // Idle in place during pathing mode; do not wander
+                    this.getNavigation().stop();
+                    stuckTicks = 0;
                 }
             }
         }
+    }
+
+    private double computeGroundTargetY(Vec3d pos) {
+        int bx = MathHelper.floor(pos.x);
+        int bz = MathHelper.floor(pos.z);
+        int y0 = MathHelper.floor(pos.y);
+        var world = this.getEntityWorld();
+        Integer groundY = null;
+        for (int yy = y0 + 3; yy >= y0 - 8; yy--) {
+            BlockPos test = new BlockPos(bx, yy, bz);
+            var st = world.getBlockState(test);
+            if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
+        }
+        if (groundY == null) return pos.y;
+        // ensure stand space (two blocks of air above ground)
+        int ty = groundY + 1;
+        for (int up = 0; up <= 3; up++) {
+            BlockPos p1 = new BlockPos(bx, ty + up, bz);
+            BlockPos p2 = new BlockPos(bx, ty + up + 1, bz);
+            var s1 = world.getBlockState(p1);
+            var s2 = world.getBlockState(p2);
+            boolean passable = s1.isAir() && s2.isAir();
+            if (passable) return ty + up;
+        }
+        return groundY + 1.0;
     }
 
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
@@ -446,21 +496,24 @@ public class GoldGolemEntity extends PathAwareEntity {
             return new Vec3d(c.getX() + 0.5, y, c.getZ() + 0.5);
         }
         private static java.util.List<BlockPos> computeCells(BlockPos a, BlockPos b) {
+            // Supercover Bresenham: cover corners when both axes change to avoid diagonal gaps
             java.util.ArrayList<BlockPos> out = new java.util.ArrayList<>();
-            int x0 = a.getX(); int z0 = a.getZ();
-            int x1 = b.getX(); int z1 = b.getZ();
+            int x0 = a.getX();
+            int z0 = a.getZ();
+            int x1 = b.getX();
+            int z1 = b.getZ();
             int dx = Math.abs(x1 - x0);
             int dz = Math.abs(z1 - z0);
-            int sx = x0 < x1 ? 1 : -1;
-            int sz = z0 < z1 ? 1 : -1;
+            int sx = (x0 < x1) ? 1 : -1;
+            int sz = (z0 < z1) ? 1 : -1;
             int err = dx - dz;
-            int x = x0, z = z0;
-            while (true) {
-                out.add(new BlockPos(x, 0, z));
-                if (x == x1 && z == z1) break;
-                int e2 = 2 * err;
-                if (e2 > -dz) { err -= dz; x += sx; }
-                if (e2 < dx) { err += dx; z += sz; }
+            int x = x0;
+            int z = z0;
+            out.add(new BlockPos(x, 0, z));
+            while (x != x1 || z != z1) {
+                int e2 = err << 1;
+                if (e2 > -dz) { err -= dz; x += sx; out.add(new BlockPos(x, 0, z)); }
+                if (e2 < dx) { err += dx; z += sz; out.add(new BlockPos(x, 0, z)); }
             }
             return out;
         }
@@ -526,5 +579,26 @@ class FollowGoldNuggetHolderGoal extends Goal {
     private static boolean isHoldingNugget(PlayerEntity player) {
         var nugget = net.minecraft.item.Items.GOLD_NUGGET;
         return player.getMainHandStack().isOf(nugget) || player.getOffHandStack().isOf(nugget);
+    }
+}
+
+class PathingAwareWanderGoal extends WanderAroundFarGoal {
+    private final GoldGolemEntity golem;
+
+    public PathingAwareWanderGoal(GoldGolemEntity golem, double speed) {
+        super(golem, speed);
+        this.golem = golem;
+    }
+
+    @Override
+    public boolean canStart() {
+        if (golem.isBuildingPaths()) return false;
+        return super.canStart();
+    }
+
+    @Override
+    public boolean shouldContinue() {
+        if (golem.isBuildingPaths()) return false;
+        return super.shouldContinue();
     }
 }
