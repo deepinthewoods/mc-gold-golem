@@ -6,6 +6,7 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.widget.SliderWidget;
+import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
@@ -20,6 +21,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private String[] gradientBlocks = new String[9];
 
     private WindowSlider windowSlider;
+    private boolean isDragging = false;
+    private int dragButton = -1;
+    private java.util.Set<Integer> dragVisited = new java.util.HashSet<>();
 
     private class WindowSlider extends SliderWidget {
         public WindowSlider(int x, int y, int width, int height, double norm) {
@@ -154,6 +158,29 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         double norm = g <= 0 ? 0.0 : (double) Math.min(gradientWindow, g) / (double) g;
         windowSlider = new WindowSlider(wx, wy, sliderWidth, sliderHeight, norm);
         this.addDrawableChild(windowSlider);
+        // Transparent buttons over gradient slots for reliable clicks
+        int slotsX = this.x + 8;
+        int slotY = this.y + 26;
+        for (int i = 0; i < 9; i++) {
+            final int idx = i;
+            int gx = slotsX + i * 18;
+            var btn = ButtonWidget.builder(Text.empty(), b -> {
+                var mc = MinecraftClient.getInstance();
+                var player = mc.player;
+                if (player == null) return;
+                ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                ItemStack held = cursor.isEmpty() ? player.getMainHandStack() : cursor;
+                boolean clear = held.isEmpty() || !(held.getItem() instanceof BlockItem);
+                if (clear) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(idx, java.util.Optional.empty()));
+                } else {
+                    BlockItem bi = (BlockItem) held.getItem();
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                }
+            }).dimensions(gx, slotY, 18, 18).build();
+            btn.setAlpha(0f);
+            this.addDrawableChild(btn);
+        }
     }
 
     @Override
@@ -162,32 +189,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         super.render(context, mouseX, mouseY, delta);
     }
 
-    @Override
-    public boolean mouseClicked(Click click, boolean doubled) {
-        int idx = gradientIndexAt((int) click.x(), (int) click.y());
-        if (idx >= 0) {
-            var mc = MinecraftClient.getInstance();
-            var player = mc.player;
-            if (player != null) {
-                ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                ItemStack pick = cursor.isEmpty() ? player.getMainHandStack() : cursor;
-                if (click.button() == 1) { // right-click to clear
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(idx, java.util.Optional.empty()));
-                    return true;
-                }
-                if (pick.getItem() instanceof BlockItem bi) {
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                    return true;
-                }
-            }
-        }
-        return super.mouseClicked(click, doubled);
-    }
+    // Gradient clicks handled by transparent buttons; no custom mouse overrides.
 
     private int gradientIndexAt(int mx, int my) {
         int slotsX = this.x + 8;
         int slotY = this.y + 26; // matches draw positioning
-        int w = 16, h = 16, pad = 18;
+        int w = 18, h = 18, pad = 18;
         // Single row of 9 slots
         if (my >= slotY && my < slotY + h) {
             int dx = mx - slotsX;
@@ -208,9 +215,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         context.drawText(this.textRenderer, this.title, 8, 6, 0xFFFFFF, false);
         context.drawText(this.textRenderer, Text.literal("Gradient"), 8, 18, 0xA0A0A0, false);
 
-        // Marker dots above the slider (drawn before mouseover tooltips)
+        // Marker dots above the slider (use foreground-local coordinates)
         if (windowSlider != null) {
-            int sx = windowSlider.getX() - this.x;
+            int sx = windowSlider.getX() - this.x; // convert to local coords
             int sy = windowSlider.getY() - this.y;
             int sw = windowSlider.getWidth();
             int dotY = sy - 4;
@@ -220,7 +227,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 for (int k = 0; k <= g; k++) {
                     double t = (double) k / (double) g;
                     int dx = (int) Math.round(sx + t * sw);
-                    fillDot(context, this.x + dx, this.y + dotY, gold);
+                    fillDot(context, dx, dotY, gold);
                 }
                 double deltaS = (double) (g - 1) / (double) Math.max(1, pathWidth - 1);
                 if (deltaS > 1e-6) {
@@ -230,7 +237,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         if (w > g) break;
                         double t = w / (double) g;
                         int dx = (int) Math.round(sx + t * sw);
-                        fillDot(context, this.x + dx, this.y + dotY - 4, cyan);
+                        fillDot(context, dx, dotY - 4, cyan);
                     }
                 }
             }

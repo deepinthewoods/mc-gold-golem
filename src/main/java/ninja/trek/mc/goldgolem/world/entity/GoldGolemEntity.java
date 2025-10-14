@@ -56,6 +56,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     public static DefaultAttributeContainer.Builder createAttributes() {
         return DefaultAttributeContainer.builder()
                 .add(EntityAttributes.MAX_HEALTH, 40.0)
+                .add(EntityAttributes.MAX_ABSORPTION, 0.0)
                 .add(EntityAttributes.MOVEMENT_SPEED, 0.28)
                 .add(EntityAttributes.FOLLOW_RANGE, 32.0)
                 .add(EntityAttributes.ARMOR, 0.0)
@@ -122,48 +123,92 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
             // Process current line
-            if (currentLine == null) currentLine = pendingLines.pollFirst();
+            if (currentLine == null) {
+                currentLine = pendingLines.pollFirst();
+                if (currentLine != null) {
+                    currentLine.begin(this);
+                    // Kick off movement toward the end of the line for steady progress
+                    int endIdx = Math.max(0, currentLine.cells.size() - 1);
+                    Vec3d tgt = currentLine.pointAtIndex(endIdx);
+                    double ty0 = computeGroundTargetY(tgt);
+                    this.getNavigation().startMovingTo(tgt.x, ty0, tgt.z, 1.1);
+                }
+            }
             if (currentLine != null) {
+                // Debug: log progress periodically while building
+                if (this.age % 20 == 0) {
+                    try {
+                        int progCell = currentLine.progressCellIndex(this.getX(), this.getZ());
+                        int cellsCount = currentLine.cells == null ? 0 : currentLine.cells.size();
+                        int processedUnits = (currentLine.processed == null) ? 0 : currentLine.processed.cardinality();
+                        int totalUnits = Math.max(0, currentLine.totalBits);
+                        int endIdxDbg = Math.max(0, cellsCount - 1);
+                        Vec3d endDbg = currentLine.pointAtIndex(endIdxDbg);
+                        double dxDbg = this.getX() - endDbg.x;
+                        double dzDbg = this.getZ() - endDbg.z;
+                        double distEnd = Math.sqrt(dxDbg * dxDbg + dzDbg * dzDbg);
+                        boolean nearEndDbg = distEnd <= 1.25;
+                        int widthSnapDbg = Math.max(1, currentLine.widthSnapshot);
+                        int boundCellDbg = (nearEndDbg || progCell >= (endIdxDbg - 1)) ? endIdxDbg : progCell;
+                        int boundExclusive = Math.min(totalUnits, Math.max(0, (boundCellDbg + 1) * widthSnapDbg));
+                        System.out.println("[GoldGolem] build entity=" + this.getId() +
+                                " segCells=" + cellsCount +
+                                " progCell=" + progCell +
+                                " unitsProcessed=" + processedUnits + "/" + totalUnits +
+                                " bound=" + boundExclusive +
+                                " distToEnd=" + String.format(java.util.Locale.ROOT, "%.2f", distEnd));
+                    } catch (Throwable t) {
+                        // best-effort logging; ignore
+                    }
+                }
+                // Placement paced by golem progress along the line
                 if (placeCooldown > 0) {
                     placeCooldown--;
                 } else {
-                    boolean more = placeAlong(currentLine);
-                    placeCooldown = 1; // throttle
-                    if (!more) {
-                        // Corner fill with next line if present
-                        LineSeg next = pendingLines.peekFirst();
-                        if (next != null) placeCornerFill(currentLine, next);
-                        currentLine = null;
-                    }
+                    int endIdxPl = Math.max(0, currentLine.cells.size() - 1);
+                    int progressCell = currentLine.progressCellIndex(this.getX(), this.getZ());
+                    Vec3d endPtPl = currentLine.pointAtIndex(endIdxPl);
+                    double exPl = this.getX() - endPtPl.x;
+                    double ezPl = this.getZ() - endPtPl.z;
+                    boolean nearEndPl = (exPl * exPl + ezPl * ezPl) <= (1.25 * 1.25);
+                    int boundCell = (nearEndPl || progressCell >= (endIdxPl - 1)) ? endIdxPl : progressCell;
+                    int maxOps = nearEndPl ? 48 : 12; // place more aggressively near the end
+                    currentLine.placePendingUpTo(this, boundCell, maxOps);
+                    placeCooldown = 1; // throttle slightly
                 }
-                // Move along the current line towards next interpolation point
-                if (currentLine != null) {
-                    Vec3d next = currentLine.currentPoint();
-                    double ty = computeGroundTargetY(next);
-                    this.getNavigation().startMovingTo(next.x, ty, next.z, 1.0);
-                    // Detect stuck navigation and recover by teleporting to the next target cell
-                    double dx = this.getX() - next.x;
-                    double dz = this.getZ() - next.z;
-                    double distSq = dx * dx + dz * dz;
-                    if (this.getNavigation().isIdle() && distSq > 4.0) {
-                        stuckTicks++;
-                        if (stuckTicks >= 20) {
-                            // Enderman-like teleport particles at origin and destination
-                            if (this.getEntityWorld() instanceof ServerWorld sw) {
-                                sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                                sw.spawnParticles(ParticleTypes.PORTAL, next.x, ty + 0.5, next.z, 40, 0.5, 0.5, 0.5, 0.2);
-                            }
-                            this.refreshPositionAndAngles(next.x, ty, next.z, this.getYaw(), this.getPitch());
-                            this.getNavigation().stop();
-                            stuckTicks = 0;
+
+                // Always path toward the end of the current segment to ensure we reach it
+                int endIdx = Math.max(0, currentLine.cells.size() - 1);
+                Vec3d end = currentLine.pointAtIndex(endIdx);
+                double ty = computeGroundTargetY(end);
+                this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
+                // Detect stuck navigation and recover by teleporting closer to the end
+                double dx = this.getX() - end.x;
+                double dz = this.getZ() - end.z;
+                double distSq = dx * dx + dz * dz;
+                if (this.getNavigation().isIdle() && distSq > 1.0) {
+                    stuckTicks++;
+                    if (stuckTicks >= 20) {
+                        if (this.getEntityWorld() instanceof ServerWorld sw) {
+                            sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
+                            sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z, 40, 0.5, 0.5, 0.5, 0.2);
                         }
-                    } else {
+                        this.refreshPositionAndAngles(end.x, ty, end.z, this.getYaw(), this.getPitch());
+                        this.getNavigation().stop();
                         stuckTicks = 0;
                     }
                 } else {
-                    // Idle in place during pathing mode; do not wander
-                    this.getNavigation().stop();
                     stuckTicks = 0;
+                }
+
+                // Complete the line only when all pending done AND we've effectively reached the end
+                if (currentLine.isFullyProcessed()) {
+                    if (distSq <= 0.75 * 0.75 || this.getNavigation().isIdle()) {
+                        LineSeg done = currentLine;
+                        LineSeg next = pendingLines.peekFirst();
+                        if (next != null) placeCornerFill(done, next);
+                        currentLine = null;
+                    }
                 }
             }
         }
@@ -365,20 +410,53 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private boolean placeAlong(LineSeg seg) {
-        if (seg.cellIndex >= seg.cells.size()) return false;
-        BlockPos cell = seg.cells.get(seg.cellIndex);
-        double t = seg.cells.size() <= 1 ? 1.0 : (double) seg.cellIndex / (double) (seg.cells.size() - 1);
-        double y = MathHelper.lerp(t, seg.a.y, seg.b.y);
-        double x = cell.getX() + 0.5;
-        double z = cell.getZ() + 0.5;
-        // Perpendicular vector (normalize)
-        double len = Math.sqrt(seg.dirX * seg.dirX + seg.dirZ * seg.dirZ);
-        double px = len > 1e-4 ? (-seg.dirZ / len) : 0.0;
-        double pz = len > 1e-4 ? ( seg.dirX / len) : 0.0;
-        placeStripAt(x, y, z, px, pz);
-        seg.cellIndex++;
-        return seg.cellIndex < seg.cells.size();
+    // Place a single offset column at the given center x/z for strip index j
+    private void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j) {
+        int w = Math.max(1, Math.min(9, stripWidth));
+        var world = this.getEntityWorld();
+        double ox = x + px * j;
+        double oz = z + pz * j;
+        int bx = MathHelper.floor(ox);
+        int bz = MathHelper.floor(oz);
+        int gIdx = sampleGradientIndex(w, j, bx, bz);
+        if (gIdx < 0) return;
+        String id = gradient[gIdx] == null ? "" : gradient[gIdx];
+        if (id.isEmpty()) return;
+        var ident = net.minecraft.util.Identifier.tryParse(id);
+        if (ident == null) return;
+        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+        if (block == null) return;
+
+        int y0 = MathHelper.floor(y);
+        Integer groundY = null;
+        for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
+            BlockPos test = new BlockPos(bx, yy, bz);
+            var st = world.getBlockState(test);
+            if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
+        }
+        if (groundY == null) return;
+        LongOpenHashSet stripSeen = new LongOpenHashSet(3);
+        for (int dy = -1; dy <= 1; dy++) {
+            BlockPos rp = new BlockPos(bx, groundY + dy, bz);
+            long key = rp.asLong();
+            if (stripSeen.contains(key)) continue;
+            stripSeen.add(key);
+            var rs = world.getBlockState(rp);
+            if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
+            if (rs.isOf(block)) continue;
+            if (dy >= 0) {
+                BlockPos ap = rp.up();
+                var as = world.getBlockState(ap);
+                if (as.isFullCube(world, ap)) continue;
+            }
+            if (!recordPlaced(key)) continue;
+            int invSlot = findItem(block.asItem());
+            if (invSlot < 0) { unrecordPlaced(key); continue; }
+            world.setBlockState(rp, block.getDefaultState(), 3);
+            var stInv = inventory.getStack(invSlot);
+            stInv.decrement(1);
+            inventory.setStack(invSlot, stInv);
+        }
     }
 
     private void placeStripAt(double x, double y, double z, double px, double pz) {
@@ -538,7 +616,12 @@ public class GoldGolemEntity extends PathAwareEntity {
         final double dirX;
         final double dirZ;
         final java.util.List<BlockPos> cells;
-        int cellIndex = 0;
+        // Pending placement state (initialized on begin)
+        int widthSnapshot = 1;
+        int half = 0;
+        java.util.BitSet processed; // per (cellIndex * width + (j+half))
+        int totalBits = 0;
+        int scanBit = 0;
         LineSeg(Vec3d a, Vec3d b) {
             this.a = a;
             this.b = b;
@@ -546,12 +629,70 @@ public class GoldGolemEntity extends PathAwareEntity {
             this.dirZ = b.z - a.z;
             this.cells = computeCells(BlockPos.ofFloored(a.x, 0, a.z), BlockPos.ofFloored(b.x, 0, b.z));
         }
-        Vec3d currentPoint() {
+        void begin(GoldGolemEntity golem) {
+            this.widthSnapshot = Math.max(1, Math.min(9, golem.getPathWidth()));
+            this.half = (widthSnapshot - 1) / 2;
+            this.totalBits = Math.max(0, cells.size() * widthSnapshot);
+            this.processed = new java.util.BitSet(totalBits);
+            this.scanBit = 0;
+        }
+        boolean isFullyProcessed() {
+            if (totalBits == 0) return true;
+            int idx = processed.nextClearBit(0);
+            return idx >= totalBits;
+        }
+        int progressCellIndex(double gx, double gz) {
+            // Project golem XZ onto the AB vector to estimate progress along the line
+            double ax = a.x, az = a.z;
+            double vx = dirX, vz = dirZ;
+            double denom = (vx * vx + vz * vz);
+            double t = 0.0;
+            if (denom > 1e-6) {
+                double wx = gx - ax;
+                double wz = gz - az;
+                t = (wx * vx + wz * vz) / denom;
+            }
+            t = MathHelper.clamp(t, 0.0, 1.0);
+            int n = Math.max(1, cells.size());
+            return MathHelper.clamp((int) Math.floor(t * (n - 1)), 0, n - 1);
+        }
+        Vec3d pointAtIndex(int idx) {
             if (cells.isEmpty()) return b;
-            BlockPos c = cells.get(Math.min(cellIndex, cells.size()-1));
-            double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
+            int i = MathHelper.clamp(idx, 0, cells.size() - 1);
+            BlockPos c = cells.get(i);
+            double t = cells.size() <= 1 ? 1.0 : (double) i / (double) (cells.size() - 1);
             double y = MathHelper.lerp(t, a.y, b.y);
             return new Vec3d(c.getX() + 0.5, y, c.getZ() + 0.5);
+        }
+        void placePendingUpTo(GoldGolemEntity golem, int boundCell, int maxOps) {
+            if (processed == null || totalBits == 0) return;
+            int boundExclusive = Math.min(totalBits, Math.max(0, (boundCell + 1) * widthSnapshot));
+            // Compute perpendicular
+            double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+            double px = len > 1e-4 ? (-dirZ / len) : 0.0;
+            double pz = len > 1e-4 ? ( dirX / len) : 0.0;
+            int ops = 0;
+            int bit = processed.nextClearBit(scanBit);
+            while (ops < maxOps && bit >= 0 && bit < boundExclusive) {
+                int cellIndex = bit / widthSnapshot;
+                int jIndex = bit % widthSnapshot;
+                int j = jIndex - half;
+                BlockPos cell = cells.get(cellIndex);
+                double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
+                double y = MathHelper.lerp(t, a.y, b.y);
+                double x = cell.getX() + 0.5;
+                double z = cell.getZ() + 0.5;
+                golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j);
+                processed.set(bit); // mark attempted (placed or skipped) to avoid thrash
+                ops++;
+                bit = processed.nextClearBit(bit + 1);
+            }
+            scanBit = Math.min(Math.max(0, bit), totalBits);
+        }
+        int suggestFollowIndex(double gx, double gz, int lookAhead) {
+            int prog = progressCellIndex(gx, gz);
+            int idx = Math.min(Math.max(0, prog + Math.max(1, lookAhead)), Math.max(0, cells.size() - 1));
+            return idx;
         }
         private static java.util.List<BlockPos> computeCells(BlockPos a, BlockPos b) {
             // Supercover Bresenham: cover corners when both axes change to avoid diagonal gaps
@@ -658,5 +799,58 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
         return super.shouldContinue();
+    }
+
+    @Override
+    protected Vec3d getWanderTarget() {
+        Vec3d base = super.getWanderTarget();
+
+        // Anchor to a player: prefer owner; otherwise nearest player
+        PlayerEntity anchor = getAnchorPlayer();
+        if (anchor == null) return base;
+
+        double cx = anchor.getX();
+        double cy = anchor.getY();
+        double cz = anchor.getZ();
+        double max = 12.0;
+        double maxSq = max * max;
+
+        if (base == null) {
+            // No base target; pick a random point within the radius around the player
+            java.util.Random rnd = new java.util.Random(golem.getRandom().nextLong());
+            double angle = rnd.nextDouble() * Math.PI * 2.0;
+            double r = 6.0 + rnd.nextDouble() * 6.0; // 6..12
+            return new Vec3d(cx + Math.cos(angle) * r, cy, cz + Math.sin(angle) * r);
+        }
+
+        double dx = base.x - cx;
+        double dy = base.y - cy;
+        double dz = base.z - cz;
+        double distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq <= maxSq) return base;
+
+        double dist = Math.sqrt(distSq);
+        if (dist < 1e-4) return new Vec3d(cx, cy, cz);
+        double scale = max / dist;
+        // Clamp to the 12-block sphere around the anchor player; keep base Y for smoother nav
+        return new Vec3d(cx + dx * scale, base.y, cz + dz * scale);
+    }
+
+    private PlayerEntity getAnchorPlayer() {
+        // Prefer the owner if present
+        PlayerEntity owner = null;
+        for (PlayerEntity p : golem.getEntityWorld().getPlayers()) {
+            if (golem.isOwner(p)) { owner = p; break; }
+        }
+        if (owner != null) return owner;
+
+        // Otherwise, use the nearest player
+        PlayerEntity nearest = null;
+        double best = Double.MAX_VALUE;
+        for (PlayerEntity p : golem.getEntityWorld().getPlayers()) {
+            double d = golem.squaredDistanceTo(p);
+            if (d < best) { best = d; nearest = p; }
+        }
+        return nearest;
     }
 }
