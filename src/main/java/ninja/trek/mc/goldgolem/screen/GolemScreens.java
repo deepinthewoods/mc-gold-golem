@@ -36,12 +36,12 @@ public final class GolemScreens {
                 return new GolemInventoryScreenHandler(syncId, playerInventory, golemInventory, openData);
             }
         });
-        // Send initial sync of width/gradient to the opener
+        // Send initial sync of width/gradient/window to the opener
         var world = player.getEntityWorld();
         var e = world.getEntityById(entityId);
         if (e instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
             net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                    new ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload(entityId, golem.getPathWidth(), java.util.Arrays.asList(golem.getGradientCopy())));
+                    new ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload(entityId, golem.getPathWidth(), golem.getGradientWindow(), java.util.Arrays.asList(golem.getGradientCopy())));
         }
     }
 }

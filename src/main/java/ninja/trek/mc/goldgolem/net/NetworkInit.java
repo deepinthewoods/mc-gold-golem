@@ -9,6 +9,7 @@ public class NetworkInit {
     public static void register() {
         PayloadTypeRegistry.playC2S().register(SetGradientSlotC2SPayload.ID, SetGradientSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetPathWidthC2SPayload.ID, SetPathWidthC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetGradientWindowC2SPayload.ID, SetGradientWindowC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncGradientS2CPayload.ID, SyncGradientS2CPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
 
@@ -34,6 +35,17 @@ public class NetworkInit {
                 }
             });
         });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetGradientWindowC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                GoldGolemEntity golem = findNearestOwnedGolem(player, 8.0);
+                if (golem != null) {
+                    golem.setGradientWindow(payload.window());
+                    sendSync(player, golem);
+                }
+            });
+        });
     }
 
     private static GoldGolemEntity findNearestOwnedGolem(net.minecraft.server.network.ServerPlayerEntity player, double radius) {
@@ -49,7 +61,7 @@ public class NetworkInit {
     }
 
     private static void sendSync(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
-        var payload = new SyncGradientS2CPayload(golem.getId(), golem.getPathWidth(), java.util.Arrays.asList(golem.getGradientCopy()));
+        var payload = new SyncGradientS2CPayload(golem.getId(), golem.getPathWidth(), golem.getGradientWindow(), java.util.Arrays.asList(golem.getGradientCopy()));
         ServerPlayNetworking.send(player, payload);
     }
 }

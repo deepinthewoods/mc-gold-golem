@@ -35,6 +35,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
+    private int gradientWindow = 1; // window width in slot units (0..9)
     private int pathWidth = 3;
     private boolean buildingPaths = false;
     private Vec3d trackStart = null;
@@ -197,6 +198,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     @Override
     protected void writeCustomData(WriteView view) {
         view.putInt("PathWidth", this.pathWidth);
+        view.putInt("GradWindow", this.gradientWindow);
 
         for (int i = 0; i < 9; i++) {
             String val = gradient[i] == null ? "" : gradient[i];
@@ -213,6 +215,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     @Override
     protected void readCustomData(ReadView view) {
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
+        this.gradientWindow = Math.max(0, Math.min(9, view.getInt("GradWindow", this.gradientWindow)));
 
         for (int i = 0; i < 9; i++) {
             gradient[i] = view.getString("G" + i, "");
@@ -230,6 +233,8 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public int getPathWidth() { return pathWidth; }
     public void setPathWidth(int width) { this.pathWidth = Math.max(1, Math.min(9, width)); }
+    public int getGradientWindow() { return gradientWindow; }
+    public void setGradientWindow(int w) { this.gradientWindow = Math.max(0, Math.min(9, w)); }
 
     public String[] getGradientCopy() {
         String[] copy = new String[9];
@@ -240,7 +245,11 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
     public void setGradientSlot(int idx, String id) {
         if (idx < 0 || idx >= 9) return;
-        gradient[idx] = (id == null || id.isEmpty()) ? "" : id;
+        String value = (id == null || id.isEmpty()) ? "" : id;
+        // Debug log to help trace slot updates from client → server
+        System.out.println("[GoldGolem] setGradientSlot entity=" + this.getId() +
+                " idx=" + idx + " value='" + value + "'");
+        gradient[idx] = value;
     }
 
     // Ownership (simple UUID-based)
@@ -382,8 +391,8 @@ public class GoldGolemEntity extends PathAwareEntity {
             double oz = z + pz * j;
             int bx = MathHelper.floor(ox);
             int bz = MathHelper.floor(oz);
-            int gIdx = (w == 1) ? 4 : (int) Math.round((double) (j + half) * 8.0 / (double) (w - 1));
-            gIdx = MathHelper.clamp(gIdx, 0, 8);
+            int gIdx = sampleGradientIndex(w, j, bx, bz);
+            if (gIdx < 0) continue;
             String id = gradient[gIdx] == null ? "" : gradient[gIdx];
             if (id.isEmpty()) continue;
             var ident = net.minecraft.util.Identifier.tryParse(id);
@@ -422,6 +431,55 @@ public class GoldGolemEntity extends PathAwareEntity {
                 inventory.setStack(invSlot, stInv);
             }
         }
+    }
+
+    private int sampleGradientIndex(int stripWidth, int j, int bx, int bz) {
+        int G = 0;
+        for (int i = gradient.length - 1; i >= 0; i--) {
+            if (gradient[i] != null && !gradient[i].isEmpty()) { G = i + 1; break; }
+        }
+        if (G <= 0) return -1;
+
+        int half = (stripWidth - 1) / 2;
+        int c = j + half;
+        int denom = Math.max(1, stripWidth - 1);
+        double s = (double) c / (double) denom * (double) (G - 1);
+
+        int Wcap = Math.min(this.gradientWindow, G);
+        double W = (double) Wcap;
+        if (W == 0.0) {
+            int idx = (int) Math.round(s);
+            return MathHelper.clamp(idx, 0, G - 1);
+        }
+
+        double u01 = deterministic01(bx, bz, j);
+        double u = (u01 * W) - (W * 0.5);
+        double sprime = s + u;
+
+        double a = -0.5;
+        double b = (double) G - 0.5;
+        double L = b - a;
+        double y = (sprime - a) % (2.0 * L);
+        if (y < 0) y += 2.0 * L;
+        double r = (y <= L) ? y : (2.0 * L - y);
+        double sref = a + r;
+
+        int idx = (int) Math.round(sref);
+        return MathHelper.clamp(idx, 0, G - 1);
+    }
+
+    private double deterministic01(int bx, int bz, int j) {
+        long v = 0x9E3779B97F4A7C15L;
+        v ^= ((long) this.getId() * 0x9E3779B97F4A7C15L);
+        v ^= ((long) bx * 0xC2B2AE3D27D4EB4FL);
+        v ^= ((long) bz * 0x165667B19E3779F9L);
+        v ^= ((long) j * 0x85EBCA77C2B2AE63L);
+        v ^= (v >>> 33);
+        v *= 0xff51afd7ed558ccdL;
+        v ^= (v >>> 33);
+        v *= 0xc4ceb9fe1a85ec53L;
+        v ^= (v >>> 33);
+        return (Double.longBitsToDouble((v >>> 12) | 0x3FF0000000000000L) - 1.0);
     }
 
     private void placeCornerFill(LineSeg prev, LineSeg next) {
