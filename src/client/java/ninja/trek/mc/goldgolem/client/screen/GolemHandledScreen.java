@@ -1,4 +1,4 @@
-package ninja.trek.mc.goldgolem.screen;
+package ninja.trek.mc.goldgolem.client.screen;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.MinecraftClient;
@@ -14,6 +14,8 @@ import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 
+import ninja.trek.mc.goldgolem.screen.GolemInventoryScreenHandler;
+
 public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandler> {
     private static final Identifier GENERIC_CONTAINER_TEXTURE = Identifier.of("minecraft", "textures/gui/container/generic_54.png");
     private int gradientWindow = 1; // 0..9 (server synced)
@@ -21,6 +23,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private String[] gradientBlocks = new String[9];
 
     private WindowSlider windowSlider;
+    private WidthSlider widthSlider;
     private boolean isDragging = false;
     private int dragButton = -1;
     private java.util.Set<Integer> dragVisited = new java.util.HashSet<>();
@@ -51,6 +54,37 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             this.value = norm;
             this.updateMessage();
             this.applyValue();
+        }
+    }
+
+    private static int clampOdd(int w) {
+        w = Math.max(1, Math.min(9, w));
+        if ((w & 1) == 0) w = (w < 9) ? (w + 1) : (w - 1);
+        return w;
+    }
+
+    private class WidthSlider extends SliderWidget {
+        public WidthSlider(int x, int y, int width, int height, int initialWidth) {
+            super(x, y, width, height, Text.literal("Width"), toValueInit(initialWidth));
+        }
+        private static double toValueInit(int w) { return (clampOdd(w) - 1) / 8.0; }
+        private static int toWidth(double v) { return clampOdd(1 + (int)Math.round(v * 8.0)); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Width: " + toWidth(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int w = toWidth(this.value);
+            if (w != pathWidth) {
+                pathWidth = w;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetPathWidthC2SPayload(pathWidth));
+                updateMessage();
+            }
+        }
+        public void syncTo(int w) {
+            this.value = toValueInit(w);
+            updateMessage();
         }
     }
 
@@ -168,8 +202,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 var mc = MinecraftClient.getInstance();
                 var player = mc.player;
                 if (player == null) return;
+                // Always use the item on the mouse cursor; never fall back to hotbar
                 ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                ItemStack held = cursor.isEmpty() ? player.getMainHandStack() : cursor;
+                ItemStack held = cursor;
                 boolean clear = held.isEmpty() || !(held.getItem() instanceof BlockItem);
                 if (clear) {
                     ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(idx, java.util.Optional.empty()));
@@ -181,6 +216,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             btn.setAlpha(0f);
             this.addDrawableChild(btn);
         }
+
+        // Width slider under the gradient row (right-aligned)
+        int wsliderW = 90;
+        int wsliderH = 12;
+        int slotTop = this.y + 26; // matches gradient slot Y used in drawing
+        int wsliderY = slotTop + 18 + 6; // below the 18px slot row with a small gap
+        int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
+        widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
+        this.addDrawableChild(widthSlider);
     }
 
     @Override
@@ -190,6 +234,18 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     // Gradient clicks handled by transparent buttons; no custom mouse overrides.
+    @Override
+    public boolean mouseClicked(Click click, boolean traced) {
+        // Right-click on any gradient slot clears it regardless of cursor contents
+        if (click.button() == 1) { // right mouse button
+            int idx = gradientIndexAt((int) click.x(), (int) click.y());
+            if (idx >= 0) {
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(idx, java.util.Optional.empty()));
+                return true;
+            }
+        }
+        return super.mouseClicked(click, traced);
+    }
 
     private int gradientIndexAt(int mx, int my) {
         int slotsX = this.x + 8;
@@ -213,7 +269,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     protected void drawForeground(DrawContext context, int mouseX, int mouseY) {
         // Labels (foreground coordinates are relative to screen top-left)
         context.drawText(this.textRenderer, this.title, 8, 6, 0xFFFFFF, false);
+        // Player inventory label (match vanilla placement)
+        int invY = this.backgroundHeight - 96 + 2;
+        context.drawText(this.textRenderer, this.playerInventoryTitle, 8, invY, 0x404040, false);
         context.drawText(this.textRenderer, Text.literal("Gradient"), 8, 18, 0xA0A0A0, false);
+        // Width label near the slider
+        if (widthSlider != null) {
+            int lx = widthSlider.getX() - this.x;
+            int ly = widthSlider.getY() - this.y - 10;
+            context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFF, false);
+        }
 
         // Marker dots above the slider (use foreground-local coordinates)
         if (windowSlider != null) {
@@ -258,6 +323,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (this.windowSlider != null) {
             int g = effectiveG();
             this.windowSlider.syncTo(g, gradientWindow);
+        }
+        if (this.widthSlider != null) {
+            this.widthSlider.syncTo(this.pathWidth);
         }
     }
 

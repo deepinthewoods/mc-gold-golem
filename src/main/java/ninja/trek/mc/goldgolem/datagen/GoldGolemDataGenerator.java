@@ -1,4 +1,4 @@
-package ninja.trek.mc.goldgolem;
+package ninja.trek.mc.goldgolem.datagen;
 
 import net.fabricmc.fabric.api.datagen.v1.DataGeneratorEntrypoint;
 import net.minecraft.registry.RegistryBuilder;
@@ -15,4 +15,3 @@ public class GoldGolemDataGenerator implements DataGeneratorEntrypoint {
         registryBuilder.addRegistry(RegistryKeys.DIMENSION_TYPE, ctx -> {});
     }
 }
-

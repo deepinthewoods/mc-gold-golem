@@ -3,11 +3,11 @@ package ninja.trek.mc.goldgolem;
 import net.fabricmc.api.ClientModInitializer;
 import net.minecraft.client.gui.screen.ingame.HandledScreens;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
-import ninja.trek.mc.goldgolem.net.ClientNet;
+import ninja.trek.mc.goldgolem.client.net.ClientNet;
 import ninja.trek.mc.goldgolem.registry.GoldGolemEntities;
 import ninja.trek.mc.goldgolem.registry.ModScreenHandlers;
 import ninja.trek.mc.goldgolem.client.render.LineOverlayRenderer;
-import ninja.trek.mc.goldgolem.screen.GolemHandledScreen;
+import ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen;
 
 public class GoldGolemClient implements ClientModInitializer {
     @Override

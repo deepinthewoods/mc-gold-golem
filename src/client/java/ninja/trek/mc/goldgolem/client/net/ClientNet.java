@@ -1,9 +1,10 @@
-package ninja.trek.mc.goldgolem.net;
+package ninja.trek.mc.goldgolem.client.net;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.MinecraftClient;
-import ninja.trek.mc.goldgolem.client.screen.GolemScreen;
 import ninja.trek.mc.goldgolem.client.state.ClientState;
+import ninja.trek.mc.goldgolem.net.LinesS2CPayload;
+import ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload;
 
 public final class ClientNet {
     private ClientNet() {}
@@ -13,7 +14,7 @@ public final class ClientNet {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 String[] arr = payload.blocks().toArray(new String[0]);
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.screen.GolemHandledScreen screen) {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.applyServerSync(payload.width(), payload.window(), arr);
                 }
             });

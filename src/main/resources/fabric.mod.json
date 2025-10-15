@@ -22,7 +22,7 @@
 			"ninja.trek.mc.goldgolem.GoldGolemClient"
 		],
 		"fabric-datagen": [
-			"ninja.trek.mc.goldgolem.GoldGolemDataGenerator"
+			"ninja.trek.mc.goldgolem.datagen.GoldGolemDataGenerator"
 		]
 	},
 	"mixins": [

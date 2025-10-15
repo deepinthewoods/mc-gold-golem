@@ -277,7 +277,14 @@ public class GoldGolemEntity extends PathAwareEntity {
     public Inventory getInventory() { return inventory; }
 
     public int getPathWidth() { return pathWidth; }
-    public void setPathWidth(int width) { this.pathWidth = Math.max(1, Math.min(9, width)); }
+    public void setPathWidth(int width) {
+        int w = Math.max(1, Math.min(9, width));
+        // Snap to odd widths to keep a center column
+        if ((w & 1) == 0) {
+            w = (w < 9) ? (w + 1) : (w - 1);
+        }
+        this.pathWidth = w;
+    }
     public int getGradientWindow() { return gradientWindow; }
     public void setGradientWindow(int w) { this.gradientWindow = Math.max(0, Math.min(9, w)); }
 
@@ -518,10 +525,11 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         if (G <= 0) return -1;
 
+        // Map based on distance from center: left GUI slot = center, right = edges (either side)
         int half = (stripWidth - 1) / 2;
-        int c = j + half;
-        int denom = Math.max(1, stripWidth - 1);
-        double s = (double) c / (double) denom * (double) (G - 1);
+        int dist = Math.abs(j);
+        int denom = Math.max(1, half);
+        double s = (double) dist / (double) denom * (double) (G - 1);
 
         int Wcap = Math.min(this.gradientWindow, G);
         double W = (double) Wcap;
@@ -530,7 +538,8 @@ public class GoldGolemEntity extends PathAwareEntity {
             return MathHelper.clamp(idx, 0, G - 1);
         }
 
-        double u01 = deterministic01(bx, bz, j);
+        // Use symmetric jitter per distance from center so both sides match
+        double u01 = deterministic01(bx, bz, dist);
         double u = (u01 * W) - (W * 0.5);
         double sprime = s + u;
 
