@@ -16,10 +16,15 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                GoldGolemEntity golem = findNearestOwnedGolem(player, 8.0);
-                if (golem != null) {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     String id = payload.block().map(Identifier::toString).orElse("");
-                    golem.setGradientSlot(payload.slot(), id);
+                    if (payload.row() == 0) {
+                        golem.setGradientSlot(payload.slot(), id);
+                    } else {
+                        golem.setStepGradientSlot(payload.slot(), id);
+                    }
                     sendSync(player, golem);
                 }
             });
@@ -28,8 +33,9 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetPathWidthC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                GoldGolemEntity golem = findNearestOwnedGolem(player, 8.0);
-                if (golem != null) {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setPathWidth(payload.width());
                     sendSync(player, golem);
                 }
@@ -39,9 +45,11 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGradientWindowC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                GoldGolemEntity golem = findNearestOwnedGolem(player, 8.0);
-                if (golem != null) {
-                    golem.setGradientWindow(payload.window());
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    if (payload.row() == 0) golem.setGradientWindow(payload.window());
+                    else golem.setStepGradientWindow(payload.window());
                     sendSync(player, golem);
                 }
             });
@@ -61,7 +69,14 @@ public class NetworkInit {
     }
 
     private static void sendSync(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
-        var payload = new SyncGradientS2CPayload(golem.getId(), golem.getPathWidth(), golem.getGradientWindow(), java.util.Arrays.asList(golem.getGradientCopy()));
+        var payload = new SyncGradientS2CPayload(
+                golem.getId(),
+                golem.getPathWidth(),
+                golem.getGradientWindow(),
+                golem.getStepGradientWindow(),
+                java.util.Arrays.asList(golem.getGradientCopy()),
+                java.util.Arrays.asList(golem.getStepGradientCopy())
+        );
         ServerPlayNetworking.send(player, payload);
     }
 }

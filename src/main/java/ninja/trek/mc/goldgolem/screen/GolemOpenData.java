@@ -24,7 +24,7 @@ public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int 
         int sliderH = 12;
         int gridGap = 6;
         int controls = headerH + titleGap + titleLine + labelGap + (gradientRows * ghostRowH);
-        if (slider) controls += sliderH + rowGap;
+        if (slider) controls += (gradientRows * sliderH) + rowGap;
         controls += gridGap;
         return controls;
     }

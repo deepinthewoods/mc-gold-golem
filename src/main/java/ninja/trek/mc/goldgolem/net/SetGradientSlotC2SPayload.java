@@ -8,10 +8,12 @@ import net.minecraft.util.Identifier;
 
 import java.util.Optional;
 
-public record SetGradientSlotC2SPayload(int slot, Optional<Identifier> block) implements CustomPayload {
+public record SetGradientSlotC2SPayload(int entityId, int row, int slot, Optional<Identifier> block) implements CustomPayload {
     public static final Id<SetGradientSlotC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_gradient_slot"));
 
     public static final PacketCodec<RegistryByteBuf, SetGradientSlotC2SPayload> CODEC = PacketCodec.tuple(
+            PacketCodecs.VAR_INT, SetGradientSlotC2SPayload::entityId,
+            PacketCodecs.VAR_INT, SetGradientSlotC2SPayload::row,
             PacketCodecs.VAR_INT, SetGradientSlotC2SPayload::slot,
             PacketCodecs.optional(Identifier.PACKET_CODEC), SetGradientSlotC2SPayload::block,
             SetGradientSlotC2SPayload::new

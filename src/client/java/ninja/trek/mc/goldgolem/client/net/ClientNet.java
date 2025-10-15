@@ -13,9 +13,10 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(SyncGradientS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
-                String[] arr = payload.blocks().toArray(new String[0]);
+                String[] mainArr = payload.blocksMain().toArray(new String[0]);
+                String[] stepArr = payload.blocksStep().toArray(new String[0]);
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.applyServerSync(payload.width(), payload.window(), arr);
+                    screen.applyServerSync(payload.width(), payload.windowMain(), payload.windowStep(), mainArr, stepArr);
                 }
             });
         });

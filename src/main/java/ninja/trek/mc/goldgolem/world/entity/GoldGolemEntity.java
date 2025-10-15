@@ -35,7 +35,9 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
+    private final String[] stepGradient = new String[9];
     private int gradientWindow = 1; // window width in slot units (0..9)
+    private int stepGradientWindow = 1; // window width for step gradient
     private int pathWidth = 3;
     private boolean buildingPaths = false;
     private Vec3d trackStart = null;
@@ -136,31 +138,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             }
             if (currentLine != null) {
                 // Debug: log progress periodically while building
-                if (this.age % 20 == 0) {
-                    try {
-                        int progCell = currentLine.progressCellIndex(this.getX(), this.getZ());
-                        int cellsCount = currentLine.cells == null ? 0 : currentLine.cells.size();
-                        int processedUnits = (currentLine.processed == null) ? 0 : currentLine.processed.cardinality();
-                        int totalUnits = Math.max(0, currentLine.totalBits);
-                        int endIdxDbg = Math.max(0, cellsCount - 1);
-                        Vec3d endDbg = currentLine.pointAtIndex(endIdxDbg);
-                        double dxDbg = this.getX() - endDbg.x;
-                        double dzDbg = this.getZ() - endDbg.z;
-                        double distEnd = Math.sqrt(dxDbg * dxDbg + dzDbg * dzDbg);
-                        boolean nearEndDbg = distEnd <= 1.25;
-                        int widthSnapDbg = Math.max(1, currentLine.widthSnapshot);
-                        int boundCellDbg = (nearEndDbg || progCell >= (endIdxDbg - 1)) ? endIdxDbg : progCell;
-                        int boundExclusive = Math.min(totalUnits, Math.max(0, (boundCellDbg + 1) * widthSnapDbg));
-                        System.out.println("[GoldGolem] build entity=" + this.getId() +
-                                " segCells=" + cellsCount +
-                                " progCell=" + progCell +
-                                " unitsProcessed=" + processedUnits + "/" + totalUnits +
-                                " bound=" + boundExclusive +
-                                " distToEnd=" + String.format(java.util.Locale.ROOT, "%.2f", distEnd));
-                    } catch (Throwable t) {
-                        // best-effort logging; ignore
-                    }
-                }
+                // removed periodic build debug logging
                 // Placement paced by golem progress along the line
                 if (placeCooldown > 0) {
                     placeCooldown--;
@@ -244,10 +222,15 @@ public class GoldGolemEntity extends PathAwareEntity {
     protected void writeCustomData(WriteView view) {
         view.putInt("PathWidth", this.pathWidth);
         view.putInt("GradWindow", this.gradientWindow);
+        view.putInt("StepWindow", this.stepGradientWindow);
 
         for (int i = 0; i < 9; i++) {
             String val = gradient[i] == null ? "" : gradient[i];
             view.putString("G" + i, val);
+        }
+        for (int i = 0; i < 9; i++) {
+            String val = stepGradient[i] == null ? "" : stepGradient[i];
+            view.putString("S" + i, val);
         }
 
         DefaultedList<ItemStack> stacks = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
@@ -261,9 +244,13 @@ public class GoldGolemEntity extends PathAwareEntity {
     protected void readCustomData(ReadView view) {
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0, Math.min(9, view.getInt("GradWindow", this.gradientWindow)));
+        this.stepGradientWindow = Math.max(0, Math.min(9, view.getInt("StepWindow", this.stepGradientWindow)));
 
         for (int i = 0; i < 9; i++) {
             gradient[i] = view.getString("G" + i, "");
+        }
+        for (int i = 0; i < 9; i++) {
+            stepGradient[i] = view.getString("S" + i, "");
         }
 
         DefaultedList<ItemStack> stacks = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
@@ -287,11 +274,20 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
     public int getGradientWindow() { return gradientWindow; }
     public void setGradientWindow(int w) { this.gradientWindow = Math.max(0, Math.min(9, w)); }
+    public int getStepGradientWindow() { return stepGradientWindow; }
+    public void setStepGradientWindow(int w) { this.stepGradientWindow = Math.max(0, Math.min(9, w)); }
 
     public String[] getGradientCopy() {
         String[] copy = new String[9];
         for (int i = 0; i < 9; i++) {
             copy[i] = (gradient[i] == null) ? "" : gradient[i];
+        }
+        return copy;
+    }
+    public String[] getStepGradientCopy() {
+        String[] copy = new String[9];
+        for (int i = 0; i < 9; i++) {
+            copy[i] = (stepGradient[i] == null) ? "" : stepGradient[i];
         }
         return copy;
     }
@@ -302,6 +298,13 @@ public class GoldGolemEntity extends PathAwareEntity {
         System.out.println("[GoldGolem] setGradientSlot entity=" + this.getId() +
                 " idx=" + idx + " value='" + value + "'");
         gradient[idx] = value;
+    }
+    public void setStepGradientSlot(int idx, String id) {
+        if (idx < 0 || idx >= 9) return;
+        String value = (id == null || id.isEmpty()) ? "" : id;
+        System.out.println("[GoldGolem] setStepGradientSlot entity=" + this.getId() +
+                " idx=" + idx + " value='" + value + "'");
+        stepGradient[idx] = value;
     }
 
     // Ownership (simple UUID-based)
@@ -418,7 +421,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     // Place a single offset column at the given center x/z for strip index j
-    private void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j) {
+    private void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.util.math.Direction travelDir) {
         int w = Math.max(1, Math.min(9, stripWidth));
         var world = this.getEntityWorld();
         double ox = x + px * j;
@@ -442,27 +445,89 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
         }
         if (groundY == null) return;
-        LongOpenHashSet stripSeen = new LongOpenHashSet(3);
+        // Replace only exposed surface within a 3-block vertical window
         for (int dy = -1; dy <= 1; dy++) {
             BlockPos rp = new BlockPos(bx, groundY + dy, bz);
-            long key = rp.asLong();
-            if (stripSeen.contains(key)) continue;
-            stripSeen.add(key);
             var rs = world.getBlockState(rp);
-            if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
-            if (rs.isOf(block)) continue;
-            if (dy >= 0) {
-                BlockPos ap = rp.up();
-                var as = world.getBlockState(ap);
-                if (as.isFullCube(world, ap)) continue;
-            }
-            if (!recordPlaced(key)) continue;
+            if (rs.isAir() || !rs.isFullCube(world, rp)) continue; // must be solid
+            BlockPos ap = rp.up();
+            var as = world.getBlockState(ap);
+            if (as.isFullCube(world, ap)) continue; // not surface if blocked above
+            if (rs.isOf(block)) break; // already desired block at surface
+            long key = rp.asLong();
+            if (!recordPlaced(key)) break;
             int invSlot = findItem(block.asItem());
-            if (invSlot < 0) { unrecordPlaced(key); continue; }
+            if (invSlot < 0) { unrecordPlaced(key); break; }
             world.setBlockState(rp, block.getDefaultState(), 3);
             var stInv = inventory.getStack(invSlot);
             stInv.decrement(1);
             inventory.setStack(invSlot, stInv);
+            
+            break; // only one placement per column
+        }
+
+        // Step placement in air with neighbor solid along major axis, with headroom
+        int yStep = groundY + 1;
+        BlockPos stepPos = new BlockPos(bx, yStep, bz);
+        var stepState = world.getBlockState(stepPos);
+        if (stepState.isAir()) {
+            boolean neighborSolid = false;
+            if (xMajor) {
+                BlockPos n1 = stepPos.west();
+                BlockPos n2 = stepPos.east();
+                var s1 = world.getBlockState(n1);
+                var s2 = world.getBlockState(n2);
+                neighborSolid = (!s1.isAir() && s1.isFullCube(world, n1)) || (!s2.isAir() && s2.isFullCube(world, n2));
+            } else {
+                BlockPos n1 = stepPos.north();
+                BlockPos n2 = stepPos.south();
+                var s1 = world.getBlockState(n1);
+                var s2 = world.getBlockState(n2);
+                neighborSolid = (!s1.isAir() && s1.isFullCube(world, n1)) || (!s2.isAir() && s2.isFullCube(world, n2));
+            }
+            if (neighborSolid) {
+                BlockPos above = stepPos.up();
+                var as = world.getBlockState(above);
+                if (!as.isFullCube(world, above)) {
+                    int gIdxStep = sampleStepGradientIndex(w, j, bx, bz);
+                    if (gIdxStep >= 0) {
+                        String sid = stepGradient[gIdxStep] == null ? "" : stepGradient[gIdxStep];
+                        if (!sid.isEmpty()) {
+                            var sIdent = net.minecraft.util.Identifier.tryParse(sid);
+                            if (sIdent != null) {
+                                var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
+                                if (sBlock != null) {
+                                    // Avoid double consumption if step block equals base block
+                                    if (sBlock.asItem() == block.asItem()) return;
+                                    long key2 = stepPos.asLong();
+                                    if (recordPlaced(key2)) {
+                                        int invSlot2 = findItem(sBlock.asItem());
+                                        if (invSlot2 >= 0) {
+                                            var placeState = sBlock.getDefaultState();
+                                            if (sBlock instanceof net.minecraft.block.StairsBlock) {
+                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.HORIZONTAL_FACING, travelDir); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.FACING, travelDir); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.STAIR_SHAPE, net.minecraft.block.enums.StairShape.STRAIGHT); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
+                                            } else if (sBlock instanceof net.minecraft.block.SlabBlock) {
+                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.SLAB_TYPE, net.minecraft.block.enums.SlabType.BOTTOM); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
+                                            }
+                                            world.setBlockState(stepPos, placeState, 3);
+                                            var st2 = inventory.getStack(invSlot2);
+                                            st2.decrement(1);
+                                            inventory.setStack(invSlot2, st2);
+                                            
+                                        } else {
+                                            unrecordPlaced(key2);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -470,7 +535,6 @@ public class GoldGolemEntity extends PathAwareEntity {
         int w = Math.max(1, Math.min(9, this.pathWidth));
         int half = (w - 1) / 2;
         var world = this.getEntityWorld();
-        LongOpenHashSet stripSeen = new LongOpenHashSet(w * 3);
         for (int j = -half; j <= half; j++) {
             double ox = x + px * j;
             double oz = z + pz * j;
@@ -493,27 +557,25 @@ public class GoldGolemEntity extends PathAwareEntity {
                 if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
             }
             if (groundY == null) continue;
+            // Replace only exposed surface within a 3-block vertical window
             for (int dy = -1; dy <= 1; dy++) {
-                BlockPos rp = new BlockPos(bx, groundY + dy, bz);
-                long key = rp.asLong();
-                if (stripSeen.contains(key)) continue;
-                stripSeen.add(key);
-                var rs = world.getBlockState(rp);
-                if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
-                if (rs.isOf(block)) continue;
-                // Skip if there is a solid block directly above this placement (avoid head-bump/hidden placement for surface/above)
-                if (dy >= 0) {
-                    BlockPos ap = rp.up();
-                    var as = world.getBlockState(ap);
-                    if (as.isFullCube(world, ap)) continue;
-                }
-                if (!recordPlaced(key)) continue;
+                BlockPos rp2 = new BlockPos(bx, groundY + dy, bz);
+                var rs2 = world.getBlockState(rp2);
+                if (rs2.isAir() || !rs2.isFullCube(world, rp2)) continue; // must be solid
+                BlockPos ap2 = rp2.up();
+                var as2 = world.getBlockState(ap2);
+                if (as2.isFullCube(world, ap2)) continue; // not surface if blocked above
+                if (rs2.isOf(block)) break; // already desired block at surface
+                long key2 = rp2.asLong();
+                if (!recordPlaced(key2)) break;
                 int invSlot = findItem(block.asItem());
-                if (invSlot < 0) { unrecordPlaced(key); continue; }
-                world.setBlockState(rp, block.getDefaultState(), 3);
+                if (invSlot < 0) { unrecordPlaced(key2); break; }
+                world.setBlockState(rp2, block.getDefaultState(), 3);
                 var stInv = inventory.getStack(invSlot);
                 stInv.decrement(1);
                 inventory.setStack(invSlot, stInv);
+                
+                break; // one placement per column
             }
         }
     }
@@ -539,6 +601,41 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         // Use symmetric jitter per distance from center so both sides match
+        double u01 = deterministic01(bx, bz, dist);
+        double u = (u01 * W) - (W * 0.5);
+        double sprime = s + u;
+
+        double a = -0.5;
+        double b = (double) G - 0.5;
+        double L = b - a;
+        double y = (sprime - a) % (2.0 * L);
+        if (y < 0) y += 2.0 * L;
+        double r = (y <= L) ? y : (2.0 * L - y);
+        double sref = a + r;
+
+        int idx = (int) Math.round(sref);
+        return MathHelper.clamp(idx, 0, G - 1);
+    }
+
+    private int sampleStepGradientIndex(int stripWidth, int j, int bx, int bz) {
+        int G = 0;
+        for (int i = stepGradient.length - 1; i >= 0; i--) {
+            if (stepGradient[i] != null && !stepGradient[i].isEmpty()) { G = i + 1; break; }
+        }
+        if (G <= 0) return -1;
+
+        int half = (stripWidth - 1) / 2;
+        int dist = Math.abs(j);
+        int denom = Math.max(1, half);
+        double s = (double) dist / (double) denom * (double) (G - 1);
+
+        int Wcap = Math.min(this.stepGradientWindow, G);
+        double W = (double) Wcap;
+        if (W == 0.0) {
+            int idx = (int) Math.round(s);
+            return MathHelper.clamp(idx, 0, G - 1);
+        }
+
         double u01 = deterministic01(bx, bz, dist);
         double u = (u01 * W) - (W * 0.5);
         double sprime = s + u;
@@ -619,6 +716,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         return -1;
     }
 
+    // removed: runtime block use logging helper
+
     private static class LineSeg {
         final Vec3d a;
         final Vec3d b;
@@ -691,7 +790,11 @@ public class GoldGolemEntity extends PathAwareEntity {
                 double y = MathHelper.lerp(t, a.y, b.y);
                 double x = cell.getX() + 0.5;
                 double z = cell.getZ() + 0.5;
-                golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j);
+                boolean xMajor = Math.abs(dirX) >= Math.abs(dirZ);
+                net.minecraft.util.math.Direction travelDir = xMajor
+                        ? (dirX >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST)
+                        : (dirZ >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH);
+                golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
                 processed.set(bit); // mark attempted (placed or skipped) to avoid thrash
                 ops++;
                 bit = processed.nextClearBit(bit + 1);

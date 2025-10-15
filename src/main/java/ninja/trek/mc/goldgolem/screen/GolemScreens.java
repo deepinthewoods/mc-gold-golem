@@ -15,7 +15,7 @@ public final class GolemScreens {
 
     public static void open(ServerPlayerEntity player, int entityId, Inventory golemInventory) {
         // Build dynamic UI spec
-        int gradientRows = 1;
+        int gradientRows = 2;
         int golemSlots = golemInventory.size();
         int slider = 1;
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
@@ -41,7 +41,14 @@ public final class GolemScreens {
         var e = world.getEntityById(entityId);
         if (e instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
             net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                    new ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload(entityId, golem.getPathWidth(), golem.getGradientWindow(), java.util.Arrays.asList(golem.getGradientCopy())));
+                    new ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload(
+                            entityId,
+                            golem.getPathWidth(),
+                            golem.getGradientWindow(),
+                            golem.getStepGradientWindow(),
+                            java.util.Arrays.asList(golem.getGradientCopy()),
+                            java.util.Arrays.asList(golem.getStepGradientCopy())
+                    ));
         }
     }
 }
