@@ -104,9 +104,20 @@ public class GoldGolemEntity extends PathAwareEntity {
                 Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
                 if (trackStart == null) {
                     trackStart = p;
-                } else if (trackStart.distanceTo(p) >= 3.0) {
-                    enqueueLine(trackStart, p);
-                    trackStart = p;
+                } else {
+                    // Only create a new 3m segment once the player is 4m away from the current anchor
+                    // If the player moved far, catch up by placing multiple 3m segments gated by 4m distance
+                    double dist = trackStart.distanceTo(p);
+                    while (dist >= 4.0) {
+                        Vec3d dir = p.subtract(trackStart);
+                        double len = dir.length();
+                        if (len < 1e-6) break;
+                        Vec3d unit = dir.multiply(1.0 / len);
+                        Vec3d end = trackStart.add(unit.multiply(3.0));
+                        enqueueLine(trackStart, end);
+                        trackStart = end;
+                        dist = trackStart.distanceTo(p);
+                    }
                 }
             }
             // Process current line
