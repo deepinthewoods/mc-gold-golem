@@ -65,6 +65,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.ARMOR_TOUGHNESS, 0.0)
                 .add(EntityAttributes.WAYPOINT_TRANSMIT_RANGE, 0.0)
                 .add(EntityAttributes.STEP_HEIGHT, 0.6)
+                .add(EntityAttributes.WATER_MOVEMENT_EFFICIENCY, 1.0)
                 .add(EntityAttributes.MOVEMENT_EFFICIENCY, 1.0)
                 .add(EntityAttributes.GRAVITY, 0.08)
                 .add(EntityAttributes.SAFE_FALL_DISTANCE, 3.0)
@@ -96,27 +97,11 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (owner != null) {
                 this.getLookControl().lookAt(owner, 30.0f, 30.0f);
             }
-            // Render queued lines for owner when holding nugget (server-side particles)
-            if (owner instanceof net.minecraft.server.network.ServerPlayerEntity sp &&
-                    (owner.getMainHandStack().isOf(net.minecraft.item.Items.GOLD_NUGGET) || owner.getOffHandStack().isOf(net.minecraft.item.Items.GOLD_NUGGET))) {
-                if (this.age % 4 == 0 && this.getEntityWorld() instanceof ServerWorld sw) {
-                    // sample each pending segment more densely for visibility
-                    for (LineSeg s : pendingLines) {
-                        int samples = Math.max(4, Math.min(48, s.cells.size() * 2));
-                        for (int k = 0; k <= samples; k++) {
-                            double t = (double) k / (double) samples;
-                            double x = MathHelper.lerp(t, s.a.x, s.b.x);
-                            double y = MathHelper.lerp(t, s.a.y, s.b.y) + 0.05;
-                            double z = MathHelper.lerp(t, s.a.z, s.b.z);
-                            // alwaysSpawn = true so the owner always sees them; small spread for dotted line effect
-                            sw.spawnParticles(sp, net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER, false, true, x, y, z, 2, 0.02, 0.01, 0.02, 0.0);
-                        }
-                    }
-                }
-            }
+            // Lines are now rendered client-side using RenderLayer lines via networking; no server particles.
             // Track lines while owner moves (require grounded for stability, no distance gate in pathing mode)
             if (owner != null && owner.isOnGround()) {
-                Vec3d p = new Vec3d(owner.getX(), owner.getY(), owner.getZ());
+                // Capture slightly above the player's feet at creation time
+                Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
                 if (trackStart == null) {
                     trackStart = p;
                 } else if (trackStart.distanceTo(p) >= 3.0) {
@@ -134,6 +119,23 @@ public class GoldGolemEntity extends PathAwareEntity {
                     Vec3d tgt = currentLine.pointAtIndex(endIdx);
                     double ty0 = computeGroundTargetY(tgt);
                     this.getNavigation().startMovingTo(tgt.x, ty0, tgt.z, 1.1);
+                    // Notify client that the current line started (so it renders while queue may be empty)
+                    if (this.getEntityWorld() instanceof ServerWorld) {
+                        var owner2 = getOwnerPlayer();
+                        if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
+                            java.util.List<net.minecraft.util.math.Vec3d> list2 = new java.util.ArrayList<>();
+                            if (currentLine != null) {
+                                list2.add(currentLine.a);
+                                list2.add(currentLine.b);
+                            }
+                            for (LineSeg s2 : pendingLines) {
+                                list2.add(s2.a);
+                                list2.add(s2.b);
+                            }
+                            java.util.Optional<Vec3d> anchor2 = java.util.Optional.ofNullable(this.trackStart);
+                            ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list2, anchor2);
+                        }
+                    }
                 }
             }
             if (currentLine != null) {
@@ -186,6 +188,19 @@ public class GoldGolemEntity extends PathAwareEntity {
                         LineSeg next = pendingLines.peekFirst();
                         if (next != null) placeCornerFill(done, next);
                         currentLine = null;
+                        // Update client after completing a line so it can drop the finished segment
+                        if (this.getEntityWorld() instanceof ServerWorld) {
+                            var owner2 = getOwnerPlayer();
+                            if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
+                                java.util.List<net.minecraft.util.math.Vec3d> list = new java.util.ArrayList<>();
+                                for (LineSeg s : pendingLines) {
+                                    list.add(s.a);
+                                    list.add(s.b);
+                                }
+                                java.util.Optional<Vec3d> anchor = java.util.Optional.ofNullable(this.trackStart);
+                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list, anchor);
+                            }
+                        }
                     }
                 }
             }
@@ -344,10 +359,12 @@ public class GoldGolemEntity extends PathAwareEntity {
                 this.buildingPaths = true;
                 if (!player.isCreative()) stack.decrement(1);
                 spawnHearts();
-                // send initial (possibly empty) line list
+                // Initialize anchor at golem feet for preview when starting
+                this.trackStart = new Vec3d(this.getX(), this.getY() + 0.05, this.getZ());
+                // send initial (possibly empty) line list with anchor
                 var owner = getOwnerPlayer();
                 if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
-                    ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of());
+                    ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
                 }
                 // reset recent placements cache
                 recentPlaced.clear();
@@ -382,9 +399,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             this.currentLine = null;
             spawnAngry();
             // clear client lines
-            if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
-                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of());
-            }
+                    if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
+                    }
             recentPlaced.clear();
             placedHead = placedSize = 0;
             return false; // cancel damage
@@ -407,17 +424,39 @@ public class GoldGolemEntity extends PathAwareEntity {
         LineSeg seg = new LineSeg(a, b);
         pendingLines.addLast(seg);
         // Sync to client for debug rendering (owner only)
-        if (this.getEntityWorld() instanceof ServerWorld sw) {
+        if (this.getEntityWorld() instanceof ServerWorld) {
             var owner = getOwnerPlayer();
             if (owner instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
-                java.util.List<net.minecraft.util.math.BlockPos> list = new java.util.ArrayList<>();
-                for (LineSeg s : pendingLines) {
-                    list.add(net.minecraft.util.math.BlockPos.ofFloored(s.a));
-                    list.add(net.minecraft.util.math.BlockPos.ofFloored(s.b));
+                java.util.List<net.minecraft.util.math.Vec3d> list = new java.util.ArrayList<>();
+                if (currentLine != null) {
+                    list.add(currentLine.a);
+                    list.add(currentLine.b);
                 }
-                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, this.getId(), list);
+                for (LineSeg s : pendingLines) {
+                    list.add(s.a);
+                    list.add(s.b);
+                }
+                java.util.Optional<Vec3d> anchor = java.util.Optional.ofNullable(this.trackStart);
+                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, this.getId(), list, anchor);
             }
         }
+    }
+
+    private Vec3d withFloorY(Vec3d pos) {
+        var world = this.getEntityWorld();
+        int bx = net.minecraft.util.math.MathHelper.floor(pos.x);
+        int bz = net.minecraft.util.math.MathHelper.floor(pos.z);
+        int y0 = net.minecraft.util.math.MathHelper.floor(pos.y);
+        // Search down a small window to find the nearest full-cube ground
+        for (int yy = y0 + 1; yy >= y0 - 8; yy--) {
+            BlockPos test = new BlockPos(bx, yy, bz);
+            var st = world.getBlockState(test);
+            if (!st.isAir() && st.isFullCube(world, test)) {
+                return new Vec3d(pos.x, yy + 0.05, pos.z);
+            }
+        }
+        // Fallback: just lift slightly
+        return new Vec3d(pos.x, pos.y + 0.05, pos.z);
     }
 
     // Place a single offset column at the given center x/z for strip index j
