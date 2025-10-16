@@ -27,9 +27,6 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(LinesS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
-                System.out.println("[GoldGolem][ClientNet] Lines payload received: entity=" + payload.entityId()
-                        + " points=" + (payload.points() == null ? 0 : payload.points().size())
-                        + " anchor=" + (payload.anchor().isPresent()));
                 ClientState.setLines(payload.entityId(), payload.points(), payload.anchor());
             });
         });

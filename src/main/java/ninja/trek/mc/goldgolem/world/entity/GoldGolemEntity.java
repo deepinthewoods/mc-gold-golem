@@ -593,15 +593,13 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (idx < 0 || idx >= 9) return;
         String value = (id == null || id.isEmpty()) ? "" : id;
         // Debug log to help trace slot updates from client → server
-        System.out.println("[GoldGolem] setGradientSlot entity=" + this.getId() +
-                " idx=" + idx + " value='" + value + "'");
+        
         gradient[idx] = value;
     }
     public void setStepGradientSlot(int idx, String id) {
         if (idx < 0 || idx >= 9) return;
         String value = (id == null || id.isEmpty()) ? "" : id;
-        System.out.println("[GoldGolem] setStepGradientSlot entity=" + this.getId() +
-                " idx=" + idx + " value='" + value + "'");
+        
         stepGradient[idx] = value;
     }
 

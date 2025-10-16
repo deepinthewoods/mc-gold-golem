@@ -56,36 +56,16 @@ public class PumpkinSummoning {
                 return ActionResult.FAIL;
             }
             var def = res.def();
-            // Debug output: basic scan info
-            try {
-                System.out.println("[GoldGolem][Wall] Scan OK: origin=" + def.origin +
-                        " voxels=" + def.voxels.size() +
-                        " markers=" + def.goldMarkers.size() +
-                        " summonBelow=" + below);
-                StringBuilder gm = new StringBuilder();
-                for (int i = 0; i < def.goldMarkers.size(); i++) {
-                    if (i > 0) gm.append(',');
-                    gm.append(def.goldMarkers.get(i));
-                }
-                System.out.println("[GoldGolem][Wall] Gold markers rel: [" + gm + "]");
-            } catch (Throwable ignored) {}
+            // Debug output removed
             // Validate join slices across all gold markers per spec
             var validation = ninja.trek.mc.goldgolem.wall.WallModuleValidator.validate(world, def.origin, def.voxels, def.goldMarkers, below);
             if (!validation.ok()) {
-                try {
-                    System.out.println("[GoldGolem][Wall] Validation FAILED: " + validation.error());
-                } catch (Throwable ignored) {}
                 if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
                     sp.sendMessage(net.minecraft.text.Text.literal("[Gold Golem] Wall validation failed: " + validation.error()), true);
                 }
                 return ActionResult.FAIL;
             }
-            try {
-                String sig = validation.signature();
-                int sh = (sig == null) ? 0 : sig.hashCode();
-                System.out.println("[GoldGolem][Wall] Validation OK: axis=" + validation.axis() +
-                        " uSize=" + validation.uSize() + " sigHash=" + sh);
-            } catch (Throwable ignored) {}
+            // Validation summary logging removed
 
             // Spawn golem with wall mode set
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
@@ -103,7 +83,6 @@ public class PumpkinSummoning {
             } catch (Exception ioe) {
                 // Non-fatal; continue without external snapshot
                 jsonRel = null;
-                System.err.println("[GoldGolem] Failed to write wall snapshot: " + ioe);
             }
             // Extract modules and enforce uniqueness + size/count limits
             var extraction = ninja.trek.mc.goldgolem.wall.WallModuleExtractor.extract(world, def.origin, def.voxels, def.goldMarkers, below);

@@ -1,7 +1,6 @@
 package ninja.trek.mc.goldgolem.registry;
 
 import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
-import net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityTypeBuilder;
 import net.minecraft.entity.EntityDimensions;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.EntityType;
@@ -20,9 +19,8 @@ public final class GoldGolemEntities {
     public static void init() {
         var key = RegistryKey.of(RegistryKeys.ENTITY_TYPE, GoldGolem.id("gold_golem"));
         // Hitbox: 13x13x13 pixels (0.8125 blocks cubed)
-        EntityType<GoldGolemEntity> built = (EntityType<GoldGolemEntity>) FabricEntityTypeBuilder.create(SpawnGroup.CREATURE, GoldGolemEntity::new)
-                .dimensions(EntityDimensions.fixed(13f/16f, 13f/16f))
-                .trackRangeChunks(8)
+        EntityType<GoldGolemEntity> built = net.minecraft.entity.EntityType.Builder.create(GoldGolemEntity::new, SpawnGroup.CREATURE)
+                .dimensions(13f/16f, 13f/16f)
                 .build(key);
         GOLD_GOLEM = Registry.register(Registries.ENTITY_TYPE, GoldGolem.id("gold_golem"), built);
         FabricDefaultAttributeRegistry.register(GOLD_GOLEM, GoldGolemEntity.createAttributes());

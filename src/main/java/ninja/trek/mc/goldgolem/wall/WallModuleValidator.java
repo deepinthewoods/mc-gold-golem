@@ -27,9 +27,7 @@ public final class WallModuleValidator {
         java.util.ArrayList<WallJoinSlice> slices = new java.util.ArrayList<>(goldMarkersRel.size());
         java.util.ArrayList<WallJoinSlice.Axis> axes = new java.util.ArrayList<>(goldMarkersRel.size());
         java.util.ArrayList<Boolean> isSummon = new java.util.ArrayList<>(goldMarkersRel.size());
-        try {
-            System.out.println("[GoldGolem][Wall] Validate: markers=" + goldMarkersRel.size() + " voxels=" + voxelsRel.size() + " preferredAxis=" + preferred + " summonAbs=" + summonGoldAbs);
-        } catch (Throwable ignored) {}
+        // removed console logging
         for (int i = 0; i < goldMarkersRel.size(); i++) {
             BlockPos g = goldMarkersRel.get(i);
             BlockPos markerAbs = originAbs.add(g);
@@ -56,13 +54,7 @@ public final class WallModuleValidator {
             slices.add(current);
             axes.add(ax);
             isSummon.add(Boolean.valueOf(ignoreAbsMarker != null));
-            try {
-                int uMax = current.points.stream().mapToInt(p -> p.du()).max().orElse(0);
-                int sigHash = current.signature().hashCode();
-                System.out.println("[GoldGolem][Wall] Slice[i=" + i + "] rel=" + g +
-                        " summon=" + (ignoreAbsMarker != null) + " axis=" + ax +
-                        " points=" + current.points.size() + " uSize=" + (uMax + 1) + " sigHash=" + sigHash);
-            } catch (Throwable ignored) {}
+            // removed per-slice debug logging
         }
         if (slices.isEmpty()) return new Validation(null, null, 0, "No join slice detected");
         // Choose base slice: prefer a non-summon slice with largest shape, else largest overall
@@ -90,10 +82,7 @@ public final class WallModuleValidator {
             if (!curIsSummon && !baseIsSummon) {
                 // Non-summon slices must be exactly equal under rotation/mirror/±1 shift
                 if (!base.matches(cur)) {
-                    try {
-                        System.out.println("[GoldGolem][Wall] Mismatch(non-summon): baseIdx=" + baseIdx + " i=" + i +
-                                " baseAxis=" + axes.get(baseIdx) + " curAxis=" + axes.get(i));
-                    } catch (Throwable ignored) {}
+                    // removed mismatch debug logging
                     BlockPos g = goldMarkersRel.get(i);
                     return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
                 }
@@ -103,11 +92,7 @@ public final class WallModuleValidator {
                 WallJoinSlice canonical = baseIsSummon ? cur : base;
                 WallJoinSlice candidate = baseIsSummon ? base : cur;
                 if (!matchesWithSingleHole(canonical, candidate)) {
-                    try {
-                        System.out.println("[GoldGolem][Wall] Mismatch(summon-hole): baseIdx=" + baseIdx + " i=" + i +
-                                " canonAxis=" + canonical.axis + " candAxis=" + candidate.axis +
-                                " canonPts=" + canonical.points.size() + " candPts=" + candidate.points.size());
-                    } catch (Throwable ignored) {}
+                    // removed mismatch debug logging
                     BlockPos g = goldMarkersRel.get(i);
                     return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
                 }

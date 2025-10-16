@@ -160,14 +160,7 @@ public abstract class WorldRendererMixin {
         final int pR = 140, pG = 140, pB = 140, pA = 255;
 
         // Submit per-segment custom draw commands using the world render command queue.
-        if ((goldgolem$dbgFrame++ % 20) == 0) {
-            int segCount = 0;
-            for (var e : all.entrySet()) {
-                List<Vec3d> pts = e.getValue().points;
-                segCount += (pts == null) ? 0 : (pts.size() / 2);
-            }
-            System.out.println("[GoldGolem][Render] submitting segments=" + segCount + " holdingNugget=true");
-        }
+        // removed periodic console logging
         // Camera-relative coordinates: subtract camera pos for world-space lines
         var camPos = renderStates.cameraRenderState.pos;
         final float cx = (float) camPos.x;

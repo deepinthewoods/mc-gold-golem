@@ -1,4 +1,5 @@
 {
-  "screen.gold_golem.inventory": "Gold Golem"
+  "screen.gold_golem.inventory": "Gold Golem",
+  "entity.gold_golem.gold_golem": "Gold Golem",
+  "message.gold_golem.not_owner": "You are not this golem's owner"
 }
-

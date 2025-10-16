@@ -2,10 +2,9 @@
 	"required": true,
 	"package": "ninja.trek.mc.goldgolem.mixin.client",
 	"compatibilityLevel": "JAVA_21",
-	"client": [
-		"ExampleClientMixin",
-		"WorldRendererMixin"
-	],
+    "client": [
+        "WorldRendererMixin"
+    ],
 	"injectors": {
 		"defaultRequire": 1
 	}
