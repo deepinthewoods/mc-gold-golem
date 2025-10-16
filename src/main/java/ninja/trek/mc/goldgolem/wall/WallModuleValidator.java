@@ -27,6 +27,9 @@ public final class WallModuleValidator {
         java.util.ArrayList<WallJoinSlice> slices = new java.util.ArrayList<>(goldMarkersRel.size());
         java.util.ArrayList<WallJoinSlice.Axis> axes = new java.util.ArrayList<>(goldMarkersRel.size());
         java.util.ArrayList<Boolean> isSummon = new java.util.ArrayList<>(goldMarkersRel.size());
+        try {
+            System.out.println("[GoldGolem][Wall] Validate: markers=" + goldMarkersRel.size() + " voxels=" + voxelsRel.size() + " preferredAxis=" + preferred + " summonAbs=" + summonGoldAbs);
+        } catch (Throwable ignored) {}
         for (int i = 0; i < goldMarkersRel.size(); i++) {
             BlockPos g = goldMarkersRel.get(i);
             BlockPos markerAbs = originAbs.add(g);
@@ -40,13 +43,26 @@ public final class WallModuleValidator {
             WallJoinSlice current;
             WallJoinSlice.Axis ax;
             if (sx.isPresent() && sz.isPresent()) {
-                if (preferred == WallJoinSlice.Axis.X_THICK) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
-                else { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
+                int cx = sx.get().points.size();
+                int cz = sz.get().points.size();
+                if (cx > cz) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
+                else if (cz > cx) { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
+                else {
+                    if (preferred == WallJoinSlice.Axis.X_THICK) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
+                    else { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
+                }
             } else if (sx.isPresent()) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
             else { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
             slices.add(current);
             axes.add(ax);
             isSummon.add(Boolean.valueOf(ignoreAbsMarker != null));
+            try {
+                int uMax = current.points.stream().mapToInt(p -> p.du()).max().orElse(0);
+                int sigHash = current.signature().hashCode();
+                System.out.println("[GoldGolem][Wall] Slice[i=" + i + "] rel=" + g +
+                        " summon=" + (ignoreAbsMarker != null) + " axis=" + ax +
+                        " points=" + current.points.size() + " uSize=" + (uMax + 1) + " sigHash=" + sigHash);
+            } catch (Throwable ignored) {}
         }
         if (slices.isEmpty()) return new Validation(null, null, 0, "No join slice detected");
         // Choose base slice: prefer a non-summon slice with largest shape, else largest overall
@@ -68,14 +84,30 @@ public final class WallModuleValidator {
         for (int i = 0; i < slices.size(); i++) {
             if (i == baseIdx) continue;
             var cur = slices.get(i);
-            if (!base.matches(cur)) {
-                boolean allowSummonDiff = Boolean.TRUE.equals(isSummon.get(i)) || Boolean.TRUE.equals(isSummon.get(baseIdx));
-                if (allowSummonDiff) {
-                    if (!base.matchesFuzzy(cur, 1, 0)) {
-                        BlockPos g = goldMarkersRel.get(i);
-                        return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
-                    }
-                } else {
+            boolean curIsSummon = Boolean.TRUE.equals(isSummon.get(i));
+            boolean baseIsSummon = Boolean.TRUE.equals(isSummon.get(baseIdx));
+
+            if (!curIsSummon && !baseIsSummon) {
+                // Non-summon slices must be exactly equal under rotation/mirror/±1 shift
+                if (!base.matches(cur)) {
+                    try {
+                        System.out.println("[GoldGolem][Wall] Mismatch(non-summon): baseIdx=" + baseIdx + " i=" + i +
+                                " baseAxis=" + axes.get(baseIdx) + " curAxis=" + axes.get(i));
+                    } catch (Throwable ignored) {}
+                    BlockPos g = goldMarkersRel.get(i);
+                    return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
+                }
+            } else {
+                // Allow a single missing cell (pumpkin hole) on the summoning slice only
+                // Evaluate against the non-summon as canonical where possible
+                WallJoinSlice canonical = baseIsSummon ? cur : base;
+                WallJoinSlice candidate = baseIsSummon ? base : cur;
+                if (!matchesWithSingleHole(canonical, candidate)) {
+                    try {
+                        System.out.println("[GoldGolem][Wall] Mismatch(summon-hole): baseIdx=" + baseIdx + " i=" + i +
+                                " canonAxis=" + canonical.axis + " candAxis=" + candidate.axis +
+                                " canonPts=" + canonical.points.size() + " candPts=" + candidate.points.size());
+                    } catch (Throwable ignored) {}
                     BlockPos g = goldMarkersRel.get(i);
                     return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
                 }
@@ -84,5 +116,55 @@ public final class WallModuleValidator {
         int maxU = base.points.stream().mapToInt(p -> p.du()).max().orElse(0);
         int uSize = maxU + 1;
         return new Validation(base.signature(), baseAxis, uSize, null);
+    }
+
+    /**
+     * Returns true if 'candidate' equals 'canonical' under rotation/mirror/±1 du shift,
+     * except for exactly one missing point in candidate (the pumpkin hole). IDs must match everywhere else.
+     */
+    private static boolean matchesWithSingleHole(WallJoinSlice canonical, WallJoinSlice candidate) {
+        // Try both same-axis and rotated comparison
+        for (boolean rotated : new boolean[]{false, true}) {
+            if (!rotated && canonical.axis != candidate.axis) continue;
+            if (rotated && canonical.axis == candidate.axis) continue;
+
+            var A = canonical.points;   // canonical reference
+            var B = candidate.points;   // candidate with one missing cell
+            int aMaxU = A.stream().mapToInt(p -> p.du()).max().orElse(0);
+
+            for (boolean mirror : new boolean[]{false, true}) {
+                for (int shift = -1; shift <= 1; shift++) {
+                    // Transform candidate B into A's frame under mirror/shift using A's maxU
+                    java.util.HashMap<WallJoinSlice.Point, String> transformed = new java.util.HashMap<>();
+                    for (WallJoinSlice.Point pb : B) {
+                        int tu = mirror ? (aMaxU - pb.du()) : pb.du();
+                        tu += shift;
+                        WallJoinSlice.Point q = new WallJoinSlice.Point(pb.dy(), tu);
+                        transformed.put(q, candidate.blockIds.get(pb));
+                    }
+
+                    int missing = 0;
+                    int idMismatch = 0;
+                    for (WallJoinSlice.Point pa : A) {
+                        String bId = transformed.get(pa);
+                        if (bId == null) { missing++; if (missing > 1) break; }
+                        else {
+                            String aId = canonical.blockIds.get(pa);
+                            if (!java.util.Objects.equals(aId, bId)) { idMismatch++; break; }
+                        }
+                    }
+                    // Accept either exact match (missing==0) or exactly one missing (the pumpkin hole)
+                    if (!((missing == 0 || missing == 1) && idMismatch == 0)) continue;
+
+                    // Ensure no extras in transformed candidate that aren't in A
+                    boolean extra = false;
+                    for (WallJoinSlice.Point q : transformed.keySet()) {
+                        if (!A.contains(q)) { extra = true; break; }
+                    }
+                    if (!extra) return true;
+                }
+            }
+        }
+        return false;
     }
 }
