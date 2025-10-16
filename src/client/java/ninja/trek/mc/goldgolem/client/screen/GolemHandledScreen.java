@@ -30,6 +30,14 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private boolean isDragging = false;
     private int dragButton = -1;
     private java.util.Set<Integer> dragVisited = new java.util.HashSet<>();
+    private java.util.List<String> wallUniqueBlocks = java.util.Collections.emptyList();
+    private java.util.List<Integer> wallBlockGroups = java.util.Collections.emptyList();
+    private java.util.List<Integer> wallGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<String> wallGroupFlatSlots = java.util.Collections.emptyList();
+    private String pendingAssignBlockId = null; // click icon then click row to assign
+    private int wallScroll = 0; // simple integer rows scrolled
+    private final java.util.List<WindowSlider> wallRowSliders = new java.util.ArrayList<>();
+    private final int[] wallSliderToGroup = new int[6];
 
     private class WindowSlider extends SliderWidget {
         private final int row; // 0 = main, 1 = step
@@ -101,6 +109,59 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         super(handler, inventory, title);
         this.backgroundWidth = 176; // vanilla chest width
         this.backgroundHeight = handler.getControlsMargin() + handler.getGolemRows() * 18 + 94;
+    }
+
+    public void setWallUniqueBlocks(java.util.List<String> ids) {
+        this.wallUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+    }
+    public void setWallBlockGroups(java.util.List<Integer> groups) {
+        this.wallBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+    }
+    public void setWallGroupsState(java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+        this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+        syncWallSliders();
+    }
+
+    private void scrollWall(int delta) {
+        int rows = wallGroupWindows == null ? 0 : wallGroupWindows.size();
+        int maxScroll = Math.max(0, rows - 6);
+        int ns = Math.max(0, Math.min(maxScroll, wallScroll + delta));
+        if (ns != wallScroll) {
+            wallScroll = ns;
+            syncWallSliders();
+        }
+    }
+
+    private int effectiveGroupG(int group) {
+        if (wallGroupFlatSlots == null) return 0;
+        int start = group * 9;
+        int end = Math.min(start + 9, wallGroupFlatSlots.size());
+        int G = 0;
+        for (int i = end - 1; i >= start; i--) {
+            String s = wallGroupFlatSlots.get(i);
+            if (s != null && !s.isEmpty()) { G = (i - start) + 1; break; }
+        }
+        if (G == 0) G = 9;
+        return G;
+    }
+
+    private void syncWallSliders() {
+        if (this.handler.isSliderEnabled()) return;
+        int rows = wallGroupWindows == null ? 0 : wallGroupWindows.size();
+        for (int i = 0; i < 6; i++) {
+            int group = i + wallScroll;
+            wallSliderToGroup[i] = (group < rows) ? group : -1;
+            WindowSlider s = i < wallRowSliders.size() ? wallRowSliders.get(i) : null;
+            if (s == null) continue;
+            boolean visible = group < rows;
+            s.visible = visible;
+            if (visible) {
+                int G = effectiveGroupG(group);
+                int w = (group < wallGroupWindows.size()) ? wallGroupWindows.get(group) : 0;
+                s.syncTo(0, G, w);
+            }
+        }
     }
 
     @Override
@@ -279,13 +340,46 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
 
         // Width slider under the gradient row (right-aligned)
-        int wsliderW = 90;
-        int wsliderH = 12;
-        int slotTop = this.y + 26; // top of first gradient row
-        int wsliderY = slotTop + (18 + 6) + 18 + 6; // below second row
-        int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
-        widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
-        this.addDrawableChild(widthSlider);
+        if (this.handler.isSliderEnabled()) {
+            int wsliderW = 90;
+            int wsliderH = 12;
+            int slotTop = this.y + 26; // top of first gradient row
+            int wsliderY = slotTop + (18 + 6) + 18 + 6; // below second row
+            int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
+            widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
+            this.addDrawableChild(widthSlider);
+        } else {
+            // Wall Mode UI: create per-row sliders and scroll buttons
+            wallRowSliders.clear();
+            int gridTop = this.y + 26;
+            int gridX = this.x + 8;
+            int wallWx2 = gridX + 9 * 18 + 12;
+            int wallW2 = 90;
+            int wallH2 = 10;
+            for (int r = 0; r < 6; r++) {
+                int sy = gridTop + r * 18 + 3;
+                WindowSlider s = new WindowSlider(wallWx2, sy, wallW2, wallH2, 0.0, 0) {
+                    @Override
+                    protected void applyValue() {
+                        int sliderIdx = wallRowSliders.indexOf(this);
+                        if (sliderIdx < 0 || sliderIdx >= 6) return;
+                        int group = wallSliderToGroup[sliderIdx];
+                        if (group < 0) return;
+                        int G = effectiveGroupG(group);
+                        int w = (G <= 0) ? 0 : (int) Math.round(this.value * G);
+                        w = Math.max(0, Math.min(G, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallGroupWindowC2SPayload(getEntityId(), group, w));
+                    }
+                };
+                wallRowSliders.add(s);
+                this.addDrawableChild(s);
+            }
+            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> { scrollWall(-1); }).dimensions(wallWx2 + wallW2 + 4, gridTop, 14, 12).build();
+            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollWall(1); }).dimensions(wallWx2 + wallW2 + 4, gridTop + 5 * 18, 14, 12).build();
+            this.addDrawableChild(upBtn);
+            this.addDrawableChild(dnBtn);
+            syncWallSliders();
+        }
     }
 
     @Override
@@ -294,14 +388,64 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         super.render(context, mouseX, mouseY, delta);
     }
 
-    // Gradient clicks handled by transparent buttons; no custom mouse overrides.
     @Override
     public boolean mouseClicked(Click click, boolean traced) {
-        // Right-click on any gradient slot clears it regardless of cursor contents
-        if (click.button() == 1) { // right mouse button
-            RowCol rc = gradientIndexAt((int) click.x(), (int) click.y());
-            if (rc != null) {
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), rc.row, rc.col, java.util.Optional.empty()));
+        int mx = (int) click.x();
+        int my = (int) click.y();
+        if (this.handler.isSliderEnabled()) {
+            // Pathing mode: right-click clears ghost slot
+            if (click.button() == 1) {
+                RowCol rc = gradientIndexAt(mx, my);
+                if (rc != null) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), rc.row, rc.col, java.util.Optional.empty()));
+                    return true;
+                }
+            }
+            return super.mouseClicked(click, traced);
+        }
+        // Wall Mode: click icons to select a block, then click a row to assign; click slot to set/clear
+        int iconX = this.x - 20;
+        int startY = this.y + 26;
+        if (mx >= iconX && mx < iconX + 16 && wallUniqueBlocks != null) {
+            int idx = (my - startY) / 18;
+            if (idx >= 0 && idx < wallUniqueBlocks.size()) {
+                pendingAssignBlockId = wallUniqueBlocks.get(idx);
+                return true;
+            }
+        }
+        int gridX = this.x + 8;
+        int rows = wallGroupWindows == null ? 0 : wallGroupWindows.size();
+        int rLocal = (my - startY) / 18;
+        int rIdx = rLocal + wallScroll;
+        if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
+            int c = (mx - gridX) / 18;
+            if (c >= 0 && c < 9) {
+                if (pendingAssignBlockId != null) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), pendingAssignBlockId, rIdx));
+                    pendingAssignBlockId = null;
+                    return true;
+                }
+                if (click.button() == 1) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallGroupSlotC2SPayload(getEntityId(), rIdx, c, java.util.Optional.empty()));
+                    return true;
+                } else {
+                    var mc = MinecraftClient.getInstance();
+                    var player = mc.player;
+                    if (player != null) {
+                        ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                        if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallGroupSlotC2SPayload(getEntityId(), rIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        if (pendingAssignBlockId != null) {
+            int bottomY = startY + Math.min(6, Math.max(0, rows - wallScroll)) * 18;
+            if (my >= bottomY && mx >= gridX && mx < gridX + 9 * 18) {
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), pendingAssignBlockId, -1));
+                pendingAssignBlockId = null;
                 return true;
             }
         }
@@ -348,7 +492,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         context.drawText(this.textRenderer, this.playerInventoryTitle, 8, invY, 0x404040, false);
         context.drawText(this.textRenderer, Text.literal("Gradient"), 8, 18, 0xA0A0A0, false);
         // Width label near the slider
-        if (widthSlider != null) {
+        if (widthSlider != null && this.handler.isSliderEnabled()) {
             int lx = widthSlider.getX() - this.x;
             int ly = widthSlider.getY() - this.y - 10;
             context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFF, false);
@@ -357,6 +501,58 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         // Marker dots above each window slider
         drawSliderMarkers(context, windowSliderMain, effectiveG(0));
         drawSliderMarkers(context, windowSliderStep, effectiveG(1));
+
+        // Wall Mode UI: unique block icons + group rows
+        if (!this.handler.isSliderEnabled()) {
+            int iconX = this.x - 20;
+            int startY = this.y + 26;
+            // Icons
+            if (wallUniqueBlocks != null && !wallUniqueBlocks.isEmpty()) {
+                int maxRows = Math.min(wallUniqueBlocks.size(), 8);
+                for (int i = 0; i < maxRows; i++) {
+                    String id = wallUniqueBlocks.get(i);
+                    var ident = Identifier.tryParse(id);
+                    if (ident == null) continue;
+                    var block = Registries.BLOCK.get(ident);
+                    if (block == null) continue;
+                    ItemStack icon = new ItemStack(block.asItem());
+                    context.drawItem(icon, iconX, startY + i * 18);
+                }
+            }
+            // Group rows (ghost slots + items)
+            int rows = wallGroupWindows == null ? 0 : wallGroupWindows.size();
+            int drawRows = Math.min(rows - wallScroll, Math.max(0, 6));
+            int gridX = this.x + 8;
+            for (int r = 0; r < drawRows; r++) {
+                int rowIdx = r + wallScroll;
+                int y = startY + r * 18;
+                for (int c = 0; c < 9; c++) {
+                    int x = gridX + c * 18;
+                    int col = 0xFF404040;
+                    int ix1 = x, iy1 = y, ix2 = x + 16, iy2 = y + 16;
+                    context.fill(ix1, iy1, ix2, iy2, 0x80000000);
+                    // border 1px
+                    context.fill(ix1 - 1, iy1 - 1, ix2 + 1, iy1, col); // top
+                    context.fill(ix1 - 1, iy2, ix2 + 1, iy2 + 1, col); // bottom
+                    context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
+                    context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
+                    int flatIndex = rowIdx * 9 + c;
+                    if (flatIndex >= 0 && flatIndex < wallGroupFlatSlots.size()) {
+                        String bid = wallGroupFlatSlots.get(flatIndex);
+                        if (bid != null && !bid.isEmpty()) {
+                            var ident = Identifier.tryParse(bid);
+                            if (ident != null) {
+                                var block = Registries.BLOCK.get(ident);
+                                if (block != null) {
+                                    ItemStack st = new ItemStack(block.asItem());
+                                    context.drawItem(st, x, y);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     public int getEntityId() {

@@ -15,6 +15,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     private final int golemSlotCount;
     private final int controlsMargin;
     private final int golemRows;
+    private final boolean sliderEnabled;
 
     // Client-side constructor (from ExtendedScreenHandlerType buffer)
     public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, GolemOpenData data) {
@@ -24,6 +25,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.golemRows = (this.golemSlotCount + 8) / 9;
         int titleLine = 10;
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), titleLine);
+        this.sliderEnabled = data.sliderEnabled();
         this.golemInventory = new SimpleInventory(this.golemSlotCount);
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -36,6 +38,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.golemSlotCount = Math.min(golemInventory.size(), Math.max(0, data.golemSlots()));
         this.golemRows = (this.golemSlotCount + 8) / 9;
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), 10);
+        this.sliderEnabled = data.sliderEnabled();
         this.golemInventory = golemInventory;
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -77,6 +80,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     public int getControlsMargin() { return controlsMargin; }
     public int getGolemSlotCount() { return golemSlotCount; }
     public int getGolemRows() { return golemRows; }
+    public boolean isSliderEnabled() { return sliderEnabled; }
 
     @Override
     public ItemStack quickMove(PlayerEntity player, int index) {

@@ -12,6 +12,13 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetGradientWindowC2SPayload.ID, SetGradientWindowC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncGradientS2CPayload.ID, SyncGradientS2CPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(UniqueBlocksS2CPayload.ID, UniqueBlocksS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(WallBlockGroupsS2CPayload.ID, WallBlockGroupsS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(WallGroupsStateS2CPayload.ID, WallGroupsStateS2CPayload.CODEC);
+
+        PayloadTypeRegistry.playC2S().register(SetWallBlockGroupC2SPayload.ID, SetWallBlockGroupC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetWallGroupSlotC2SPayload.ID, SetWallGroupSlotC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetWallGroupWindowC2SPayload.ID, SetWallGroupWindowC2SPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
@@ -54,6 +61,52 @@ public class NetworkInit {
                 }
             });
         });
+
+        // Wall Mode UI receivers
+        ServerPlayNetworking.registerGlobalReceiver(SetWallBlockGroupC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setWallBlockGroup(payload.blockId(), payload.group());
+                    sendWallUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetWallGroupSlotC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    String id = payload.block().map(Identifier::toString).orElse("");
+                    golem.setWallGroupSlot(payload.group(), payload.slot(), id);
+                    sendWallUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetWallGroupWindowC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setWallGroupWindow(payload.group(), payload.window());
+                    sendWallUiState(player, golem);
+                }
+            });
+        });
+    }
+
+    private static void sendWallUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
+        var ids = golem.getWallUniqueBlockIds();
+        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), ids));
+        var groups = golem.getWallBlockGroupMap(ids);
+        ServerPlayNetworking.send(player, new WallBlockGroupsS2CPayload(golem.getId(), groups));
+        var wins = golem.getWallGroupWindows();
+        var slots = golem.getWallGroupFlatSlots();
+        ServerPlayNetworking.send(player, new WallGroupsStateS2CPayload(golem.getId(), wins, slots));
     }
 
     private static GoldGolemEntity findNearestOwnedGolem(net.minecraft.server.network.ServerPlayerEntity player, double radius) {

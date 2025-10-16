@@ -31,6 +31,7 @@ import net.minecraft.world.World;
 import ninja.trek.mc.goldgolem.screen.GolemScreens;
 
 public class GoldGolemEntity extends PathAwareEntity {
+    public enum BuildMode { PATH, WALL }
     public static final int INVENTORY_SIZE = 27;
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
@@ -40,6 +41,31 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int stepGradientWindow = 1; // window width for step gradient
     private int pathWidth = 3;
     private boolean buildingPaths = false;
+    private BuildMode buildMode = BuildMode.PATH;
+    // Wall-mode captured data (scaffold)
+    private java.util.List<String> wallUniqueBlockIds = java.util.Collections.emptyList();
+    private net.minecraft.util.math.BlockPos wallOrigin = null; // absolute origin of capture
+    private String wallJsonFile = null; // saved snapshot path (relative to game dir)
+    private String wallJoinSignature = null; // common join-slice signature
+    private ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis wallJoinAxis = null;
+    private int wallJoinUSize = 1;
+    private int wallModuleCount = 0;
+    private int wallLongestModule = 0; // by voxel count for now
+    private java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates = java.util.Collections.emptyList();
+    private ModulePlacement currentModulePlacement = null;
+    private final java.util.ArrayDeque<ModulePlacement> pendingModules = new java.util.ArrayDeque<>();
+    private int wallLastDirX = 1, wallLastDirZ = 0; // cardinal last forward dir
+    // Join-slice inferred template: points in (dy,du) with ids; uses wallJoinAxis
+    private java.util.List<JoinEntry> wallJoinTemplate = java.util.Collections.emptyList();
+
+    private static final class JoinEntry {
+        final int dy; final int du; final String id;
+        JoinEntry(int dy, int du, String id) { this.dy = dy; this.du = du; this.id = id == null ? "" : id; }
+    }
+    // Wall UI state: dynamic gradient groups
+    private final java.util.List<String[]> wallGroupSlots = new java.util.ArrayList<>(); // each String[9]
+    private final java.util.List<Integer> wallGroupWindows = new java.util.ArrayList<>();
+    private final java.util.Map<String, Integer> wallBlockGroup = new java.util.HashMap<>();
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
     private LineSeg currentLine = null;
@@ -50,6 +76,82 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int placedSize = 0;
     private int stuckTicks = 0;
     public boolean isBuildingPaths() { return buildingPaths; }
+    public BuildMode getBuildMode() { return buildMode; }
+    public void setBuildMode(BuildMode mode) { this.buildMode = mode == null ? BuildMode.PATH : mode; }
+    public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
+        this.wallUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
+        this.wallOrigin = origin;
+        this.wallJsonFile = jsonPath;
+    }
+    public java.util.List<String> getWallUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.wallUniqueBlockIds); }
+    public void setWallJoinSignature(String sig) { this.wallJoinSignature = sig; }
+    public String getWallJoinSignature() { return wallJoinSignature; }
+    public void setWallJoinMeta(ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis axis, int uSize) { this.wallJoinAxis = axis; this.wallJoinUSize = Math.max(1, uSize); }
+    public void setWallModulesMeta(int count, int longest) { this.wallModuleCount = count; this.wallLongestModule = longest; }
+    public int getWallModuleCount() { return wallModuleCount; }
+    public int getWallLongestModule() { return wallLongestModule; }
+    public void setWallTemplates(java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> tpls) { this.wallTemplates = tpls == null ? java.util.Collections.emptyList() : tpls; }
+    public void setWallJoinTemplate(java.util.List<int[]> pointsDyDuAndIdIndex, java.util.List<String> idLut) {
+        java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>();
+        for (int[] p : pointsDyDuAndIdIndex) {
+            int dy = p[0], du = p[1], idx = p[2];
+            String id = (idx >= 0 && idx < idLut.size()) ? idLut.get(idx) : "";
+            list.add(new JoinEntry(dy, du, id));
+        }
+        this.wallJoinTemplate = list;
+    }
+    public void initWallGroups(java.util.List<String> uniqueBlocks) {
+        wallGroupSlots.clear(); wallGroupWindows.clear(); wallBlockGroup.clear();
+        // default: one group per unique; if gold present, merge it with first non-gold
+        int idx = 0;
+        int firstNonGold = -1;
+        for (String id : uniqueBlocks) {
+            String[] arr = new String[9];
+            wallGroupSlots.add(arr);
+            wallGroupWindows.add(1);
+            wallBlockGroup.put(id, idx);
+            if (!"minecraft:gold_block".equals(id) && firstNonGold < 0) firstNonGold = idx;
+            idx++;
+        }
+        Integer goldIdx = wallBlockGroup.get("minecraft:gold_block");
+        if (goldIdx != null && firstNonGold >= 0 && goldIdx != firstNonGold) {
+            // merge gold into first non-gold group by remapping only; keep arrays as-is
+            wallBlockGroup.put("minecraft:gold_block", firstNonGold);
+        }
+    }
+    public java.util.List<Integer> getWallBlockGroupMap(java.util.List<String> uniqueBlocks) {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>(uniqueBlocks.size());
+        for (String id : uniqueBlocks) out.add(wallBlockGroup.getOrDefault(id, 0));
+        return out;
+    }
+    public java.util.List<Integer> getWallGroupWindows() { return new java.util.ArrayList<>(wallGroupWindows); }
+    public java.util.List<String> getWallGroupFlatSlots() {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>(wallGroupSlots.size() * 9);
+        for (String[] arr : wallGroupSlots) {
+            for (int i = 0; i < 9; i++) out.add(arr[i] == null ? "" : arr[i]);
+        }
+        return out;
+    }
+    public void setWallBlockGroup(String blockId, int group) {
+        if (group < 0) { // create new
+            wallGroupSlots.add(new String[9]);
+            wallGroupWindows.add(1);
+            group = wallGroupSlots.size() - 1;
+        } else if (group >= wallGroupSlots.size()) {
+            return;
+        }
+        wallBlockGroup.put(blockId, group);
+    }
+    public void setWallGroupWindow(int group, int window) {
+        if (group < 0 || group >= wallGroupWindows.size()) return;
+        wallGroupWindows.set(group, Math.max(0, Math.min(9, window)));
+    }
+    public void setWallGroupSlot(int group, int slot, String id) {
+        if (group < 0 || group >= wallGroupSlots.size()) return;
+        if (slot < 0 || slot >= 9) return;
+        String[] arr = wallGroupSlots.get(group);
+        arr[slot] = (id == null) ? "" : id;
+    }
 
     public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
         super(type, world);
@@ -97,6 +199,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (owner != null) {
                 this.getLookControl().lookAt(owner, 30.0f, 30.0f);
             }
+            if (this.buildMode == BuildMode.WALL) { tickWallMode(owner); return; }
             // Lines are now rendered client-side using RenderLayer lines via networking; no server particles.
             // Track lines while owner moves (require grounded for stability, no distance gate in pathing mode)
             if (owner != null && owner.isOnGround()) {
@@ -243,9 +346,77 @@ public class GoldGolemEntity extends PathAwareEntity {
         return groundY + 1.0;
     }
 
+    // WALL MODE runtime tick handler
+    private void tickWallMode(PlayerEntity owner) {
+        // Track anchors and enqueue modules based on movement
+        if (owner != null && owner.isOnGround()) {
+            Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
+            if (trackStart == null) {
+                trackStart = p;
+            } else {
+                double threshold = Math.max(2.0, getWallLongestHoriz() + 1.0);
+                double dist = Math.sqrt((p.x - trackStart.x) * (p.x - trackStart.x) + (p.z - trackStart.z) * (p.z - trackStart.z));
+                if (dist >= threshold) {
+                    var cand = chooseNextModule(trackStart, p);
+                    if (cand != null) {
+                        pendingModules.addLast(cand);
+                        // update anchor to end
+                        trackStart = cand.end();
+                        // preview
+                        if (this.getEntityWorld() instanceof ServerWorld) {
+                            var owner2 = getOwnerPlayer();
+                            if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
+                                java.util.List<Vec3d> list = new java.util.ArrayList<>();
+                                list.add(cand.anchor()); list.add(cand.end());
+                                java.util.Optional<Vec3d> anchor = java.util.Optional.ofNullable(this.trackStart);
+                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list, anchor);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (currentModulePlacement == null) {
+            currentModulePlacement = pendingModules.pollFirst();
+            if (currentModulePlacement != null) {
+                currentModulePlacement.begin(this);
+                Vec3d end = currentModulePlacement.end();
+                double ty = computeGroundTargetY(end);
+                this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
+            }
+        }
+        if (currentModulePlacement != null) {
+            if (placeCooldown > 0) placeCooldown--; else { currentModulePlacement.placeSome(this, 48); placeCooldown = 1; }
+            Vec3d end = currentModulePlacement.end();
+            double ty = computeGroundTargetY(end);
+            this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
+            double dx = this.getX() - end.x;
+            double dz = this.getZ() - end.z;
+            double distSq = dx * dx + dz * dz;
+            if (this.getNavigation().isIdle() && distSq > 1.0) {
+                stuckTicks++;
+                if (stuckTicks >= 20) {
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
+                        sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z, 40, 0.5, 0.5, 0.5, 0.2);
+                    }
+                    this.refreshPositionAndAngles(end.x, ty, end.z, this.getYaw(), this.getPitch());
+                    this.getNavigation().stop();
+                    stuckTicks = 0;
+                }
+            } else {
+                stuckTicks = 0;
+            }
+            if (currentModulePlacement.done()) {
+                currentModulePlacement = null;
+            }
+        }
+    }
+
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
     @Override
     protected void writeCustomData(WriteView view) {
+        view.putString("Mode", this.buildMode.name());
         view.putInt("PathWidth", this.pathWidth);
         view.putInt("GradWindow", this.gradientWindow);
         view.putInt("StepWindow", this.stepGradientWindow);
@@ -264,10 +435,61 @@ public class GoldGolemEntity extends PathAwareEntity {
         Inventories.writeData(view.get("Inventory"), stacks, true);
 
         if (ownerUuid != null) view.putString("Owner", ownerUuid.toString());
+
+        // Wall-mode persisted bits
+        if (this.wallOrigin != null) {
+            view.putInt("WallOX", this.wallOrigin.getX());
+            view.putInt("WallOY", this.wallOrigin.getY());
+            view.putInt("WallOZ", this.wallOrigin.getZ());
+        }
+        if (this.wallJsonFile != null) view.putString("WallJson", this.wallJsonFile);
+        if (this.wallUniqueBlockIds != null && !this.wallUniqueBlockIds.isEmpty()) {
+            view.putInt("WallUniqCount", this.wallUniqueBlockIds.size());
+            for (int i = 0; i < this.wallUniqueBlockIds.size(); i++) {
+                view.putString("WallU" + i, this.wallUniqueBlockIds.get(i));
+            }
+        } else {
+            view.putInt("WallUniqCount", 0);
+        }
+        if (this.wallJoinSignature != null) view.putString("WallJoinSig", this.wallJoinSignature);
+        if (this.wallJoinAxis != null) view.putString("WallJoinAxis", this.wallJoinAxis.name());
+        view.putInt("WallJoinU", this.wallJoinUSize);
+        view.putInt("WallModCount", this.wallModuleCount);
+        view.putInt("WallModLongest", this.wallLongestModule);
+        // Join template
+        view.putInt("WallJoinTplCount", wallJoinTemplate == null ? 0 : wallJoinTemplate.size());
+        for (int i = 0; wallJoinTemplate != null && i < wallJoinTemplate.size(); i++) {
+            var e = wallJoinTemplate.get(i);
+            view.putInt("WJT_dy" + i, e.dy);
+            view.putInt("WJT_du" + i, e.du);
+            view.putString("WJT_id" + i, e.id);
+        }
+        // Wall groups persistence
+        view.putInt("WallGroupCount", wallGroupSlots.size());
+        for (int g = 0; g < wallGroupSlots.size(); g++) {
+            view.putInt("WallGW" + g, (g < wallGroupWindows.size()) ? wallGroupWindows.get(g) : 1);
+            String[] arr = wallGroupSlots.get(g);
+            for (int i = 0; i < 9; i++) {
+                String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
+                view.putString("WallGS" + g + "_" + i, v);
+            }
+        }
+        // Mapping for unique ids → group index
+        for (int i = 0; i < wallUniqueBlockIds.size(); i++) {
+            String id = wallUniqueBlockIds.get(i);
+            int grp = wallBlockGroup.getOrDefault(id, 0);
+            view.putInt("WallGM" + i, grp);
+        }
     }
 
     @Override
     protected void readCustomData(ReadView view) {
+        String mode = view.getString("Mode", BuildMode.PATH.name());
+        try {
+            this.buildMode = BuildMode.valueOf(mode);
+        } catch (IllegalArgumentException ex) {
+            this.buildMode = BuildMode.PATH;
+        }
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0, Math.min(9, view.getInt("GradWindow", this.gradientWindow)));
         this.stepGradientWindow = Math.max(0, Math.min(9, view.getInt("StepWindow", this.stepGradientWindow)));
@@ -285,6 +507,56 @@ public class GoldGolemEntity extends PathAwareEntity {
 
         var ownerOpt = view.getOptionalString("Owner");
         this.ownerUuid = ownerOpt.isPresent() && !ownerOpt.get().isEmpty() ? java.util.UUID.fromString(ownerOpt.get()) : null;
+
+        // Wall-mode bits
+        if (view.contains("WallOX")) {
+            this.wallOrigin = new net.minecraft.util.math.BlockPos(view.getInt("WallOX", 0), view.getInt("WallOY", 0), view.getInt("WallOZ", 0));
+        } else {
+            this.wallOrigin = null;
+        }
+        this.wallJsonFile = view.getString("WallJson", null);
+        int c = view.getInt("WallUniqCount", 0);
+        if (c > 0) {
+            java.util.ArrayList<String> ids = new java.util.ArrayList<>(c);
+            for (int i = 0; i < c; i++) ids.add(view.getString("WallU" + i, ""));
+            this.wallUniqueBlockIds = ids;
+        } else {
+            this.wallUniqueBlockIds = java.util.Collections.emptyList();
+        }
+        this.wallJoinSignature = view.getString("WallJoinSig", null);
+        String a = view.getString("WallJoinAxis", null);
+        if (a != null) { try { this.wallJoinAxis = ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.valueOf(a); } catch (IllegalArgumentException ignored) {} }
+        this.wallJoinUSize = Math.max(1, view.getInt("WallJoinU", 1));
+        this.wallModuleCount = view.getInt("WallModCount", 0);
+        this.wallLongestModule = view.getInt("WallModLongest", 0);
+        int jt = view.getInt("WallJoinTplCount", 0);
+        if (jt > 0) {
+            java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>(jt);
+            for (int i = 0; i < jt; i++) {
+                int dy = view.getInt("WJT_dy" + i, 0);
+                int du = view.getInt("WJT_du" + i, 0);
+                String id = view.getString("WJT_id" + i, "");
+                list.add(new JoinEntry(dy, du, id));
+            }
+            this.wallJoinTemplate = list;
+        } else {
+            this.wallJoinTemplate = java.util.Collections.emptyList();
+        }
+        // Wall groups
+        wallGroupSlots.clear(); wallGroupWindows.clear(); wallBlockGroup.clear();
+        int gc = view.getInt("WallGroupCount", 0);
+        for (int g = 0; g < gc; g++) {
+            int w = view.getInt("WallGW" + g, 1);
+            wallGroupWindows.add(Math.max(0, Math.min(9, w)));
+            String[] arr = new String[9];
+            for (int i = 0; i < 9; i++) arr[i] = view.getString("WallGS" + g + "_" + i, "");
+            wallGroupSlots.add(arr);
+        }
+        for (int i = 0; i < wallUniqueBlockIds.size(); i++) {
+            int grp = view.getInt("WallGM" + i, 0);
+            String id = wallUniqueBlockIds.get(i);
+            wallBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, wallGroupSlots.size() - 1), grp)));
+        }
     }
 
     public Inventory getInventory() { return inventory; }
@@ -714,6 +986,185 @@ public class GoldGolemEntity extends PathAwareEntity {
         v *= 0xc4ceb9fe1a85ec53L;
         v ^= (v >>> 33);
         return (Double.longBitsToDouble((v >>> 12) | 0x3FF0000000000000L) - 1.0);
+    }
+
+    // WALL MODE helpers and types
+    private double getWallLongestHoriz() {
+        double longest = 0.0;
+        for (var t : wallTemplates) longest = Math.max(longest, t.horizLen());
+        return longest;
+    }
+
+    private ModulePlacement chooseNextModule(Vec3d anchor, Vec3d playerPos) {
+        if (wallTemplates == null || wallTemplates.isEmpty()) return null;
+        double bestScore = Double.POSITIVE_INFINITY;
+        ModulePlacement best = null;
+        for (int ti = 0; ti < wallTemplates.size(); ti++) {
+            var tpl = wallTemplates.get(ti);
+            int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
+            int dxModule = tpl.bMarker.getX() - tpl.aMarker.getX();
+            int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+            for (int rot = 0; rot < 4; rot++) {
+                for (int mir = 0; mir < 2; mir++) {
+                    int[] d = rotateAndMirror(dxModule, dyModule, dzModule, rot, mir == 1);
+                    Vec3d end = new Vec3d(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
+                    // Y rule: toward player Y and no overshoot
+                    double dyNeed = playerPos.y - anchor.y;
+                    double dyStep = d[1];
+                    boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
+                    if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
+                    double yScore = Math.abs(dyNeed - dyStep);
+                    double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
+                    double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz;
+                    if (score < bestScore) { bestScore = score; best = new ModulePlacement(ti, rot, mir == 1, anchor, end); }
+                }
+            }
+        }
+        // Consider empty corner (gap only) turning left/right by wall thickness when useful
+        int t = Math.max(1, this.wallJoinUSize);
+        int lx = wallLastDirX, lz = wallLastDirZ;
+        int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
+        for (int[] pv : perps) {
+            int dx = pv[0] * t;
+            int dz = pv[1] * t;
+            Vec3d end = new Vec3d(anchor.x + dx, anchor.y, anchor.z + dz);
+            double dyNeed = playerPos.y - anchor.y;
+            double yScore = Math.abs(dyNeed - 0.0);
+            double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
+            double score = yScore * 10.0 + xz + 0.5; // slight penalty vs real module
+            if (score < bestScore) {
+                bestScore = score;
+                best = new GapPlacement(dx, dz, anchor, end, pv[0], pv[1]);
+            }
+        }
+        return best;
+    }
+
+    private static int[] rotateAndMirror(int x, int y, int z, int rot, boolean mirror) {
+        int rx = x, rz = z;
+        switch (rot & 3) {
+            case 1 -> { int ox = rx; rx = -rz; rz = ox; }
+            case 2 -> { rx = -rx; rz = -rz; }
+            case 3 -> { int ox = rx; rx = rz; rz = -ox; }
+        }
+        if (mirror) rx = -rx;
+        return new int[]{rx, y, rz};
+    }
+
+    private void placeBlockStateAt(int wx, int wy, int wz, net.minecraft.block.BlockState baseState, int rot, boolean mirror) {
+        var world = this.getEntityWorld();
+        BlockPos pos = new BlockPos(wx, wy, wz);
+        net.minecraft.block.Block block = baseState.getBlock();
+        var current = world.getBlockState(pos);
+        if (!current.isAir() && current.isOf(block)) return;
+        long key = pos.asLong();
+        if (!recordPlaced(key)) return;
+        int invSlot = findItem(block.asItem());
+        if (invSlot < 0) { unrecordPlaced(key); return; }
+        net.minecraft.util.BlockRotation rotation = switch (rot & 3) {
+            case 1 -> net.minecraft.util.BlockRotation.CLOCKWISE_90;
+            case 2 -> net.minecraft.util.BlockRotation.CLOCKWISE_180;
+            case 3 -> net.minecraft.util.BlockRotation.COUNTERCLOCKWISE_90;
+            default -> net.minecraft.util.BlockRotation.NONE;
+        };
+        net.minecraft.util.BlockMirror mir = mirror ? net.minecraft.util.BlockMirror.LEFT_RIGHT : net.minecraft.util.BlockMirror.NONE;
+        net.minecraft.block.BlockState place = baseState;
+        try { place = place.rotate(rotation); } catch (Throwable ignored) {}
+        try { place = place.mirror(mir); } catch (Throwable ignored) {}
+        try {
+            if (place.contains(net.minecraft.state.property.Properties.WATERLOGGED)) {
+                place = place.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE);
+            }
+        } catch (Throwable ignored) {}
+        world.setBlockState(pos, place, 3);
+        var st = inventory.getStack(invSlot);
+        st.decrement(1);
+        inventory.setStack(invSlot, st);
+    }
+
+    private class ModulePlacement {
+        final int tplIndex;
+        final int rot; // 0..3
+        final boolean mirror;
+        final Vec3d anchor;
+        final Vec3d end;
+        java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> voxels;
+        int cursor = 0;
+        boolean joinPlaced = false;
+        ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3d anchor, Vec3d end) {
+            this.tplIndex = tplIndex; this.rot = rot; this.mirror = mirror; this.anchor = anchor; this.end = end;
+        }
+        Vec3d anchor() { return anchor; }
+        Vec3d end() { return end; }
+        void begin(GoldGolemEntity golem) {
+            var tpl = wallTemplates.get(tplIndex);
+            this.voxels = tpl.voxels;
+            // update last direction
+            int dx = wallTemplates.get(tplIndex).bMarker.getX() - wallTemplates.get(tplIndex).aMarker.getX();
+            int dz = wallTemplates.get(tplIndex).bMarker.getZ() - wallTemplates.get(tplIndex).aMarker.getZ();
+            int[] d = rotateAndMirror(dx, 0, dz, rot, mirror);
+            if (Math.abs(d[0]) >= Math.abs(d[2])) { wallLastDirX = Integer.signum(d[0]); wallLastDirZ = 0; }
+            else { wallLastDirX = 0; wallLastDirZ = Integer.signum(d[2]); }
+        }
+        void placeSome(GoldGolemEntity golem, int maxOps) {
+            if (!joinPlaced) { placeJoinSliceAtAnchor(); joinPlaced = true; }
+            var tpl = wallTemplates.get(tplIndex);
+            int ops = 0;
+            while (cursor < voxels.size() && ops < maxOps) {
+                var v = voxels.get(cursor++);
+                int rx = v.rel.getX();
+                int ry = v.rel.getY();
+                int rz = v.rel.getZ();
+                int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
+                int wx = MathHelper.floor(anchor.x) + d[0];
+                int wy = MathHelper.floor(anchor.y) + d[1];
+                int wz = MathHelper.floor(anchor.z) + d[2];
+                placeBlockStateAt(wx, wy, wz, v.state, rot, mirror);
+                ops++;
+            }
+        }
+        boolean done() { return cursor >= (voxels == null ? 0 : voxels.size()); }
+
+        private void placeJoinSliceAtAnchor() {
+            if (wallJoinTemplate == null || wallJoinTemplate.isEmpty()) return;
+            var tpl = wallTemplates.get(tplIndex);
+            int dxm = tpl.bMarker.getX() - tpl.aMarker.getX();
+            int dzm = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+            int[] d = rotateAndMirror(dxm, 0, dzm, rot, mirror);
+            int fx = Integer.signum(d[0]);
+            int fz = Integer.signum(d[2]);
+            int px = -fz;
+            int pz = fx;
+            int ax = MathHelper.floor(anchor.x);
+            int ay = MathHelper.floor(anchor.y);
+            int az = MathHelper.floor(anchor.z);
+            for (JoinEntry e : wallJoinTemplate) {
+                if (e.id == null || e.id.isEmpty()) continue;
+                int wx = ax + px * e.du;
+                int wy = ay + e.dy;
+                int wz = az + pz * e.du;
+                var ident = net.minecraft.util.Identifier.tryParse(e.id);
+                if (ident == null) continue;
+                var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                if (block == null) continue;
+                placeBlockStateAt(wx, wy, wz, block.getDefaultState(), rot, mirror);
+            }
+        }
+    }
+
+    private final class GapPlacement extends ModulePlacement {
+        final int dx, dz;
+        final int dirx, dirz;
+        GapPlacement(int dx, int dz, Vec3d anchor, Vec3d end, int dirx, int dirz) {
+            super(-1, 0, false, anchor, end);
+            this.dx = dx; this.dz = dz; this.dirx = dirx; this.dirz = dirz;
+        }
+        @Override void begin(GoldGolemEntity golem) {
+            this.voxels = java.util.Collections.emptyList();
+            wallLastDirX = dirx; wallLastDirZ = dirz;
+        }
+        @Override void placeSome(GoldGolemEntity golem, int maxOps) { /* nothing */ }
+        @Override boolean done() { return true; }
     }
 
     private void placeCornerFill(LineSeg prev, LineSeg next) {

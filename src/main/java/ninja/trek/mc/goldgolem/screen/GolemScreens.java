@@ -14,10 +14,20 @@ public final class GolemScreens {
     private GolemScreens() {}
 
     public static void open(ServerPlayerEntity player, int entityId, Inventory golemInventory) {
+        // Inspect entity to decide UI flags (e.g., hide width slider in Wall Mode)
+        var world0 = player.getEntityWorld();
+        var ent0 = world0.getEntityById(entityId);
+        boolean sliderEnabled = true;
+        if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
+            if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.WALL) {
+                sliderEnabled = false;
+            }
+        }
+
         // Build dynamic UI spec
         int gradientRows = 2;
         int golemSlots = golemInventory.size();
-        int slider = 1;
+        int slider = sliderEnabled ? 1 : 0;
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
 
         player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {
@@ -49,6 +59,22 @@ public final class GolemScreens {
                             java.util.Arrays.asList(golem.getGradientCopy()),
                             java.util.Arrays.asList(golem.getStepGradientCopy())
                     ));
+            if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.WALL) {
+                // Initialize groups on first open if empty
+                if (golem.getWallUniqueBlockIds() != null && !golem.getWallUniqueBlockIds().isEmpty()) {
+                    if (golem.getWallGroupWindows().isEmpty()) {
+                        golem.initWallGroups(golem.getWallUniqueBlockIds());
+                    }
+                    var ids = golem.getWallUniqueBlockIds();
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new ninja.trek.mc.goldgolem.net.UniqueBlocksS2CPayload(entityId, ids));
+                    var groups = golem.getWallBlockGroupMap(ids);
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new ninja.trek.mc.goldgolem.net.WallBlockGroupsS2CPayload(entityId, groups));
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new ninja.trek.mc.goldgolem.net.WallGroupsStateS2CPayload(entityId, golem.getWallGroupWindows(), golem.getWallGroupFlatSlots()));
+                }
+            }
         }
     }
 }
