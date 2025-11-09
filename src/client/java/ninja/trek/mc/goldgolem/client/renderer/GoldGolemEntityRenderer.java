@@ -1,6 +1,9 @@
 package ninja.trek.mc.goldgolem.client.renderer;
 
-import ninja.trek.mc.goldgolem.client.model.BBModelParser;
+import de.tomalbrc.bil.core.model.Model;
+import de.tomalbrc.bil.core.model.Node;
+import de.tomalbrc.bil.file.bbmodel.BbElement;
+import de.tomalbrc.bil.file.bbmodel.BbFace;
 import ninja.trek.mc.goldgolem.client.model.GoldGolemModel;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import net.minecraft.client.render.RenderLayer;
@@ -14,6 +17,7 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.RotationAxis;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,7 +26,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     private static final Identifier TEXTURE = Identifier.of("gold-golem", "textures/entity/goldgolem.png");
     private static final Pattern WHEEL_PATTERN = Pattern.compile("^w([0-9])([lr])([0-9]+)([ab])$");
 
-    private BBModelParser.BBModel model;
+    private Model model;
 
     public GoldGolemEntityRenderer(EntityRendererFactory.Context ctx) {
         super(ctx);
@@ -59,13 +63,19 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                                        int light, int activeWheelSet, float wheelRotation) {
         VertexConsumer vertexConsumer = vertexConsumers.getBuffer(RenderLayer.getEntityCutout(TEXTURE));
 
-        for (BBModelParser.BBElement element : model.elements) {
+        for (Node node : model.nodeMap().values()) {
+            BbElement element = node.displayDataElement();
+            if (element == null) {
+                continue; // Skip nodes without display elements
+            }
+
+            String name = node.name();
             // Check if this is a wheel element
-            boolean isWheel = element.name.matches("^w[0-9].*");
+            boolean isWheel = name.matches("^w[0-9].*");
 
             if (isWheel) {
                 // Check if this wheel should be visible
-                if (!isWheelInActiveSet(element.name, activeWheelSet)) {
+                if (!isWheelInActiveSet(name, activeWheelSet)) {
                     continue; // Skip wheels not in active set
                 }
             }
@@ -73,35 +83,37 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
             matrices.push();
 
             // Apply transformations
-            renderElement(element, matrices, vertexConsumer, light, wheelRotation, isWheel);
+            renderElement(element, name, matrices, vertexConsumer, light, wheelRotation, isWheel);
 
             matrices.pop();
         }
     }
 
-    private void renderElement(BBModelParser.BBElement element, MatrixStack matrices,
+    private void renderElement(BbElement element, String name, MatrixStack matrices,
                                 VertexConsumer vertexConsumer, int light, float wheelRotation, boolean isWheel) {
         // Convert BlockBench coordinates to Minecraft coordinates
         // BlockBench uses: X+ = East, Y+ = Up, Z+ = South
         // Origin is the pivot point
-        float px = (float) element.origin[0] / 16.0f;
-        float py = (float) element.origin[1] / 16.0f;
-        float pz = (float) element.origin[2] / 16.0f;
+        Vector3f origin = element.origin();
+        float px = origin.x / 16.0f;
+        float py = origin.y / 16.0f;
+        float pz = origin.z / 16.0f;
 
         // Translate to pivot point
         matrices.translate(px, py, pz);
 
         // Apply rotations (in degrees from BlockBench)
-        float rx = (float) element.rotation[0];
-        float ry = (float) element.rotation[1];
-        float rz = (float) element.rotation[2];
+        Vector3f rotation = element.rotation();
+        float rx = rotation.x;
+        float ry = rotation.y;
+        float rz = rotation.z;
 
         // Apply wheel rotation if this is a wheel
         if (isWheel) {
             float additionalRotation = wheelRotation;
 
             // Apply 45-degree offset for 'b' layer wheels
-            if (!isWheelLayerA(element.name)) {
+            if (!isWheelLayerA(name)) {
                 additionalRotation += (float) Math.toRadians(45.0);
             }
 
@@ -117,25 +129,28 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         matrices.translate(-px, -py, -pz);
 
         // Render the cube
-        float x1 = (float) element.from[0] / 16.0f;
-        float y1 = (float) element.from[1] / 16.0f;
-        float z1 = (float) element.from[2] / 16.0f;
-        float x2 = (float) element.to[0] / 16.0f;
-        float y2 = (float) element.to[1] / 16.0f;
-        float z2 = (float) element.to[2] / 16.0f;
+        Vector3f from = element.from();
+        Vector3f to = element.to();
+        float x1 = from.x / 16.0f;
+        float y1 = from.y / 16.0f;
+        float z1 = from.z / 16.0f;
+        float x2 = to.x / 16.0f;
+        float y2 = to.y / 16.0f;
+        float z2 = to.z / 16.0f;
 
         renderCube(matrices, vertexConsumer, x1, y1, z1, x2, y2, z2, element, light);
     }
 
     private void renderCube(MatrixStack matrices, VertexConsumer vertexConsumer,
                             float x1, float y1, float z1, float x2, float y2, float z2,
-                            BBModelParser.BBElement element, int light) {
+                            BbElement element, int light) {
         MatrixStack.Entry entry = matrices.peek();
         Matrix4f positionMatrix = entry.getPositionMatrix();
         Matrix3f normalMatrix = entry.getNormalMatrix();
 
-        float tw = model.textureWidth;
-        float th = model.textureHeight;
+        // Use standard texture size (64x64 is common for Minecraft entity textures)
+        float tw = 64.0f;
+        float th = 64.0f;
 
         // Render each face
         renderFaceIfExists(element, "north", vertexConsumer, positionMatrix, normalMatrix,
@@ -152,17 +167,20 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 x1, y2, z2, x2, y2, z1, 0, 1, 0, light, tw, th);
     }
 
-    private void renderFaceIfExists(BBModelParser.BBElement element, String direction,
+    private void renderFaceIfExists(BbElement element, String direction,
                                      VertexConsumer vertexConsumer, Matrix4f positionMatrix, Matrix3f normalMatrix,
                                      float x1, float y1, float z1, float x2, float y2, float z2,
                                      int nx, int ny, int nz, int light, float tw, float th) {
-        BBModelParser.BBFace face = element.faces.get(direction);
+        BbFace face = element.faces().get(direction);
         if (face == null) return;
 
-        float u1 = (float) face.uv[0] / tw;
-        float v1 = (float) face.uv[1] / th;
-        float u2 = (float) face.uv[2] / tw;
-        float v2 = (float) face.uv[3] / th;
+        // UV coordinates are stored in a list
+        if (face.uv() == null || face.uv().size() < 4) return;
+
+        float u1 = face.uv().get(0) / tw;
+        float v1 = face.uv().get(1) / th;
+        float u2 = face.uv().get(2) / tw;
+        float v2 = face.uv().get(3) / th;
 
         // Add vertices based on direction
         switch (direction) {
