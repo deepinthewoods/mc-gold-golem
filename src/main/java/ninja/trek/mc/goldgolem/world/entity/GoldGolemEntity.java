@@ -199,9 +199,9 @@ public class GoldGolemEntity extends PathAwareEntity {
         super.tick();
 
         // Update wheel rotation based on movement (both client and server for smooth animation)
-        double dx = this.getX() - prevX;
-        double dz = this.getZ() - prevZ;
-        double distanceTraveled = Math.sqrt(dx * dx + dz * dz);
+        double wheelDx = this.getX() - prevX;
+        double wheelDz = this.getZ() - prevZ;
+        double distanceTraveled = Math.sqrt(wheelDx * wheelDx + wheelDz * wheelDz);
         // Rotate wheels based on distance traveled (assuming wheel radius of ~0.5 blocks)
         wheelRotation += distanceTraveled * 2.0; // 2.0 = 1/(π*radius) approximately for visual effect
         wheelRotation %= (Math.PI * 2.0); // Keep rotation within 0-2π
