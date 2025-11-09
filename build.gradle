@@ -47,7 +47,7 @@ dependencies {
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
 	// Blockbench import library
-	modImplementation include("de.tomalbrc:blockbench-import-library:1.7.0-1.21.9")
+	modImplementation include("de.tomalbrc:blockbench-import-library:1.3.0-1.21.5")
 }
 
 processResources {
