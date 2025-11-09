@@ -75,7 +75,12 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int placedHead = 0;
     private int placedSize = 0;
     private int stuckTicks = 0;
+    private double wheelRotation = 0.0;
+    private double prevX = 0.0;
+    private double prevZ = 0.0;
+
     public boolean isBuildingPaths() { return buildingPaths; }
+    public double getWheelRotation() { return wheelRotation; }
     public BuildMode getBuildMode() { return buildMode; }
     public void setBuildMode(BuildMode mode) { this.buildMode = mode == null ? BuildMode.PATH : mode; }
     public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
@@ -192,6 +197,17 @@ public class GoldGolemEntity extends PathAwareEntity {
     @Override
     public void tick() {
         super.tick();
+
+        // Update wheel rotation based on movement (both client and server for smooth animation)
+        double dx = this.getX() - prevX;
+        double dz = this.getZ() - prevZ;
+        double distanceTraveled = Math.sqrt(dx * dx + dz * dz);
+        // Rotate wheels based on distance traveled (assuming wheel radius of ~0.5 blocks)
+        wheelRotation += distanceTraveled * 2.0; // 2.0 = 1/(π*radius) approximately for visual effect
+        wheelRotation %= (Math.PI * 2.0); // Keep rotation within 0-2π
+        prevX = this.getX();
+        prevZ = this.getZ();
+
         if (this.getEntityWorld().isClient()) return;
         if (buildingPaths) {
             // Look at owner while building
