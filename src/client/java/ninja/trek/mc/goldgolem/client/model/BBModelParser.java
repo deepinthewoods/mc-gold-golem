@@ -132,15 +132,48 @@ public class BBModelParser {
         BBFace face = new BBFace();
 
         if (json.has("uv")) {
-            JsonArray uv = json.getAsJsonArray("uv");
-            face.uv[0] = uv.get(0).getAsDouble();
-            face.uv[1] = uv.get(1).getAsDouble();
-            face.uv[2] = uv.get(2).getAsDouble();
-            face.uv[3] = uv.get(3).getAsDouble();
+            JsonElement uvElement = json.get("uv");
+
+            // Check if UV is an array (simple box format) or object (mesh format with per-vertex UVs)
+            if (uvElement.isJsonArray()) {
+                // Simple box UV format: [u1, v1, u2, v2]
+                JsonArray uv = uvElement.getAsJsonArray();
+                face.uv[0] = uv.get(0).getAsDouble();
+                face.uv[1] = uv.get(1).getAsDouble();
+                face.uv[2] = uv.get(2).getAsDouble();
+                face.uv[3] = uv.get(3).getAsDouble();
+            } else if (uvElement.isJsonObject()) {
+                // Mesh format with per-vertex UVs: {"vertexId": [u, v], ...}
+                // For simplicity, we'll extract the min/max UV coordinates from all vertices
+                JsonObject uvObj = uvElement.getAsJsonObject();
+                double minU = Double.MAX_VALUE, minV = Double.MAX_VALUE;
+                double maxU = Double.MIN_VALUE, maxV = Double.MIN_VALUE;
+
+                for (String key : uvObj.keySet()) {
+                    JsonArray vertexUv = uvObj.getAsJsonArray(key);
+                    double u = vertexUv.get(0).getAsDouble();
+                    double v = vertexUv.get(1).getAsDouble();
+
+                    minU = Math.min(minU, u);
+                    minV = Math.min(minV, v);
+                    maxU = Math.max(maxU, u);
+                    maxV = Math.max(maxV, v);
+                }
+
+                face.uv[0] = minU;
+                face.uv[1] = minV;
+                face.uv[2] = maxU;
+                face.uv[3] = maxV;
+            }
         }
 
         if (json.has("texture")) {
-            face.texture = json.get("texture").getAsString();
+            JsonElement textureElement = json.get("texture");
+            if (textureElement.isJsonPrimitive()) {
+                face.texture = textureElement.getAsString();
+            } else if (textureElement.isJsonPrimitive() && textureElement.getAsJsonPrimitive().isNumber()) {
+                face.texture = String.valueOf(textureElement.getAsInt());
+            }
         }
 
         return face;
