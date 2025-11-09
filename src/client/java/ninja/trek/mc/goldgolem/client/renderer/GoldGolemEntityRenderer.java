@@ -212,7 +212,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 .texture(u, v)
                 .overlay(0)
                 .light(light)
-                .normal(normalMatrix, nx, ny, nz);
+                .normal((float) nx, (float) ny, (float) nz);
     }
 
     protected Identifier getTexture(GoldGolemRenderState state) {
