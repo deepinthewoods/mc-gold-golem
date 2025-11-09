@@ -8,6 +8,7 @@ import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.entity.EntityRenderer;
 import net.minecraft.client.render.entity.EntityRendererFactory;
+import net.minecraft.client.render.entity.state.EntityRenderState;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.RotationAxis;
@@ -17,10 +18,9 @@ import org.joml.Matrix4f;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity> {
+public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, GoldGolemEntityRenderer.GoldGolemRenderState> {
     private static final Identifier TEXTURE = Identifier.of("gold-golem", "textures/entity/goldgolem.png");
     private static final Pattern WHEEL_PATTERN = Pattern.compile("^w([0-9])([lr])([0-9]+)([ab])$");
-    private static final float DEG_TO_RAD = (float) Math.PI / 180.0f;
 
     private BBModelParser.BBModel model;
 
@@ -29,21 +29,31 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity> {
         this.model = GoldGolemModel.getModel();
     }
 
+    public static class GoldGolemRenderState extends EntityRenderState {
+        public int activeWheelSet;
+        public float wheelRotation;
+    }
+
     @Override
-    public void render(GoldGolemEntity entity, float yaw, float tickDelta, MatrixStack matrices,
-                       VertexConsumerProvider vertexConsumers, int light) {
-        super.render(entity, yaw, tickDelta, matrices, vertexConsumers, light);
+    public GoldGolemRenderState createRenderState() {
+        return new GoldGolemRenderState();
+    }
+
+    @Override
+    public void updateRenderState(GoldGolemEntity entity, GoldGolemRenderState state, float tickDelta) {
+        super.updateRenderState(entity, state, tickDelta);
+        state.activeWheelSet = entity.getBuildMode() == GoldGolemEntity.BuildMode.PATH ? 0 : 1;
+        state.wheelRotation = (float) entity.getWheelRotation();
+    }
+
+    @Override
+    public void render(GoldGolemRenderState state, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light) {
+        super.render(state, matrices, vertexConsumers, light);
 
         matrices.push();
 
-        // Determine which wheel set to show based on build mode
-        int activeWheelSet = entity.getBuildMode() == GoldGolemEntity.BuildMode.PATH ? 0 : 1;
-
-        // Get wheel rotation for animation
-        float wheelRotation = (float) entity.getWheelRotation();
-
         // Render the model
-        renderModelWithWheels(matrices, vertexConsumers, light, activeWheelSet, wheelRotation);
+        renderModelWithWheels(matrices, vertexConsumers, light, state.activeWheelSet, state.wheelRotation);
 
         matrices.pop();
     }
@@ -205,12 +215,11 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity> {
                 .texture(u, v)
                 .overlay(0)
                 .light(light)
-                .normal(normalMatrix, nx, ny, nz)
-                .next();
+                .normal(normalMatrix, (float) nx, (float) ny, (float) nz);
     }
 
     @Override
-    public Identifier getTexture(GoldGolemEntity entity) {
+    protected Identifier getTexture(GoldGolemRenderState state) {
         return TEXTURE;
     }
 
