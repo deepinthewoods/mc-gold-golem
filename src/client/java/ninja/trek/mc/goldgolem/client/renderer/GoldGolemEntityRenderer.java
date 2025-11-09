@@ -46,10 +46,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.wheelRotation = (float) entity.getWheelRotation();
     }
 
-    @Override
     public void render(GoldGolemRenderState state, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light) {
-        super.render(state, matrices, vertexConsumers, light);
-
         matrices.push();
 
         // Render the model
@@ -215,10 +212,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 .texture(u, v)
                 .overlay(0)
                 .light(light)
-                .normal(normalMatrix, (float) nx, (float) ny, (float) nz);
+                .normal(normalMatrix, nx, ny, nz);
     }
 
-    @Override
     protected Identifier getTexture(GoldGolemRenderState state) {
         return TEXTURE;
     }
