@@ -45,15 +45,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.wheelRotation = (float) entity.getWheelRotation();
     }
 
-    @Override
-    public void render(GoldGolemRenderState state, MatrixStack matrices, OrderedRenderCommandQueue queue, CameraRenderState cameraRenderState) {
-        // Submit custom rendering command to the queue
-        queue.submit((vertexConsumers) -> {
-            matrices.push();
-            renderModelWithWheels(matrices, vertexConsumers, state.light, state.activeWheelSet, state.wheelRotation);
-            matrices.pop();
-        });
-    }
+    // TODO: Custom rendering needs a different approach in 1.21.10
+    // The render() method signature has changed and may not be overridable
+    // For now, commenting out to see if entity at least spawns
 
     private void renderModelWithWheels(MatrixStack matrices, VertexConsumerProvider vertexConsumers,
                                        int light, int activeWheelSet, float wheelRotation) {
