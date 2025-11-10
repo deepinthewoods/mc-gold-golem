@@ -56,71 +56,125 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     }
 
     /**
-     * Calculate eye rotation based on look direction relative to body.
-     * Returns rotation in degrees around the Z-axis in 90-degree increments.
-     * Rotation values produce:
-     *   0°: down+right
-     *   90°: down+left
-     *   180°: up+left
-     *   270°: up+right
-     *
-     * Uses quadrant-based selection: finds which of the 4 eye orientations
-     * has a direction closest to the actual look direction.
+     * Result of eye rotation calculation including both Y-axis and Z-axis rotations.
      */
-    private static float calculateEyeRotation(float headYaw, float bodyYaw, float pitch) {
+    private static class EyeRotation {
+        float yRotation;  // Y-axis rotation: 0° (forward) or ±90° (sideways)
+        float zRotation;  // Z-axis rotation: 0°, 90°, 180°, or 270° (quadrant selection)
+
+        EyeRotation(float yRotation, float zRotation) {
+            this.yRotation = yRotation;
+            this.zRotation = zRotation;
+        }
+    }
+
+    /**
+     * Calculate eye rotation for chameleon-style eyes based on look direction.
+     *
+     * Eyes are positioned at outer edges of the head. Each eye has 8 possible directions:
+     * - 4 directions when facing forward (Y=0°, Z selects quadrant)
+     * - 4 directions when facing sideways (Y=±90°, Z selects quadrant)
+     *
+     * The eye texture is designed as a "+" pattern with 4 quadrants.
+     * Z-rotation selects which quadrant to display:
+     *   0°: down+right, 90°: down+left, 180°: up+left, 270°: up+right
+     *
+     * For sideways viewing, the entire eye rotates 90° outward on Y-axis first,
+     * then Z-rotation selects the appropriate quadrant in that orientation.
+     *
+     * @param isLeftEye true if this is the left eye, false for right eye
+     */
+    private static EyeRotation calculateEyeRotation(boolean isLeftEye, float headYaw, float bodyYaw, float pitch) {
         // Calculate head rotation relative to body
         float relativeYaw = headYaw - bodyYaw;
 
         // Convert look direction to a normalized vector in the golem's local space
         // In Minecraft: yaw 0 = south (-Z), 90 = west (-X), 180 = north (+Z), 270 = east (+X)
         // Pitch: negative = up, positive = down
-        float yawRad = (float) Math.toRadians(-relativeYaw); // Negate for correct rotation direction
+        float yawRad = (float) Math.toRadians(-relativeYaw);
         float pitchRad = (float) Math.toRadians(pitch);
 
         float cosPitch = (float) Math.cos(pitchRad);
         float lookX = -cosPitch * (float) Math.sin(yawRad);  // Right is +X
         float lookY = -(float) Math.sin(pitchRad);           // Up is +Y, down is -Y
-        float lookZ = cosPitch * (float) Math.cos(yawRad);   // Forward is +Z (in local space)
+        float lookZ = cosPitch * (float) Math.cos(yawRad);   // Forward is +Z
 
-        // Define the 4 eye base directions (normalized diagonal directions)
-        // Each represents the center of a quadrant
+        // Determine if we should use forward or sideways orientation
+        // For left eye: sideways means looking left (negative X)
+        // For right eye: sideways means looking right (positive X)
+        boolean useSidewaysOrientation;
+        if (isLeftEye) {
+            // Left eye: use sideways if looking more left than forward
+            useSidewaysOrientation = (lookX < 0) && (Math.abs(lookX) > Math.abs(lookZ));
+        } else {
+            // Right eye: use sideways if looking more right than forward
+            useSidewaysOrientation = (lookX > 0) && (Math.abs(lookX) > Math.abs(lookZ));
+        }
+
+        float yRotation;
+        float adjustedLookX, adjustedLookY, adjustedLookZ;
+
+        if (useSidewaysOrientation) {
+            // Rotate the look vector by ±90° around Y to get it into forward-facing space
+            // Left eye: rotate by -90° (looking left becomes looking forward)
+            // Right eye: rotate by +90° (looking right becomes looking forward)
+            if (isLeftEye) {
+                yRotation = 90.0f;  // Eye points left
+                // Rotate look vector by -90° around Y: (x, y, z) -> (z, y, -x)
+                adjustedLookX = lookZ;
+                adjustedLookY = lookY;
+                adjustedLookZ = -lookX;
+            } else {
+                yRotation = -90.0f;  // Eye points right
+                // Rotate look vector by +90° around Y: (x, y, z) -> (-z, y, x)
+                adjustedLookX = -lookZ;
+                adjustedLookY = lookY;
+                adjustedLookZ = lookX;
+            }
+        } else {
+            // Forward-facing orientation
+            yRotation = 0.0f;
+            adjustedLookX = lookX;
+            adjustedLookY = lookY;
+            adjustedLookZ = lookZ;
+        }
+
+        // Now calculate Z-rotation for quadrant selection using the adjusted look vector
+        // Define the 4 quadrant directions (same as before)
         float sqrt3 = (float) (1.0 / Math.sqrt(3.0));
 
         // 0°: down+right (right, down, forward)
         float[] dir0 = {sqrt3, -sqrt3, sqrt3};
-
         // 90°: down+left (left, down, forward)
         float[] dir90 = {-sqrt3, -sqrt3, sqrt3};
-
         // 180°: up+left (left, up, forward)
         float[] dir180 = {-sqrt3, sqrt3, sqrt3};
-
         // 270°: up+right (right, up, forward)
         float[] dir270 = {sqrt3, sqrt3, sqrt3};
 
-        // Calculate dot products to find closest match
-        float dot0 = lookX * dir0[0] + lookY * dir0[1] + lookZ * dir0[2];
-        float dot90 = lookX * dir90[0] + lookY * dir90[1] + lookZ * dir90[2];
-        float dot180 = lookX * dir180[0] + lookY * dir180[1] + lookZ * dir180[2];
-        float dot270 = lookX * dir270[0] + lookY * dir270[1] + lookZ * dir270[2];
+        // Calculate dot products with adjusted look vector
+        float dot0 = adjustedLookX * dir0[0] + adjustedLookY * dir0[1] + adjustedLookZ * dir0[2];
+        float dot90 = adjustedLookX * dir90[0] + adjustedLookY * dir90[1] + adjustedLookZ * dir90[2];
+        float dot180 = adjustedLookX * dir180[0] + adjustedLookY * dir180[1] + adjustedLookZ * dir180[2];
+        float dot270 = adjustedLookX * dir270[0] + adjustedLookY * dir270[1] + adjustedLookZ * dir270[2];
 
-        // Find the rotation with maximum dot product (closest direction)
+        // Find the Z-rotation with maximum dot product
         float maxDot = dot0;
-        float rotation = 0.0f;
+        float zRotation = 0.0f;
 
         if (dot90 > maxDot) {
             maxDot = dot90;
-            rotation = 90.0f;
+            zRotation = 90.0f;
         }
         if (dot180 > maxDot) {
             maxDot = dot180;
-            rotation = 180.0f;
+            zRotation = 180.0f;
         }
         if (dot270 > maxDot) {
-            rotation = 270.0f;
+            zRotation = 270.0f;
         }
 
-        return rotation;
+        return new EyeRotation(yRotation, zRotation);
     }
 
     public void render(
@@ -186,14 +240,23 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
                 matrices.pop();
             } else if (isEyeMesh) {
-                // Eye mesh: apply z-axis rotation based on look direction
+                // Eye mesh: apply chameleon-style rotation based on look direction
                 matrices.push();
 
                 matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
-                // Calculate and apply eye rotation (90-degree increments)
-                float eyeRotation = calculateEyeRotation(state.yaw, state.bodyYaw, state.pitch);
-                matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(eyeRotation));
+                // Determine if this is left or right eye based on pivot X position
+                // Negative X = left side, Positive X = right side
+                boolean isLeftEye = mesh.pivotX() < 0;
+
+                // Calculate eye rotation (both Y and Z axes)
+                EyeRotation eyeRotation = calculateEyeRotation(isLeftEye, state.yaw, state.bodyYaw, state.pitch);
+
+                // Apply Y-rotation first (0° for forward, ±90° for sideways)
+                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(eyeRotation.yRotation));
+
+                // Then apply Z-rotation for quadrant selection
+                matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(eyeRotation.zRotation));
 
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
 
