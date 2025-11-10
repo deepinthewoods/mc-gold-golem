@@ -16,7 +16,13 @@
       "Bash(javap:*)",
       "Bash(git show:*)",
       "Bash(./gradlew runClient:*)",
-      "Bash(git ls-tree:*)"
+      "Bash(git ls-tree:*)",
+      "WebSearch",
+      "WebFetch(domain:fabricmc.net)",
+      "WebFetch(domain:wiki.fabricmc.net)",
+      "WebFetch(domain:maven.fabricmc.net)",
+      "WebFetch(domain:docs.neoforged.net)",
+      "WebFetch(domain:www.bokmcdok.com)"
     ],
     "deny": [],
     "ask": []
