@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew build:*)",
+      "WebFetch(domain:maven.tomalbrc.de)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:tomalbrc.de)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(./gradlew dependencies:*)",
+      "Bash(curl:*)",
+      "Bash(nul)",
+      "Bash(dir /s /b .gradlecaches*blockbench-import-library*1.1.13*.jar)",
+      "Bash(findstr:*)",
+      "Bash(unzip:*)",
+      "Bash(./gradlew compileClientJava:*)",
+      "Bash(javap:*)",
+      "Bash(git show:*)",
+      "Bash(./gradlew runClient:*)",
+      "Bash(git ls-tree:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
