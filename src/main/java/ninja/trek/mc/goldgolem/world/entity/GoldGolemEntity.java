@@ -84,6 +84,15 @@ public class GoldGolemEntity extends PathAwareEntity {
     private float rightEyeYaw = 0.0f;
     private float rightEyePitch = 0.0f;
     private int eyeUpdateCooldown = 0;
+    // Arm swing animation
+    private static final int ARM_SWING_DURATION_TICKS = 15;
+    private static final float ARM_SWING_MIN_ANGLE = 15.0f;
+    private static final float ARM_SWING_MAX_ANGLE = 70.0f;
+    private float leftArmRotation = 0.0f;  // Current rotation in degrees
+    private float rightArmRotation = 0.0f; // Current rotation in degrees
+    private float leftArmTarget = 0.0f;    // Target rotation for this swing
+    private float rightArmTarget = 0.0f;   // Target rotation for this swing
+    private int armSwingTimer = 0;         // Timer counting down from SWING_DURATION_TICKS
 
     public boolean isBuildingPaths() { return buildingPaths; }
     public float getLeftEyeYaw() { return leftEyeYaw; }
@@ -91,6 +100,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     public float getRightEyeYaw() { return rightEyeYaw; }
     public float getRightEyePitch() { return rightEyePitch; }
     public double getWheelRotation() { return wheelRotation; }
+    public float getLeftArmRotation() { return leftArmRotation; }
+    public float getRightArmRotation() { return rightArmRotation; }
     public BuildMode getBuildMode() { return buildMode; }
     public void setBuildMode(BuildMode mode) { this.buildMode = mode == null ? BuildMode.PATH : mode; }
     public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
@@ -232,6 +243,36 @@ public class GoldGolemEntity extends PathAwareEntity {
             eyeUpdateCooldown = 5 + this.getRandom().nextInt(6);
         } else {
             eyeUpdateCooldown--;
+        }
+
+        // Update arm swing animation when moving (both client and server)
+        if (distanceTraveled > 0.001) { // Entity is moving
+            if (armSwingTimer <= 0) {
+                // Start a new swing cycle with random targets
+                leftArmTarget = ARM_SWING_MIN_ANGLE + this.getRandom().nextFloat() * (ARM_SWING_MAX_ANGLE - ARM_SWING_MIN_ANGLE);
+                rightArmTarget = ARM_SWING_MIN_ANGLE + this.getRandom().nextFloat() * (ARM_SWING_MAX_ANGLE - ARM_SWING_MIN_ANGLE);
+                // Arms swing in opposite directions
+                if (leftArmRotation >= 0) {
+                    leftArmTarget = -leftArmTarget;
+                } else {
+                    rightArmTarget = -rightArmTarget;
+                }
+                armSwingTimer = ARM_SWING_DURATION_TICKS;
+            }
+
+            // Interpolate toward targets
+            float progress = 1.0f - (armSwingTimer / (float) ARM_SWING_DURATION_TICKS);
+            float prevLeftTarget = -leftArmTarget; // Previous target is opposite of current
+            float prevRightTarget = -rightArmTarget;
+            leftArmRotation = MathHelper.lerp(progress, prevLeftTarget, leftArmTarget);
+            rightArmRotation = MathHelper.lerp(progress, prevRightTarget, rightArmTarget);
+
+            armSwingTimer--;
+        } else {
+            // Not moving - gradually return arms to straight down (0 degrees)
+            leftArmRotation = MathHelper.lerp(0.1f, leftArmRotation, 0.0f);
+            rightArmRotation = MathHelper.lerp(0.1f, rightArmRotation, 0.0f);
+            armSwingTimer = 0;
         }
 
         if (this.getEntityWorld().isClient()) return;

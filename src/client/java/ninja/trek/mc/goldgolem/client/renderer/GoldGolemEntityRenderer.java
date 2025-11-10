@@ -41,6 +41,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float leftEyePitch;
         public float rightEyeYaw;
         public float rightEyePitch;
+        public float leftArmRotation;
+        public float rightArmRotation;
     }
 
     @Override
@@ -61,6 +63,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.leftEyePitch = entity.getLeftEyePitch();
         state.rightEyeYaw = entity.getRightEyeYaw();
         state.rightEyePitch = entity.getRightEyePitch();
+        state.leftArmRotation = entity.getLeftArmRotation();
+        state.rightArmRotation = entity.getRightArmRotation();
     }
 
     /**
@@ -215,6 +219,19 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         float headYawRotation = state.yaw - state.bodyYaw;
         float headPitchRotation = state.pitch;
 
+        // Find head pivot for proper eye parenting
+        float headPivotX = 0.0f, headPivotY = 12.0f, headPivotZ = 0.0f;
+        for (GoldGolemModelLoader.MeshPart m : meshParts) {
+            if (m.name() != null && m.name().toLowerCase().contains("head")) {
+                headPivotX = m.pivotX();
+                headPivotY = m.pivotY();
+                headPivotZ = m.pivotZ();
+                System.out.println("Head pivot found: [" + headPivotX + ", " + headPivotY + ", " + headPivotZ + "]");
+                break;
+            }
+        }
+        System.out.println("Using head pivot: [" + headPivotX + ", " + headPivotY + ", " + headPivotZ + "]");
+
         for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
             String meshName = mesh.name();
 
@@ -257,15 +274,21 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 // Eye mesh: parent to head, then apply independent eye rotation
                 matrices.push();
 
-                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
-
-                // First apply head rotation (parenting eyes to head)
-                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(headYawRotation));
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(headPitchRotation));
-
                 // Determine if this is left or right eye based on pivot X position
                 // Negative X = left side, Positive X = right side
                 boolean isLeftEye = mesh.pivotX() < 0;
+
+                System.out.println((isLeftEye ? "Left" : "Right") + " eye pivot: ["
+                    + mesh.pivotX() + ", " + mesh.pivotY() + ", " + mesh.pivotZ() + "]");
+
+                // STEP 1: Apply head rotation around head's pivot (this moves the eye with the head)
+                matrices.translate(headPivotX, headPivotY, headPivotZ);
+                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(headYawRotation));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(headPitchRotation));
+                matrices.translate(-headPivotX, -headPivotY, -headPivotZ);
+
+                // STEP 2: Apply eye's own rotation around its own pivot
+                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
                 // Get independent eye look direction
                 float eyeYaw = isLeftEye ? state.leftEyeYaw : state.rightEyeYaw;
@@ -279,6 +302,23 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                 // Then apply Z-rotation for quadrant selection
                 matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(eyeRotation.zRotation));
+
+                matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
+
+                renderMesh(matrices, queue, layer, mesh, overlay, light);
+                matrices.pop();
+            } else if (meshName != null && meshName.toLowerCase().contains("arm")) {
+                // Arm mesh: apply swing rotation
+                matrices.push();
+
+                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
+
+                // Determine if this is left or right arm based on mesh name
+                boolean isLeftArm = meshName.toLowerCase().contains("arm_l");
+                float armRotation = isLeftArm ? state.leftArmRotation : state.rightArmRotation;
+
+                // Apply rotation around X-axis (forward/backward swing)
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
 
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
 
