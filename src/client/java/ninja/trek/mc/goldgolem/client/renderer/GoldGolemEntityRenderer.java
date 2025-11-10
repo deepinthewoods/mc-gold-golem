@@ -37,6 +37,10 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float bodyYaw;
         public float pitch;
         public float yaw;
+        public float leftEyeYaw;
+        public float leftEyePitch;
+        public float rightEyeYaw;
+        public float rightEyePitch;
     }
 
     @Override
@@ -53,6 +57,10 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.bodyYaw = entity.getBodyYaw();
         state.pitch = entity.getPitch();
         state.yaw = entity.getYaw();
+        state.leftEyeYaw = entity.getLeftEyeYaw();
+        state.leftEyePitch = entity.getLeftEyePitch();
+        state.rightEyeYaw = entity.getRightEyeYaw();
+        state.rightEyePitch = entity.getRightEyePitch();
     }
 
     /**
@@ -83,16 +91,15 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
      * then Z-rotation selects the appropriate quadrant in that orientation.
      *
      * @param isLeftEye true if this is the left eye, false for right eye
+     * @param eyeYaw the eye's independent yaw (relative to head/body)
+     * @param eyePitch the eye's independent pitch
      */
-    private static EyeRotation calculateEyeRotation(boolean isLeftEye, float headYaw, float bodyYaw, float pitch) {
-        // Calculate head rotation relative to body
-        float relativeYaw = headYaw - bodyYaw;
-
+    private static EyeRotation calculateEyeRotation(boolean isLeftEye, float eyeYaw, float eyePitch) {
         // Convert look direction to a normalized vector in the golem's local space
         // In Minecraft: yaw 0 = south (-Z), 90 = west (-X), 180 = north (+Z), 270 = east (+X)
         // Pitch: negative = up, positive = down
-        float yawRad = (float) Math.toRadians(-relativeYaw);
-        float pitchRad = (float) Math.toRadians(pitch);
+        float yawRad = (float) Math.toRadians(-eyeYaw);
+        float pitchRad = (float) Math.toRadians(eyePitch);
 
         float cosPitch = (float) Math.cos(pitchRad);
         float lookX = -cosPitch * (float) Math.sin(yawRad);  // Right is +X
@@ -204,8 +211,15 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         int overlay = OverlayTexture.DEFAULT_UV;
         int light = state.light;
 
+        // Calculate head rotation relative to body (based on look direction)
+        float headYawRotation = state.yaw - state.bodyYaw;
+        float headPitchRotation = state.pitch;
+
         for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
             String meshName = mesh.name();
+
+            // Check if this is a head mesh
+            boolean isHeadMesh = meshName != null && meshName.toLowerCase().contains("head");
 
             // Check if this is an eye mesh
             boolean isEyeMesh = meshName != null && meshName.toLowerCase().contains("eye");
@@ -240,17 +254,25 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
                 matrices.pop();
             } else if (isEyeMesh) {
-                // Eye mesh: apply chameleon-style rotation based on look direction
+                // Eye mesh: parent to head, then apply independent eye rotation
                 matrices.push();
 
                 matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
+
+                // First apply head rotation (parenting eyes to head)
+                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(headYawRotation));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(headPitchRotation));
 
                 // Determine if this is left or right eye based on pivot X position
                 // Negative X = left side, Positive X = right side
                 boolean isLeftEye = mesh.pivotX() < 0;
 
-                // Calculate eye rotation (both Y and Z axes)
-                EyeRotation eyeRotation = calculateEyeRotation(isLeftEye, state.yaw, state.bodyYaw, state.pitch);
+                // Get independent eye look direction
+                float eyeYaw = isLeftEye ? state.leftEyeYaw : state.rightEyeYaw;
+                float eyePitch = isLeftEye ? state.leftEyePitch : state.rightEyePitch;
+
+                // Calculate eye rotation (both Y and Z axes) based on independent look direction
+                EyeRotation eyeRotation = calculateEyeRotation(isLeftEye, eyeYaw, eyePitch);
 
                 // Apply Y-rotation first (0° for forward, ±90° for sideways)
                 matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(eyeRotation.yRotation));
@@ -262,8 +284,22 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
                 matrices.pop();
+            } else if (isHeadMesh) {
+                // Head mesh: rotate based on look direction
+                matrices.push();
+
+                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
+
+                // Apply head rotation based on look direction
+                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(headYawRotation));
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(headPitchRotation));
+
+                matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
+
+                renderMesh(matrices, queue, layer, mesh, overlay, light);
+                matrices.pop();
             } else {
-                // Non-wheel, non-eye mesh: render normally
+                // Non-wheel, non-eye, non-head mesh: render normally
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
             }
         }

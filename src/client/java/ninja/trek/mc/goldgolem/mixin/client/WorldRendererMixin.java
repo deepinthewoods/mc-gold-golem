@@ -158,6 +158,12 @@ public abstract class WorldRendererMixin {
         final int cR = 34, cG = 139, cB = 34, cA = 255;
         // preview (gray)
         final int pR = 140, pG = 140, pB = 140, pA = 255;
+        // look direction (blue)
+        final int lR = 0, lG = 100, lB = 255, lA = 255;
+        // left eye (cyan)
+        final int leR = 0, leG = 255, leB = 255, leA = 255;
+        // right eye (magenta)
+        final int reR = 255, reG = 0, reB = 255, reA = 255;
 
         // Submit per-segment custom draw commands using the world render command queue.
         // removed periodic console logging
@@ -410,6 +416,99 @@ public abstract class WorldRendererMixin {
                     }
                 }
             }
+
+            // Render look direction lines for the golem
+            if (cworld != null) {
+                var ent = cworld.getEntityById(entityId);
+                if (ent instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
+                    float gx = (float) golem.getX();
+                    float gy = (float) golem.getY() + 0.75f; // Roughly head height
+                    float gz = (float) golem.getZ();
+
+                    // Main look direction (blue)
+                    float lookYaw = golem.getYaw();
+                    float lookPitch = golem.getPitch();
+                    Vec3d lookDir = goldgolem$getLookVector(lookYaw, lookPitch, 2.0);
+                    float lookEndX = gx + (float) lookDir.x;
+                    float lookEndY = gy + (float) lookDir.y;
+                    float lookEndZ = gz + (float) lookDir.z;
+
+                    var batchingLook = queue.getBatchingQueue(1000);
+                    batchingLook.submitCustom(matrices, RenderLayer.getSecondaryBlockOutline(), (entry, vc) -> {
+                        int light = 0x00F000F0;
+                        vc.vertex(entry, gx - cx, gy - cy, gz - cz)
+                          .color(lR, lG, lB, lA)
+                          .normal(entry, 0.0f, 1.0f, 0.0f)
+                          .light(light);
+                        vc.vertex(entry, lookEndX - cx, lookEndY - cy, lookEndZ - cz)
+                          .color(lR, lG, lB, lA)
+                          .normal(entry, 0.0f, 1.0f, 0.0f)
+                          .light(light);
+                    });
+
+                    // Left eye direction (cyan) - offset slightly to the left
+                    float eyeOffsetX = 0.2f;
+                    float leftEyeX = gx - eyeOffsetX;
+                    float leftEyeY = gy;
+                    float leftEyeZ = gz;
+                    float leftEyeYaw = golem.getLeftEyeYaw();
+                    float leftEyePitch = golem.getLeftEyePitch();
+                    Vec3d leftEyeDir = goldgolem$getLookVector(leftEyeYaw, leftEyePitch, 1.5);
+                    float leftEyeEndX = leftEyeX + (float) leftEyeDir.x;
+                    float leftEyeEndY = leftEyeY + (float) leftEyeDir.y;
+                    float leftEyeEndZ = leftEyeZ + (float) leftEyeDir.z;
+
+                    var batchingLeftEye = queue.getBatchingQueue(1000);
+                    batchingLeftEye.submitCustom(matrices, RenderLayer.getSecondaryBlockOutline(), (entry, vc) -> {
+                        int light = 0x00F000F0;
+                        vc.vertex(entry, leftEyeX - cx, leftEyeY - cy, leftEyeZ - cz)
+                          .color(leR, leG, leB, leA)
+                          .normal(entry, 0.0f, 1.0f, 0.0f)
+                          .light(light);
+                        vc.vertex(entry, leftEyeEndX - cx, leftEyeEndY - cy, leftEyeEndZ - cz)
+                          .color(leR, leG, leB, leA)
+                          .normal(entry, 0.0f, 1.0f, 0.0f)
+                          .light(light);
+                    });
+
+                    // Right eye direction (magenta) - offset slightly to the right
+                    float rightEyeX = gx + eyeOffsetX;
+                    float rightEyeY = gy;
+                    float rightEyeZ = gz;
+                    float rightEyeYaw = golem.getRightEyeYaw();
+                    float rightEyePitch = golem.getRightEyePitch();
+                    Vec3d rightEyeDir = goldgolem$getLookVector(rightEyeYaw, rightEyePitch, 1.5);
+                    float rightEyeEndX = rightEyeX + (float) rightEyeDir.x;
+                    float rightEyeEndY = rightEyeY + (float) rightEyeDir.y;
+                    float rightEyeEndZ = rightEyeZ + (float) rightEyeDir.z;
+
+                    var batchingRightEye = queue.getBatchingQueue(1000);
+                    batchingRightEye.submitCustom(matrices, RenderLayer.getSecondaryBlockOutline(), (entry, vc) -> {
+                        int light = 0x00F000F0;
+                        vc.vertex(entry, rightEyeX - cx, rightEyeY - cy, rightEyeZ - cz)
+                          .color(reR, reG, reB, reA)
+                          .normal(entry, 0.0f, 1.0f, 0.0f)
+                          .light(light);
+                        vc.vertex(entry, rightEyeEndX - cx, rightEyeEndY - cy, rightEyeEndZ - cz)
+                          .color(reR, reG, reB, reA)
+                          .normal(entry, 0.0f, 1.0f, 0.0f)
+                          .light(light);
+                    });
+                }
+            }
         }
+    }
+
+    /**
+     * Convert yaw and pitch to a look vector with the given length
+     */
+    private Vec3d goldgolem$getLookVector(float yaw, float pitch, double length) {
+        float yawRad = (float) Math.toRadians(-yaw);
+        float pitchRad = (float) Math.toRadians(pitch);
+        float cosPitch = (float) Math.cos(pitchRad);
+        double x = -cosPitch * Math.sin(yawRad) * length;
+        double y = -Math.sin(pitchRad) * length;
+        double z = cosPitch * Math.cos(yawRad) * length;
+        return new Vec3d(x, y, z);
     }
 }

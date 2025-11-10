@@ -78,8 +78,18 @@ public class GoldGolemEntity extends PathAwareEntity {
     private double wheelRotation = 0.0;
     private double prevX = 0.0;
     private double prevZ = 0.0;
+    // Eye look directions (independent for each eye)
+    private float leftEyeYaw = 0.0f;
+    private float leftEyePitch = 0.0f;
+    private float rightEyeYaw = 0.0f;
+    private float rightEyePitch = 0.0f;
+    private int eyeUpdateCooldown = 0;
 
     public boolean isBuildingPaths() { return buildingPaths; }
+    public float getLeftEyeYaw() { return leftEyeYaw; }
+    public float getLeftEyePitch() { return leftEyePitch; }
+    public float getRightEyeYaw() { return rightEyeYaw; }
+    public float getRightEyePitch() { return rightEyePitch; }
     public double getWheelRotation() { return wheelRotation; }
     public BuildMode getBuildMode() { return buildMode; }
     public void setBuildMode(BuildMode mode) { this.buildMode = mode == null ? BuildMode.PATH : mode; }
@@ -207,6 +217,22 @@ public class GoldGolemEntity extends PathAwareEntity {
         wheelRotation %= (Math.PI * 2.0); // Keep rotation within 0-2π
         prevX = this.getX();
         prevZ = this.getZ();
+
+        // Update eye look directions randomly every 5-10 ticks (both client and server)
+        if (eyeUpdateCooldown <= 0) {
+            // Random look direction for left eye (within a reasonable range)
+            leftEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f; // ±60 degrees from center
+            leftEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f; // ±30 degrees from center
+
+            // Random look direction for right eye (independent)
+            rightEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f;
+            rightEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f;
+
+            // Set next update time (5-10 ticks)
+            eyeUpdateCooldown = 5 + this.getRandom().nextInt(6);
+        } else {
+            eyeUpdateCooldown--;
+        }
 
         if (this.getEntityWorld().isClient()) return;
         if (buildingPaths) {
