@@ -3,9 +3,7 @@ package ninja.trek.mc.goldgolem.client.renderer;
 import ninja.trek.mc.goldgolem.client.model.BBModelParser;
 import ninja.trek.mc.goldgolem.client.model.GoldGolemModel;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.VertexConsumerProvider;
+import net.minecraft.client.render.*;
 import net.minecraft.client.render.entity.EntityRenderer;
 import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.render.entity.state.EntityRenderState;
@@ -47,14 +45,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.wheelRotation = (float) entity.getWheelRotation();
     }
 
-    @Override
-    public void render(GoldGolemRenderState state, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light) {
-        matrices.push();
-
-        renderModelWithWheels(matrices, vertexConsumers, light, state.activeWheelSet, state.wheelRotation);
-
-        matrices.pop();
-    }
+    // TODO: Custom rendering needs a different approach in 1.21.10
+    // The render() method signature has changed and may not be overridable
+    // For now, commenting out to see if entity at least spawns
 
     private void renderModelWithWheels(MatrixStack matrices, VertexConsumerProvider vertexConsumers,
                                        int light, int activeWheelSet, float wheelRotation) {
