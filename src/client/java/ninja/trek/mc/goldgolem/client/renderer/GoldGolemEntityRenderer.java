@@ -60,9 +60,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
      * Returns rotation in degrees around the Z-axis in 90-degree increments.
      * Rotation values produce:
      *   0°: down+right
-     *   90°: up+right
+     *   90°: down+left
      *   180°: up+left
-     *   270°: down+left
+     *   270°: up+right
      *
      * Uses quadrant-based selection: finds which of the 4 eye orientations
      * has a direction closest to the actual look direction.
@@ -89,14 +89,14 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         // 0°: down+right (right, down, forward)
         float[] dir0 = {sqrt3, -sqrt3, sqrt3};
 
-        // 90°: up+right (right, up, forward)
-        float[] dir90 = {sqrt3, sqrt3, sqrt3};
+        // 90°: down+left (left, down, forward)
+        float[] dir90 = {-sqrt3, -sqrt3, sqrt3};
 
         // 180°: up+left (left, up, forward)
         float[] dir180 = {-sqrt3, sqrt3, sqrt3};
 
-        // 270°: down+left (left, down, forward)
-        float[] dir270 = {-sqrt3, -sqrt3, sqrt3};
+        // 270°: up+right (right, up, forward)
+        float[] dir270 = {sqrt3, sqrt3, sqrt3};
 
         // Calculate dot products to find closest match
         float dot0 = lookX * dir0[0] + lookY * dir0[1] + lookZ * dir0[2];
