@@ -3,9 +3,7 @@ package ninja.trek.mc.goldgolem.client.renderer;
 import ninja.trek.mc.goldgolem.client.model.BBModelParser;
 import ninja.trek.mc.goldgolem.client.model.GoldGolemModel;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.VertexConsumerProvider;
+import net.minecraft.client.render.*;
 import net.minecraft.client.render.entity.EntityRenderer;
 import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.render.entity.state.EntityRenderState;
@@ -48,12 +46,13 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     }
 
     @Override
-    public void render(GoldGolemRenderState state, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light) {
-        matrices.push();
-
-        renderModelWithWheels(matrices, vertexConsumers, light, state.activeWheelSet, state.wheelRotation);
-
-        matrices.pop();
+    public void render(GoldGolemRenderState state, MatrixStack matrices, OrderedRenderCommandQueue queue, CameraRenderState cameraRenderState) {
+        // Submit custom rendering command to the queue
+        queue.submit((vertexConsumers) -> {
+            matrices.push();
+            renderModelWithWheels(matrices, vertexConsumers, state.light, state.activeWheelSet, state.wheelRotation);
+            matrices.pop();
+        });
     }
 
     private void renderModelWithWheels(MatrixStack matrices, VertexConsumerProvider vertexConsumers,
