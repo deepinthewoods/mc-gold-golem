@@ -47,6 +47,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.wheelRotation = (float) entity.getWheelRotation();
     }
 
+    @Override
     public void render(GoldGolemRenderState state, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light) {
         matrices.push();
 
@@ -196,7 +197,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         addVertex(vertexConsumer, positionMatrix, normalMatrix, v1[0], v1[1], v1[2], uv1[0], uv1[1], nx, ny, nz, light);
         addVertex(vertexConsumer, positionMatrix, normalMatrix, v2[0], v2[1], v2[2], uv2[0], uv2[1], nx, ny, nz, light);
         addVertex(vertexConsumer, positionMatrix, normalMatrix, v3[0], v3[1], v3[2], uv3[0], uv3[1], nx, ny, nz, light);
-        addVertex(vertexConsumer, positionMatrix, normalMatrix, v2[0], v2[1], v2[2], uv2[0], uv2[1], nx, ny, nz, light);
+        addVertex(vertexConsumer, positionMatrix, normalMatrix, v3[0], v3[1], v3[2], uv3[0], uv3[1], nx, ny, nz, light);
     }
 
     private void renderCube(MatrixStack matrices, VertexConsumer vertexConsumer,
