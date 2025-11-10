@@ -99,14 +99,21 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
     }
 
     private static void traverse(AINode node, Matrix4f parentTransform, AIScene scene, List<MeshPart> out) {
-        Matrix4f nodeTransform = new Matrix4f(parentTransform).mul(toMatrix(node.mTransformation()));
+        Matrix4f localTransform = toMatrix(node.mTransformation());
+        Matrix4f nodeTransform = new Matrix4f(parentTransform).mul(localTransform);
+        String nodeName = node.mName().dataString();
+
+        // The pivot point in world space is where the local origin ends up after the full node transform
+        // This is the correct pivot for rotating the already-baked vertices
+        Vector3f pivot = new Vector3f(0, 0, 0);
+        nodeTransform.transformPosition(pivot);
 
         IntBuffer meshIndices = node.mMeshes();
         if (meshIndices != null) {
             for (int i = 0; i < node.mNumMeshes(); i++) {
                 int meshIndex = meshIndices.get(i);
                 AIMesh mesh = AIMesh.create(scene.mMeshes().get(meshIndex));
-                out.add(bakeMesh(mesh, nodeTransform));
+                out.add(bakeMesh(nodeName, mesh, nodeTransform, pivot));
             }
         }
 
@@ -119,7 +126,7 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
         }
     }
 
-    private static MeshPart bakeMesh(AIMesh mesh, Matrix4f transform) {
+    private static MeshPart bakeMesh(String name, AIMesh mesh, Matrix4f transform, Vector3f pivot) {
         int vertexCount = mesh.mNumVertices();
         float[] positions = new float[vertexCount * 3];
         float[] normals = new float[vertexCount * 3];
@@ -129,12 +136,24 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
         AIVector3D.Buffer normalBuffer = mesh.mNormals();
         AIVector3D.Buffer texBuffer = mesh.mTextureCoords(0);
 
+        // Track bounds for extent calculation
+        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY, minZ = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY, maxZ = Float.NEGATIVE_INFINITY;
+
         for (int i = 0; i < vertexCount; i++) {
             AIVector3D vertex = vertexBuffer.get(i);
             Vector4f pos = new Vector4f(vertex.x(), vertex.y(), vertex.z(), 1.0f).mul(transform);
             positions[i * 3] = pos.x();
             positions[i * 3 + 1] = pos.y();
             positions[i * 3 + 2] = pos.z();
+
+            // Update bounds
+            minX = Math.min(minX, pos.x());
+            minY = Math.min(minY, pos.y());
+            minZ = Math.min(minZ, pos.z());
+            maxX = Math.max(maxX, pos.x());
+            maxY = Math.max(maxY, pos.y());
+            maxZ = Math.max(maxZ, pos.z());
 
             Vector3f normal = new Vector3f();
             if (normalBuffer != null) {
@@ -157,6 +176,11 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
                 uvs[i * 2 + 1] = 0.0f;
             }
         }
+
+        // Calculate extents (max dimension in each axis)
+        float extentX = maxX - minX;
+        float extentY = maxY - minY;
+        float extentZ = maxZ - minZ;
 
         int faceCount = mesh.mNumFaces();
         AIFace.Buffer faces = mesh.mFaces();
@@ -186,7 +210,7 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
             }
         }
 
-        return new MeshPart(positions, normals, uvs, indices);
+        return new MeshPart(name, positions, normals, uvs, indices, pivot.x, pivot.y, pivot.z, extentX, extentY, extentZ);
     }
 
     private static Matrix4f toMatrix(AIMatrix4x4 source) {
@@ -199,5 +223,14 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
         ).transpose();
     }
 
-    public record MeshPart(float[] positions, float[] normals, float[] uvs, int[] indices) {}
+    public record MeshPart(String name, float[] positions, float[] normals, float[] uvs, int[] indices,
+                           float pivotX, float pivotY, float pivotZ,
+                           float extentX, float extentY, float extentZ) {
+        /**
+         * Get the maximum extent (diameter) of this mesh, treating it as a circle.
+         */
+        public float getDiameter() {
+            return Math.max(Math.max(extentX, extentY), extentZ);
+        }
+    }
 }

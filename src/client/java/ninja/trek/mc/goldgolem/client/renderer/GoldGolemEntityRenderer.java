@@ -23,16 +23,30 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     private static final Identifier TEXTURE = Identifier.of("gold-golem", "textures/entity/goldgolem.png");
     private static final RenderLayer GOLD_GOLEM_TRIANGLES_LAYER = createLayer();
 
+    // Relative rotation speeds for each wheel set (inversely proportional to wheel diameter)
+    // Calculated on first render based on actual mesh extents
+    private static float[] wheelSpeedMultipliers = null;
+
     public GoldGolemEntityRenderer(EntityRendererFactory.Context ctx) {
         super(ctx);
     }
 
     public static class GoldGolemRenderState extends EntityRenderState {
+        public double wheelRotation;
+        public int activeWheelSet;
     }
 
     @Override
     public GoldGolemRenderState createRenderState() {
         return new GoldGolemRenderState();
+    }
+
+    @Override
+    public void updateRenderState(GoldGolemEntity entity, GoldGolemRenderState state, float tickDelta) {
+        super.updateRenderState(entity, state, tickDelta);
+        state.wheelRotation = entity.getWheelRotation();
+        // Map BuildMode to wheel set: PATH -> 0, WALL -> 1
+        state.activeWheelSet = (entity.getBuildMode() == GoldGolemEntity.BuildMode.WALL) ? 1 : 0;
     }
 
     public void render(
@@ -47,27 +61,157 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
             return;
         }
 
+        // Calculate wheel speed multipliers on first render
+        if (wheelSpeedMultipliers == null) {
+            wheelSpeedMultipliers = calculateWheelSpeedMultipliers(meshParts);
+        }
+
         matrices.push();
-        matrices.translate(0.0f, 0.5f, 0.0f);
+        matrices.translate(0.0f, 0.0f, 0.0f);
         matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0f));
 
         var layer = GOLD_GOLEM_TRIANGLES_LAYER;
         int overlay = OverlayTexture.DEFAULT_UV;
         int light = state.light;
-        queue.submitCustom(matrices, layer, (entry, consumer) -> {
-            for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
-                int[] indices = mesh.indices();
-                if (indices.length < 3) continue;
-                for (int i = 0; i <= indices.length - 3; i += 3) {
-                    emitVertex(entry, consumer, mesh, indices[i], overlay, light);
-                    emitVertex(entry, consumer, mesh, indices[i + 1], overlay, light);
-                    emitVertex(entry, consumer, mesh, indices[i + 2], overlay, light);
+
+        for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
+            String meshName = mesh.name();
+
+            // Check if this is a wheel mesh
+            WheelInfo wheelInfo = parseWheelName(meshName);
+            if (wheelInfo != null) {
+                // Skip wheels not in the active set
+                if (wheelInfo.setIndex != state.activeWheelSet) {
+                    continue;
                 }
+
+                // Apply wheel rotation around pivot point
+                // Matrix operations are post-multiplied, so they apply right-to-left:
+                // This creates: T(+pivot) * R * T(-pivot), which gives R*(v - pivot) + pivot
+                matrices.push();
+
+                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
+
+                // Apply the speed multiplier for this wheel set
+                float speedMultiplier = (wheelSpeedMultipliers != null && wheelInfo.setIndex < wheelSpeedMultipliers.length)
+                        ? wheelSpeedMultipliers[wheelInfo.setIndex]
+                        : 1.0f;
+                float rotationDegrees = (float) Math.toDegrees(state.wheelRotation * speedMultiplier);
+                if (wheelInfo.part == 'b') {
+                    rotationDegrees += 45.0f; // 45° offset for part 'b'
+                }
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(rotationDegrees));
+
+                matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
+
+                renderMesh(matrices, queue, layer, mesh, overlay, light);
+                matrices.pop();
+            } else {
+                // Non-wheel mesh, render normally
+                renderMesh(matrices, queue, layer, mesh, overlay, light);
             }
-        });
+        }
 
         matrices.pop();
         super.render(state, matrices, queue, cameraState);
+    }
+
+    private void renderMesh(MatrixStack matrices, OrderedRenderCommandQueue queue, RenderLayer layer,
+                           GoldGolemModelLoader.MeshPart mesh, int overlay, int light) {
+        queue.submitCustom(matrices, layer, (entry, consumer) -> {
+            int[] indices = mesh.indices();
+            if (indices.length < 3) return;
+            for (int i = 0; i <= indices.length - 3; i += 3) {
+                emitVertex(entry, consumer, mesh, indices[i], overlay, light);
+                emitVertex(entry, consumer, mesh, indices[i + 1], overlay, light);
+                emitVertex(entry, consumer, mesh, indices[i + 2], overlay, light);
+            }
+        });
+    }
+
+    /**
+     * Calculate relative rotation speed multipliers for each wheel set.
+     * Smaller wheels rotate faster to cover the same ground distance.
+     * Formula: angular_velocity = linear_velocity / radius
+     */
+    private static float[] calculateWheelSpeedMultipliers(java.util.List<GoldGolemModelLoader.MeshPart> meshParts) {
+        // Map to store the average diameter for each wheel set
+        java.util.Map<Integer, java.util.List<Float>> wheelSetDiameters = new java.util.HashMap<>();
+
+        // Scan all meshes to find wheels and collect their diameters
+        for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
+            WheelInfo wheelInfo = parseWheelName(mesh.name());
+            if (wheelInfo != null) {
+                wheelSetDiameters.computeIfAbsent(wheelInfo.setIndex, k -> new java.util.ArrayList<>())
+                        .add(mesh.getDiameter());
+            }
+        }
+
+        if (wheelSetDiameters.isEmpty()) {
+            return new float[] { 1.0f };
+        }
+
+        // Calculate average diameter for each set
+        int maxSetIndex = wheelSetDiameters.keySet().stream().max(Integer::compareTo).orElse(0);
+        float[] avgDiameters = new float[maxSetIndex + 1];
+
+        for (int i = 0; i <= maxSetIndex; i++) {
+            java.util.List<Float> diameters = wheelSetDiameters.get(i);
+            if (diameters != null && !diameters.isEmpty()) {
+                avgDiameters[i] = (float) diameters.stream().mapToDouble(Float::doubleValue).average().orElse(1.0);
+            } else {
+                avgDiameters[i] = 1.0f;
+            }
+        }
+
+        // Use the first wheel set as reference (speed multiplier = 1.0)
+        float referenceDiameter = avgDiameters[0];
+        float[] multipliers = new float[maxSetIndex + 1];
+
+        for (int i = 0; i <= maxSetIndex; i++) {
+            // Smaller wheels need higher multipliers to rotate faster
+            multipliers[i] = referenceDiameter / avgDiameters[i];
+        }
+
+        return multipliers;
+    }
+
+    private static class WheelInfo {
+        int setIndex;
+        char side;      // 'r' or 'l'
+        int wheelIndex; // 0, 1, etc.
+        char part;      // 'a' or 'b'
+
+        WheelInfo(int setIndex, char side, int wheelIndex, char part) {
+            this.setIndex = setIndex;
+            this.side = side;
+            this.wheelIndex = wheelIndex;
+            this.part = part;
+        }
+    }
+
+    private static WheelInfo parseWheelName(String name) {
+        // Format: w{setIndex}{side}{wheelIndex}{part}
+        // Example: w0r0a, w1l0b, w2r1a
+        if (name == null || !name.startsWith("w") || name.length() < 5) {
+            return null;
+        }
+
+        try {
+            int setIndex = Character.getNumericValue(name.charAt(1));
+            char side = name.charAt(2);
+            int wheelIndex = Character.getNumericValue(name.charAt(3));
+            char part = name.charAt(4);
+
+            if (setIndex < 0 || (side != 'r' && side != 'l') || wheelIndex < 0 ||
+                (part != 'a' && part != 'b')) {
+                return null;
+            }
+
+            return new WheelInfo(setIndex, side, wheelIndex, part);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static RenderLayer createLayer() {
