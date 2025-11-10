@@ -34,6 +34,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     public static class GoldGolemRenderState extends EntityRenderState {
         public double wheelRotation;
         public int activeWheelSet;
+        public float bodyYaw;
+        public float pitch;
+        public float yaw;
     }
 
     @Override
@@ -47,6 +50,77 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.wheelRotation = entity.getWheelRotation();
         // Map BuildMode to wheel set: PATH -> 0, WALL -> 1
         state.activeWheelSet = (entity.getBuildMode() == GoldGolemEntity.BuildMode.WALL) ? 1 : 0;
+        state.bodyYaw = entity.getBodyYaw();
+        state.pitch = entity.getPitch();
+        state.yaw = entity.getYaw();
+    }
+
+    /**
+     * Calculate eye rotation based on look direction relative to body.
+     * Returns rotation in degrees around the Z-axis in 90-degree increments.
+     * Rotation values produce:
+     *   0°: down+right
+     *   90°: up+right
+     *   180°: up+left
+     *   270°: down+left
+     *
+     * Uses quadrant-based selection: finds which of the 4 eye orientations
+     * has a direction closest to the actual look direction.
+     */
+    private static float calculateEyeRotation(float headYaw, float bodyYaw, float pitch) {
+        // Calculate head rotation relative to body
+        float relativeYaw = headYaw - bodyYaw;
+
+        // Convert look direction to a normalized vector in the golem's local space
+        // In Minecraft: yaw 0 = south (-Z), 90 = west (-X), 180 = north (+Z), 270 = east (+X)
+        // Pitch: negative = up, positive = down
+        float yawRad = (float) Math.toRadians(-relativeYaw); // Negate for correct rotation direction
+        float pitchRad = (float) Math.toRadians(pitch);
+
+        float cosPitch = (float) Math.cos(pitchRad);
+        float lookX = -cosPitch * (float) Math.sin(yawRad);  // Right is +X
+        float lookY = -(float) Math.sin(pitchRad);           // Up is +Y, down is -Y
+        float lookZ = cosPitch * (float) Math.cos(yawRad);   // Forward is +Z (in local space)
+
+        // Define the 4 eye base directions (normalized diagonal directions)
+        // Each represents the center of a quadrant
+        float sqrt3 = (float) (1.0 / Math.sqrt(3.0));
+
+        // 0°: down+right (right, down, forward)
+        float[] dir0 = {sqrt3, -sqrt3, sqrt3};
+
+        // 90°: up+right (right, up, forward)
+        float[] dir90 = {sqrt3, sqrt3, sqrt3};
+
+        // 180°: up+left (left, up, forward)
+        float[] dir180 = {-sqrt3, sqrt3, sqrt3};
+
+        // 270°: down+left (left, down, forward)
+        float[] dir270 = {-sqrt3, -sqrt3, sqrt3};
+
+        // Calculate dot products to find closest match
+        float dot0 = lookX * dir0[0] + lookY * dir0[1] + lookZ * dir0[2];
+        float dot90 = lookX * dir90[0] + lookY * dir90[1] + lookZ * dir90[2];
+        float dot180 = lookX * dir180[0] + lookY * dir180[1] + lookZ * dir180[2];
+        float dot270 = lookX * dir270[0] + lookY * dir270[1] + lookZ * dir270[2];
+
+        // Find the rotation with maximum dot product (closest direction)
+        float maxDot = dot0;
+        float rotation = 0.0f;
+
+        if (dot90 > maxDot) {
+            maxDot = dot90;
+            rotation = 90.0f;
+        }
+        if (dot180 > maxDot) {
+            maxDot = dot180;
+            rotation = 180.0f;
+        }
+        if (dot270 > maxDot) {
+            rotation = 270.0f;
+        }
+
+        return rotation;
     }
 
     public void render(
@@ -68,7 +142,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
         matrices.push();
         matrices.translate(0.0f, 0.0f, 0.0f);
-        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0f));
+        // Rotate the entire mesh based on body yaw (movement direction)
+        // Additional 180° rotation to face the correct direction
+        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(360.0f - state.bodyYaw));
 
         var layer = GOLD_GOLEM_TRIANGLES_LAYER;
         int overlay = OverlayTexture.DEFAULT_UV;
@@ -76,6 +152,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
         for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
             String meshName = mesh.name();
+
+            // Check if this is an eye mesh
+            boolean isEyeMesh = meshName != null && meshName.toLowerCase().contains("eye");
 
             // Check if this is a wheel mesh
             WheelInfo wheelInfo = parseWheelName(meshName);
@@ -106,8 +185,22 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
                 matrices.pop();
+            } else if (isEyeMesh) {
+                // Eye mesh: apply z-axis rotation based on look direction
+                matrices.push();
+
+                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
+
+                // Calculate and apply eye rotation (90-degree increments)
+                float eyeRotation = calculateEyeRotation(state.yaw, state.bodyYaw, state.pitch);
+                matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(eyeRotation));
+
+                matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
+
+                renderMesh(matrices, queue, layer, mesh, overlay, light);
+                matrices.pop();
             } else {
-                // Non-wheel mesh, render normally
+                // Non-wheel, non-eye mesh: render normally
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
             }
         }
