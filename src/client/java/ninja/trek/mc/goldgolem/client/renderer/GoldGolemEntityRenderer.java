@@ -130,13 +130,13 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
             // Left eye: rotate by -90° (looking left becomes looking forward)
             // Right eye: rotate by +90° (looking right becomes looking forward)
             if (isLeftEye) {
-                yRotation = 90.0f;  // Eye points left
+                yRotation = -90.0f;  // Eye points left
                 // Rotate look vector by -90° around Y: (x, y, z) -> (z, y, -x)
                 adjustedLookX = lookZ;
                 adjustedLookY = lookY;
                 adjustedLookZ = -lookX;
             } else {
-                yRotation = -90.0f;  // Eye points right
+                yRotation = 90.0f;  // Eye points right
                 // Rotate look vector by +90° around Y: (x, y, z) -> (-z, y, x)
                 adjustedLookX = -lookZ;
                 adjustedLookY = lookY;
