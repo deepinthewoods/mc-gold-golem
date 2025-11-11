@@ -43,6 +43,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float rightEyePitch;
         public float leftArmRotation;
         public float rightArmRotation;
+        public net.minecraft.item.ItemStack leftHandItem = net.minecraft.item.ItemStack.EMPTY;
+        public net.minecraft.item.ItemStack rightHandItem = net.minecraft.item.ItemStack.EMPTY;
     }
 
     @Override
@@ -65,6 +67,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.rightEyePitch = entity.getRightEyePitch();
         state.leftArmRotation = entity.getLeftArmRotation();
         state.rightArmRotation = entity.getRightArmRotation();
+        state.leftHandItem = entity.getLeftHandItem();
+        state.rightHandItem = entity.getRightHandItem();
     }
 
     /**
@@ -226,11 +230,11 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 headPivotX = m.pivotX();
                 headPivotY = m.pivotY();
                 headPivotZ = m.pivotZ();
-                System.out.println("Head pivot found: [" + headPivotX + ", " + headPivotY + ", " + headPivotZ + "]");
+                //System.out.println("Head pivot found: [" + headPivotX + ", " + headPivotY + ", " + headPivotZ + "]");
                 break;
             }
         }
-        System.out.println("Using head pivot: [" + headPivotX + ", " + headPivotY + ", " + headPivotZ + "]");
+        //System.out.println("Using head pivot: [" + headPivotX + ", " + headPivotY + ", " + headPivotZ + "]");
 
         for (GoldGolemModelLoader.MeshPart mesh : meshParts) {
             String meshName = mesh.name();
@@ -278,8 +282,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 // Negative X = left side, Positive X = right side
                 boolean isLeftEye = mesh.pivotX() < 0;
 
-                System.out.println((isLeftEye ? "Left" : "Right") + " eye pivot: ["
-                    + mesh.pivotX() + ", " + mesh.pivotY() + ", " + mesh.pivotZ() + "]");
+//                System.out.println((isLeftEye ? "Left" : "Right") + " eye pivot: ["
+//                    + mesh.pivotX() + ", " + mesh.pivotY() + ", " + mesh.pivotZ() + "]");
 
                 // STEP 1: Apply head rotation around head's pivot (this moves the eye with the head)
                 matrices.translate(headPivotX, headPivotY, headPivotZ);
@@ -323,6 +327,19 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
+
+                // TODO: Item rendering - needs implementation for MC 1.21.10
+                // The API has changed significantly:
+                // - ModelTransformationMode is now ItemDisplayContext
+                // - Item rendering now uses a different system with ItemModelManager
+                // For now, just log when hands should have items
+                net.minecraft.item.ItemStack handItem = isLeftArm ? state.leftHandItem : state.rightHandItem;
+                if (!handItem.isEmpty()) {
+                    System.out.println("Should render " + (isLeftArm ? "left" : "right") + " hand item: " + handItem.getItem().toString());
+                    System.out.println("  Arm rotation: " + armRotation);
+                    System.out.println("  Mesh pivot: [" + mesh.pivotX() + ", " + mesh.pivotY() + ", " + mesh.pivotZ() + "]");
+                }
+
                 matrices.pop();
             } else if (isHeadMesh) {
                 // Head mesh: rotate based on look direction

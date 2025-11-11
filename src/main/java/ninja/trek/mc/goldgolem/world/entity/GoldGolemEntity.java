@@ -29,10 +29,20 @@ import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.util.ActionResult;
 import net.minecraft.world.World;
 import ninja.trek.mc.goldgolem.screen.GolemScreens;
+import net.minecraft.entity.data.DataTracker;
+import net.minecraft.entity.data.TrackedData;
+import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 
 public class GoldGolemEntity extends PathAwareEntity {
     public enum BuildMode { PATH, WALL }
     public static final int INVENTORY_SIZE = 27;
+
+    // Data trackers for client-server sync
+    private static final TrackedData<Integer> LEFT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<Integer> RIGHT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<Boolean> LEFT_ARM_HAS_TARGET = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    private static final TrackedData<Boolean> RIGHT_ARM_HAS_TARGET = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    private static final TrackedData<Boolean> BUILDING_PATHS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
@@ -94,7 +104,17 @@ public class GoldGolemEntity extends PathAwareEntity {
     private float rightArmTarget = 0.0f;   // Target rotation for this swing
     private int armSwingTimer = 0;         // Timer counting down from SWING_DURATION_TICKS
 
-    public boolean isBuildingPaths() { return buildingPaths; }
+    // Block placement animation (new system)
+    private int placementTickCounter = 0;  // 0-1 tick counter (places every 2 ticks)
+    private boolean leftHandActive = true; // Which hand places next
+    private Vec3d leftArmTargetBlock = null;  // Block position left arm points at
+    private Vec3d rightArmTargetBlock = null; // Block position right arm points at
+    private int leftHandAnimationTick = -1;   // -1 = idle, 0-3 = animation cycle
+    private int rightHandAnimationTick = -1;  // -1 = idle, 0-3 = animation cycle
+    private BlockPos nextLeftBlock = null;    // Next block for left hand
+    private BlockPos nextRightBlock = null;   // Next block for right hand
+
+    public boolean isBuildingPaths() { return this.dataTracker.get(BUILDING_PATHS); }
     public float getLeftEyeYaw() { return leftEyeYaw; }
     public float getLeftEyePitch() { return leftEyePitch; }
     public float getRightEyeYaw() { return rightEyeYaw; }
@@ -102,6 +122,38 @@ public class GoldGolemEntity extends PathAwareEntity {
     public double getWheelRotation() { return wheelRotation; }
     public float getLeftArmRotation() { return leftArmRotation; }
     public float getRightArmRotation() { return rightArmRotation; }
+    public int getLeftHandAnimationTick() { return this.dataTracker.get(LEFT_HAND_ANIMATION_TICK); }
+    public int getRightHandAnimationTick() { return this.dataTracker.get(RIGHT_HAND_ANIMATION_TICK); }
+    public boolean shouldShowLeftHandItem() {
+        int tick = getLeftHandAnimationTick();
+        return tick >= 0 && tick <= 1;
+    }
+    public boolean shouldShowRightHandItem() {
+        int tick = getRightHandAnimationTick();
+        return tick >= 0 && tick <= 1;
+    }
+    public ItemStack getLeftHandItem() {
+        if (!shouldShowLeftHandItem()) return ItemStack.EMPTY;
+        // Return the first block item from inventory
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.item.BlockItem) {
+                return stack;
+            }
+        }
+        return ItemStack.EMPTY;
+    }
+    public ItemStack getRightHandItem() {
+        if (!shouldShowRightHandItem()) return ItemStack.EMPTY;
+        // Return the first block item from inventory
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.item.BlockItem) {
+                return stack;
+            }
+        }
+        return ItemStack.EMPTY;
+    }
     public BuildMode getBuildMode() { return buildMode; }
     public void setBuildMode(BuildMode mode) { this.buildMode = mode == null ? BuildMode.PATH : mode; }
     public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
@@ -183,6 +235,16 @@ public class GoldGolemEntity extends PathAwareEntity {
         super(type, world);
     }
 
+    @Override
+    protected void initDataTracker(DataTracker.Builder builder) {
+        super.initDataTracker(builder);
+        builder.add(LEFT_HAND_ANIMATION_TICK, -1);
+        builder.add(RIGHT_HAND_ANIMATION_TICK, -1);
+        builder.add(LEFT_ARM_HAS_TARGET, false);
+        builder.add(RIGHT_ARM_HAS_TARGET, false);
+        builder.add(BUILDING_PATHS, false);
+    }
+
     public static DefaultAttributeContainer.Builder createAttributes() {
         return DefaultAttributeContainer.builder()
                 .add(EntityAttributes.MAX_HEALTH, 40.0)
@@ -229,29 +291,47 @@ public class GoldGolemEntity extends PathAwareEntity {
         prevX = this.getX();
         prevZ = this.getZ();
 
-        // Update eye look directions randomly every 5-10 ticks (both client and server)
-        if (eyeUpdateCooldown <= 0) {
-            // Random look direction for left eye (within a reasonable range)
-            leftEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f; // ±60 degrees from center
-            leftEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f; // ±30 degrees from center
+        // Update hand animation ticks (both client and server)
+        // Read from data tracker
+        leftHandAnimationTick = getLeftHandAnimationTick();
+        rightHandAnimationTick = getRightHandAnimationTick();
 
-            // Random look direction for right eye (independent)
-            rightEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f;
-            rightEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f;
-
-            // Set next update time (5-10 ticks)
-            eyeUpdateCooldown = 5 + this.getRandom().nextInt(6);
-        } else {
-            eyeUpdateCooldown--;
+        if (leftHandAnimationTick >= 0) {
+            leftHandAnimationTick++;
+            if (leftHandAnimationTick >= 4) {
+                leftHandAnimationTick = -1; // Reset to idle
+                leftArmTargetBlock = null;
+                this.dataTracker.set(LEFT_ARM_HAS_TARGET, false);
+            }
+            // Update data tracker for sync
+            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, leftHandAnimationTick);
+        }
+        if (rightHandAnimationTick >= 0) {
+            rightHandAnimationTick++;
+            if (rightHandAnimationTick >= 4) {
+                rightHandAnimationTick = -1; // Reset to idle
+                rightArmTargetBlock = null;
+                this.dataTracker.set(RIGHT_ARM_HAS_TARGET, false);
+            }
+            // Update data tracker for sync
+            this.dataTracker.set(RIGHT_HAND_ANIMATION_TICK, rightHandAnimationTick);
         }
 
-        // Update arm swing animation when moving (both client and server)
-        if (distanceTraveled > 0.001) { // Entity is moving
+        // Determine which animation system to use
+        boolean leftAnimating = (leftHandAnimationTick >= 0 && (leftArmTargetBlock != null || this.dataTracker.get(LEFT_ARM_HAS_TARGET)));
+        boolean rightAnimating = (rightHandAnimationTick >= 0 && (rightArmTargetBlock != null || this.dataTracker.get(RIGHT_ARM_HAS_TARGET)));
+        boolean anyAnimating = leftAnimating || rightAnimating;
+
+        // When building and actively placing blocks, use block placement animation
+        // Otherwise use walking animation when moving
+        if (buildingPaths && anyAnimating) {
+            // Block placement animation - update arms/eyes based on targets
+            updateArmAndEyePositions();
+        } else if (distanceTraveled > 0.001) {
+            // Walking animation (whether building or not, if not actively placing)
             if (armSwingTimer <= 0) {
-                // Start a new swing cycle with random targets
                 leftArmTarget = ARM_SWING_MIN_ANGLE + this.getRandom().nextFloat() * (ARM_SWING_MAX_ANGLE - ARM_SWING_MIN_ANGLE);
                 rightArmTarget = ARM_SWING_MIN_ANGLE + this.getRandom().nextFloat() * (ARM_SWING_MAX_ANGLE - ARM_SWING_MIN_ANGLE);
-                // Arms swing in opposite directions
                 if (leftArmRotation >= 0) {
                     leftArmTarget = -leftArmTarget;
                 } else {
@@ -259,24 +339,33 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
                 armSwingTimer = ARM_SWING_DURATION_TICKS;
             }
-
-            // Interpolate toward targets
             float progress = 1.0f - (armSwingTimer / (float) ARM_SWING_DURATION_TICKS);
-            float prevLeftTarget = -leftArmTarget; // Previous target is opposite of current
+            float prevLeftTarget = -leftArmTarget;
             float prevRightTarget = -rightArmTarget;
             leftArmRotation = MathHelper.lerp(progress, prevLeftTarget, leftArmTarget);
             rightArmRotation = MathHelper.lerp(progress, prevRightTarget, rightArmTarget);
-
             armSwingTimer--;
+            // Update eyes randomly when not placing blocks
+            updateRandomEyeMovement();
         } else {
-            // Not moving - gradually return arms to straight down (0 degrees)
+            // Idle - return arms to neutral
             leftArmRotation = MathHelper.lerp(0.1f, leftArmRotation, 0.0f);
             rightArmRotation = MathHelper.lerp(0.1f, rightArmRotation, 0.0f);
             armSwingTimer = 0;
+            // Update eyes randomly when idle
+            updateRandomEyeMovement();
+        }
+
+        String side = this.getEntityWorld().isClient() ? "CLIENT" : "SERVER";
+        buildingPaths = isBuildingPaths(); // Read from data tracker
+        if (buildingPaths && anyAnimating) {
+            System.out.println("[" + side + "] Building - Left anim: " + leftHandAnimationTick + ", Right anim: " + rightHandAnimationTick);
         }
 
         if (this.getEntityWorld().isClient()) return;
         if (buildingPaths) {
+            // Increment placement tick counter (2-tick cycle)
+            placementTickCounter = (placementTickCounter + 1) % 2;
             // Look at owner while building
             PlayerEntity owner = getOwnerPlayer();
             if (owner != null) {
@@ -336,12 +425,9 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
             if (currentLine != null) {
-                // Debug: log progress periodically while building
-                // removed periodic build debug logging
                 // Placement paced by golem progress along the line
-                if (placeCooldown > 0) {
-                    placeCooldown--;
-                } else {
+                // Place 1 block every 2 ticks, alternating hands
+                if (placementTickCounter == 0) {
                     int endIdxPl = Math.max(0, currentLine.cells.size() - 1);
                     int progressCell = currentLine.progressCellIndex(this.getX(), this.getZ());
                     Vec3d endPtPl = currentLine.pointAtIndex(endIdxPl);
@@ -349,9 +435,35 @@ public class GoldGolemEntity extends PathAwareEntity {
                     double ezPl = this.getZ() - endPtPl.z;
                     boolean nearEndPl = (exPl * exPl + ezPl * ezPl) <= (1.25 * 1.25);
                     int boundCell = (nearEndPl || progressCell >= (endIdxPl - 1)) ? endIdxPl : progressCell;
-                    int maxOps = nearEndPl ? 48 : 12; // place more aggressively near the end
-                    currentLine.placePendingUpTo(this, boundCell, maxOps);
-                    placeCooldown = 1; // throttle slightly
+
+                    // Place exactly 1 block and get its position
+                    BlockPos placedBlock = currentLine.placeNextBlock(this, boundCell);
+
+                    if (placedBlock != null) {
+                        // Start hand animation for the active hand
+                        Vec3d blockCenter = new Vec3d(placedBlock.getX() + 0.5, placedBlock.getY() + 0.5, placedBlock.getZ() + 0.5);
+
+                        if (leftHandActive) {
+                            System.out.println("[SERVER] Placing block with LEFT hand at " + placedBlock + ", starting animation");
+                            leftArmTargetBlock = blockCenter;
+                            leftHandAnimationTick = 0;
+                            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, 0);
+                            this.dataTracker.set(LEFT_ARM_HAS_TARGET, true);
+                            nextLeftBlock = currentLine.getNextUnplacedBlock(boundCell);
+                        } else {
+                            System.out.println("[SERVER] Placing block with RIGHT hand at " + placedBlock + ", starting animation");
+                            rightArmTargetBlock = blockCenter;
+                            rightHandAnimationTick = 0;
+                            this.dataTracker.set(RIGHT_HAND_ANIMATION_TICK, 0);
+                            this.dataTracker.set(RIGHT_ARM_HAS_TARGET, true);
+                            nextRightBlock = currentLine.getNextUnplacedBlock(boundCell);
+                        }
+
+                        // Alternate hands
+                        leftHandActive = !leftHandActive;
+                    } else {
+                        System.out.println("[SERVER] Placement tick but no block placed (placedBlock is null)");
+                    }
                 }
 
                 // Always path toward the end of the current segment to ensure we reach it
@@ -401,6 +513,110 @@ public class GoldGolemEntity extends PathAwareEntity {
                     }
                 }
             }
+        }
+    }
+
+    private void updateRandomEyeMovement() {
+        // Update eye look directions randomly every 5-10 ticks
+        if (eyeUpdateCooldown <= 0) {
+            // Random look direction for left eye (within a reasonable range)
+            leftEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f; // ±60 degrees from center
+            leftEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f; // ±30 degrees from center
+
+            // Random look direction for right eye (independent)
+            rightEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f;
+            rightEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f;
+
+            // Set next update time (5-10 ticks)
+            eyeUpdateCooldown = 5 + this.getRandom().nextInt(6);
+        } else {
+            eyeUpdateCooldown--;
+        }
+    }
+
+    private void updateArmAndEyePositions() {
+        // Update left arm and eye
+        if (leftArmTargetBlock != null) {
+            // SERVER: Has exact block position, calculate precise angle
+            Vec3d armPos = new Vec3d(this.getX() - 0.3, this.getY() + 1.0, this.getZ()); // Left arm position (approx)
+            Vec3d targetPos = leftArmTargetBlock;
+
+            // For ticks 2-3, adjust target based on animation state
+            if (leftHandAnimationTick == 3 && nextLeftBlock != null) {
+                targetPos = new Vec3d(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5);
+            }
+
+            // Calculate direction to target
+            double dx = targetPos.x - armPos.x;
+            double dy = targetPos.y - armPos.y;
+            double dz = targetPos.z - armPos.z;
+            double horizontalDist = Math.sqrt(dx * dx + dz * dz);
+
+            // Calculate pitch (vertical angle)
+            float pitch = (float) Math.toDegrees(Math.atan2(dy, horizontalDist));
+            leftArmRotation = -pitch; // Negative because positive rotation is forward/down
+
+            // Update left eye to look at same target (relative to head)
+            double eyeDx = targetPos.x - this.getX();
+            double eyeDy = targetPos.y - (this.getY() + 1.5); // Eye height approx
+            double eyeDz = targetPos.z - this.getZ();
+            double eyeHorizontalDist = Math.sqrt(eyeDx * eyeDx + eyeDz * eyeDz);
+
+            leftEyeYaw = (float) Math.toDegrees(Math.atan2(-eyeDx, eyeDz)); // Relative to forward
+            leftEyePitch = (float) Math.toDegrees(Math.atan2(-eyeDy, eyeHorizontalDist));
+        } else if (leftHandAnimationTick >= 0) {
+            // CLIENT: Animation is active but no block position - use default "placing" pose
+            // Point arm forward and down as if placing a block in front
+            leftArmRotation = 45.0f; // 45 degrees forward/down
+            // Eyes look forward and slightly down
+            leftEyeYaw = 0.0f;
+            leftEyePitch = 15.0f; // Looking slightly down
+        } else {
+            // Idle - neutral
+            leftEyeYaw = 0.0f;
+            leftEyePitch = 0.0f;
+        }
+
+        // Update right arm and eye
+        if (rightArmTargetBlock != null) {
+            // SERVER: Has exact block position, calculate precise angle
+            Vec3d armPos = new Vec3d(this.getX() + 0.3, this.getY() + 1.0, this.getZ()); // Right arm position (approx)
+            Vec3d targetPos = rightArmTargetBlock;
+
+            // For ticks 2-3, adjust target based on animation state
+            if (rightHandAnimationTick == 3 && nextRightBlock != null) {
+                targetPos = new Vec3d(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5);
+            }
+
+            // Calculate direction to target
+            double dx = targetPos.x - armPos.x;
+            double dy = targetPos.y - armPos.y;
+            double dz = targetPos.z - armPos.z;
+            double horizontalDist = Math.sqrt(dx * dx + dz * dz);
+
+            // Calculate pitch (vertical angle)
+            float pitch = (float) Math.toDegrees(Math.atan2(dy, horizontalDist));
+            rightArmRotation = -pitch;
+
+            // Update right eye to look at same target
+            double eyeDx = targetPos.x - this.getX();
+            double eyeDy = targetPos.y - (this.getY() + 1.5);
+            double eyeDz = targetPos.z - this.getZ();
+            double eyeHorizontalDist = Math.sqrt(eyeDx * eyeDx + eyeDz * eyeDz);
+
+            rightEyeYaw = (float) Math.toDegrees(Math.atan2(-eyeDx, eyeDz));
+            rightEyePitch = (float) Math.toDegrees(Math.atan2(-eyeDy, eyeHorizontalDist));
+        } else if (rightHandAnimationTick >= 0) {
+            // CLIENT: Animation is active but no block position - use default "placing" pose
+            // Point arm forward and down as if placing a block in front
+            rightArmRotation = 45.0f; // 45 degrees forward/down
+            // Eyes look forward and slightly down
+            rightEyeYaw = 0.0f;
+            rightEyePitch = 15.0f; // Looking slightly down
+        } else {
+            // Idle - neutral
+            rightEyeYaw = 0.0f;
+            rightEyePitch = 0.0f;
         }
     }
 
@@ -469,7 +685,12 @@ public class GoldGolemEntity extends PathAwareEntity {
             }
         }
         if (currentModulePlacement != null) {
-            if (placeCooldown > 0) placeCooldown--; else { currentModulePlacement.placeSome(this, 48); placeCooldown = 1; }
+            // Place 1 block every 2 ticks, alternating hands (same as path mode)
+            if (placementTickCounter == 0) {
+                // For wall mode, we'll place blocks but without specific position tracking for now
+                // This maintains the alternating hand animation
+                currentModulePlacement.placeSome(this, 1); // Place only 1 block
+            }
             Vec3d end = currentModulePlacement.end();
             double ty = computeGroundTargetY(end);
             this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
@@ -721,6 +942,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             }
             if (!this.getEntityWorld().isClient()) {
                 this.buildingPaths = true;
+                this.dataTracker.set(BUILDING_PATHS, true);
                 if (!player.isCreative()) stack.decrement(1);
                 spawnHearts();
                 // Initialize anchor at golem feet for preview when starting
@@ -758,6 +980,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (attacker instanceof PlayerEntity p && isOwner(p)) {
             // Stop building on owner hit; show angry particles; ignore damage
             this.buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
             this.trackStart = null;
             this.pendingLines.clear();
             this.currentLine = null;
@@ -1382,6 +1605,96 @@ public class GoldGolemEntity extends PathAwareEntity {
                 bit = processed.nextClearBit(bit + 1);
             }
             scanBit = Math.min(Math.max(0, bit), totalBits);
+        }
+
+        BlockPos placeNextBlock(GoldGolemEntity golem, int boundCell) {
+            if (processed == null || totalBits == 0) return null;
+            int boundExclusive = Math.min(totalBits, Math.max(0, (boundCell + 1) * widthSnapshot));
+            // Compute perpendicular
+            double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+            double px = len > 1e-4 ? (-dirZ / len) : 0.0;
+            double pz = len > 1e-4 ? ( dirX / len) : 0.0;
+
+            int bit = processed.nextClearBit(scanBit);
+            if (bit >= 0 && bit < boundExclusive) {
+                int cellIndex = bit / widthSnapshot;
+                int jIndex = bit % widthSnapshot;
+                int j = jIndex - half;
+                BlockPos cell = cells.get(cellIndex);
+                double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
+                double y = MathHelper.lerp(t, a.y, b.y);
+                double x = cell.getX() + 0.5;
+                double z = cell.getZ() + 0.5;
+                boolean xMajor = Math.abs(dirX) >= Math.abs(dirZ);
+                net.minecraft.util.math.Direction travelDir = xMajor
+                        ? (dirX >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST)
+                        : (dirZ >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH);
+
+                // Find the actual block position where we'll place
+                int bx = MathHelper.floor(x + px * j);
+                int bz = MathHelper.floor(z + pz * j);
+                int y0 = MathHelper.floor(y);
+
+                // Find ground Y
+                var world = golem.getEntityWorld();
+                Integer groundY = null;
+                for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
+                    BlockPos test = new BlockPos(bx, yy, bz);
+                    var st = world.getBlockState(test);
+                    if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
+                }
+
+                BlockPos result = null;
+                if (groundY != null) {
+                    // Find the actual placement position
+                    for (int dy = -1; dy <= 1; dy++) {
+                        BlockPos rp = new BlockPos(bx, groundY + dy, bz);
+                        var rs = world.getBlockState(rp);
+                        if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
+                        BlockPos ap = rp.up();
+                        var as = world.getBlockState(ap);
+                        if (as.isFullCube(world, ap)) continue;
+                        result = rp;
+                        break;
+                    }
+                }
+
+                golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
+                processed.set(bit);
+                scanBit = Math.min(Math.max(0, bit + 1), totalBits);
+
+                return result != null ? result : new BlockPos(bx, groundY != null ? groundY : y0, bz);
+            }
+            return null;
+        }
+
+        BlockPos getNextUnplacedBlock(int boundCell) {
+            if (processed == null || totalBits == 0) return null;
+            int boundExclusive = Math.min(totalBits, Math.max(0, (boundCell + 1) * widthSnapshot));
+
+            // Find the next unplaced block after scanBit
+            int bit = processed.nextClearBit(scanBit);
+            if (bit >= 0 && bit < boundExclusive) {
+                int cellIndex = bit / widthSnapshot;
+                int jIndex = bit % widthSnapshot;
+                int j = jIndex - half;
+                BlockPos cell = cells.get(cellIndex);
+                double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
+                double y = MathHelper.lerp(t, a.y, b.y);
+
+                double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
+                double px = len > 1e-4 ? (-dirZ / len) : 0.0;
+                double pz = len > 1e-4 ? ( dirX / len) : 0.0;
+                double x = cell.getX() + 0.5;
+                double z = cell.getZ() + 0.5;
+
+                int bx = MathHelper.floor(x + px * j);
+                int bz = MathHelper.floor(z + pz * j);
+                int by = MathHelper.floor(y);
+
+                return new BlockPos(bx, by, bz);
+            }
+            return null;
         }
         int suggestFollowIndex(double gx, double gz, int lookAhead) {
             int prog = progressCellIndex(gx, gz);

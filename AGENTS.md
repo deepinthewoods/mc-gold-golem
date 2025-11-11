@@ -24,6 +24,7 @@ Always run gradlew build via cmd, and use search to look up api methods.
 - Names: `UpperCamelCase` classes, `lowerCamelCase` methods/fields, `UPPER_SNAKE_CASE` constants.
 - Packages: `ninja.trek.mc.goldgolem...` for sources; place Mixins under `mixin` packages and register in `gold-golem.mixins.json` or `gold-golem.client.mixins.json`.
 - Resources: Keep IDs and paths lowercase with dashes (e.g., `assets/gold-golem/...`).
+Long-running tooling (tests, docker compose, migrations, etc.) must always be invoked with sensible timeouts or in non-interactive batch mode. Never leave a shell command waiting indefinitely—prefer explicit timeouts, scripted runs, or log polling after the command exits.
 
 ## Testing Guidelines
 - Framework: JUnit 5 recommended (none present yet).
