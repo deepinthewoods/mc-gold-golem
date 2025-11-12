@@ -22,7 +22,9 @@
       "WebFetch(domain:wiki.fabricmc.net)",
       "WebFetch(domain:maven.fabricmc.net)",
       "WebFetch(domain:docs.neoforged.net)",
-      "WebFetch(domain:www.bokmcdok.com)"
+      "WebFetch(domain:www.bokmcdok.com)",
+      "Bash(find:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

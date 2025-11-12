@@ -33,6 +33,8 @@ import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 
+import java.util.Optional;
+
 public class GoldGolemEntity extends PathAwareEntity {
     public enum BuildMode { PATH, WALL }
     public static final int INVENTORY_SIZE = 27;
@@ -42,6 +44,10 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final TrackedData<Integer> RIGHT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
     private static final TrackedData<Boolean> LEFT_ARM_HAS_TARGET = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
     private static final TrackedData<Boolean> RIGHT_ARM_HAS_TARGET = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    private static final TrackedData<Optional<BlockPos>> LEFT_HAND_TARGET_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
+    private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_TARGET_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
+    private static final TrackedData<Optional<BlockPos>> LEFT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
+    private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
     private static final TrackedData<Boolean> BUILDING_PATHS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
@@ -113,6 +119,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int rightHandAnimationTick = -1;  // -1 = idle, 0-3 = animation cycle
     private BlockPos nextLeftBlock = null;    // Next block for left hand
     private BlockPos nextRightBlock = null;   // Next block for right hand
+    private boolean leftHandJustActivated = false;
+    private boolean rightHandJustActivated = false;
 
     public boolean isBuildingPaths() { return this.dataTracker.get(BUILDING_PATHS); }
     public float getLeftEyeYaw() { return leftEyeYaw; }
@@ -242,6 +250,10 @@ public class GoldGolemEntity extends PathAwareEntity {
         builder.add(RIGHT_HAND_ANIMATION_TICK, -1);
         builder.add(LEFT_ARM_HAS_TARGET, false);
         builder.add(RIGHT_ARM_HAS_TARGET, false);
+        builder.add(LEFT_HAND_TARGET_POS, Optional.empty());
+        builder.add(RIGHT_HAND_TARGET_POS, Optional.empty());
+        builder.add(LEFT_HAND_NEXT_POS, Optional.empty());
+        builder.add(RIGHT_HAND_NEXT_POS, Optional.empty());
         builder.add(BUILDING_PATHS, false);
     }
 
@@ -296,25 +308,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         leftHandAnimationTick = getLeftHandAnimationTick();
         rightHandAnimationTick = getRightHandAnimationTick();
 
-        if (leftHandAnimationTick >= 0) {
-            leftHandAnimationTick++;
-            if (leftHandAnimationTick >= 4) {
-                leftHandAnimationTick = -1; // Reset to idle
-                leftArmTargetBlock = null;
-                this.dataTracker.set(LEFT_ARM_HAS_TARGET, false);
-            }
-            // Update data tracker for sync
-            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, leftHandAnimationTick);
-        }
-        if (rightHandAnimationTick >= 0) {
-            rightHandAnimationTick++;
-            if (rightHandAnimationTick >= 4) {
-                rightHandAnimationTick = -1; // Reset to idle
-                rightArmTargetBlock = null;
-                this.dataTracker.set(RIGHT_ARM_HAS_TARGET, false);
-            }
-            // Update data tracker for sync
-            this.dataTracker.set(RIGHT_HAND_ANIMATION_TICK, rightHandAnimationTick);
+        if (this.getEntityWorld().isClient()) {
+            updateClientHandTargetsFromTracker();
         }
 
         // Determine which animation system to use
@@ -440,23 +435,13 @@ public class GoldGolemEntity extends PathAwareEntity {
                     BlockPos placedBlock = currentLine.placeNextBlock(this, boundCell);
 
                     if (placedBlock != null) {
-                        // Start hand animation for the active hand
-                        Vec3d blockCenter = new Vec3d(placedBlock.getX() + 0.5, placedBlock.getY() + 0.5, placedBlock.getZ() + 0.5);
-
+                        BlockPos previewBlock = currentLine.getNextUnplacedBlock(boundCell);
                         if (leftHandActive) {
                             System.out.println("[SERVER] Placing block with LEFT hand at " + placedBlock + ", starting animation");
-                            leftArmTargetBlock = blockCenter;
-                            leftHandAnimationTick = 0;
-                            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, 0);
-                            this.dataTracker.set(LEFT_ARM_HAS_TARGET, true);
-                            nextLeftBlock = currentLine.getNextUnplacedBlock(boundCell);
+                            beginHandAnimation(true, placedBlock, previewBlock);
                         } else {
                             System.out.println("[SERVER] Placing block with RIGHT hand at " + placedBlock + ", starting animation");
-                            rightArmTargetBlock = blockCenter;
-                            rightHandAnimationTick = 0;
-                            this.dataTracker.set(RIGHT_HAND_ANIMATION_TICK, 0);
-                            this.dataTracker.set(RIGHT_ARM_HAS_TARGET, true);
-                            nextRightBlock = currentLine.getNextUnplacedBlock(boundCell);
+                            beginHandAnimation(false, placedBlock, previewBlock);
                         }
 
                         // Alternate hands
@@ -514,6 +499,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
         }
+
+        advanceHandAnimationTicks();
     }
 
     private void updateRandomEyeMovement() {
@@ -617,6 +604,106 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Idle - neutral
             rightEyeYaw = 0.0f;
             rightEyePitch = 0.0f;
+        }
+    }
+
+    private static Vec3d blockCenter(BlockPos pos) {
+        return pos == null ? null : new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+    }
+
+    private void updateClientHandTargetsFromTracker() {
+        if (!this.getEntityWorld().isClient()) return;
+
+        if (this.dataTracker.get(LEFT_ARM_HAS_TARGET)) {
+            Optional<BlockPos> current = this.dataTracker.get(LEFT_HAND_TARGET_POS);
+            leftArmTargetBlock = current.map(GoldGolemEntity::blockCenter).orElse(null);
+            nextLeftBlock = this.dataTracker.get(LEFT_HAND_NEXT_POS).orElse(null);
+        } else {
+            leftArmTargetBlock = null;
+            nextLeftBlock = null;
+        }
+
+        if (this.dataTracker.get(RIGHT_ARM_HAS_TARGET)) {
+            Optional<BlockPos> current = this.dataTracker.get(RIGHT_HAND_TARGET_POS);
+            rightArmTargetBlock = current.map(GoldGolemEntity::blockCenter).orElse(null);
+            nextRightBlock = this.dataTracker.get(RIGHT_HAND_NEXT_POS).orElse(null);
+        } else {
+            rightArmTargetBlock = null;
+            nextRightBlock = null;
+        }
+    }
+
+    private void beginHandAnimation(boolean isLeft, BlockPos placedBlock, BlockPos previewBlock) {
+        if (placedBlock == null) return;
+        Vec3d center = blockCenter(placedBlock);
+
+        if (isLeft) {
+            leftArmTargetBlock = center;
+            nextLeftBlock = previewBlock;
+            leftHandAnimationTick = 0;
+            leftHandJustActivated = true;
+        } else {
+            rightArmTargetBlock = center;
+            nextRightBlock = previewBlock;
+            rightHandAnimationTick = 0;
+            rightHandJustActivated = true;
+        }
+
+        this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, 0);
+        this.dataTracker.set(isLeft ? LEFT_ARM_HAS_TARGET : RIGHT_ARM_HAS_TARGET, true);
+        this.dataTracker.set(isLeft ? LEFT_HAND_TARGET_POS : RIGHT_HAND_TARGET_POS, Optional.ofNullable(placedBlock));
+        this.dataTracker.set(isLeft ? LEFT_HAND_NEXT_POS : RIGHT_HAND_NEXT_POS, Optional.ofNullable(previewBlock));
+    }
+
+    private void clearHandAnimation(boolean isLeft) {
+        if (isLeft) {
+            leftArmTargetBlock = null;
+            nextLeftBlock = null;
+            leftHandAnimationTick = -1;
+            leftHandJustActivated = false;
+        } else {
+            rightArmTargetBlock = null;
+            nextRightBlock = null;
+            rightHandAnimationTick = -1;
+            rightHandJustActivated = false;
+        }
+
+        this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, -1);
+        this.dataTracker.set(isLeft ? LEFT_ARM_HAS_TARGET : RIGHT_ARM_HAS_TARGET, false);
+        this.dataTracker.set(isLeft ? LEFT_HAND_TARGET_POS : RIGHT_HAND_TARGET_POS, Optional.empty());
+        this.dataTracker.set(isLeft ? LEFT_HAND_NEXT_POS : RIGHT_HAND_NEXT_POS, Optional.empty());
+    }
+
+    private void advanceHandAnimationTicks() {
+        if (this.getEntityWorld().isClient()) return;
+        advanceHandAnimationTick(true);
+        advanceHandAnimationTick(false);
+    }
+
+    private void advanceHandAnimationTick(boolean isLeft) {
+        int tick = isLeft ? leftHandAnimationTick : rightHandAnimationTick;
+        if (tick < 0) return;
+
+        boolean justActivated = isLeft ? leftHandJustActivated : rightHandJustActivated;
+        if (justActivated) {
+            if (isLeft) {
+                leftHandJustActivated = false;
+            } else {
+                rightHandJustActivated = false;
+            }
+            return;
+        }
+
+        int next = tick + 1;
+        if (next >= 4) {
+            clearHandAnimation(isLeft);
+        } else {
+            this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, next);
+            if (isLeft) {
+                leftHandAnimationTick = next;
+            } else {
+                rightHandAnimationTick = next;
+            }
         }
     }
 
