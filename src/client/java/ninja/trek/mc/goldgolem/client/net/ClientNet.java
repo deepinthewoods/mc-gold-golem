@@ -8,6 +8,9 @@ import ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload;
 import ninja.trek.mc.goldgolem.net.UniqueBlocksS2CPayload;
 import ninja.trek.mc.goldgolem.net.WallBlockGroupsS2CPayload;
 import ninja.trek.mc.goldgolem.net.WallGroupsStateS2CPayload;
+import ninja.trek.mc.goldgolem.net.TowerBlockCountsS2CPayload;
+import ninja.trek.mc.goldgolem.net.TowerBlockGroupsS2CPayload;
+import ninja.trek.mc.goldgolem.net.TowerGroupsStateS2CPayload;
 
 public final class ClientNet {
     private ClientNet() {}
@@ -52,6 +55,32 @@ public final class ClientNet {
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.setWallGroupsState(payload.windows(), payload.flatSlots());
+                }
+            });
+        });
+
+        // Tower mode receivers
+        ClientPlayNetworking.registerGlobalReceiver(TowerBlockCountsS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setTowerBlockCounts(payload.blockIds(), payload.counts());
+                }
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(TowerBlockGroupsS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setTowerBlockGroups(payload.groups());
+                }
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(TowerGroupsStateS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setTowerGroupsState(payload.windows(), payload.flatSlots());
                 }
             });
         });

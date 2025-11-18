@@ -44,6 +44,19 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private int draggingStartY = 0;
     private boolean draggingFromIcon = false;
     private final java.util.List<IconHit> wallIconHits = new java.util.ArrayList<>();
+
+    // Tower mode state
+    private java.util.List<String> towerUniqueBlocks = java.util.Collections.emptyList();
+    private java.util.Map<String, Integer> towerBlockCounts = new java.util.HashMap<>();
+    private java.util.List<Integer> towerBlockGroups = java.util.Collections.emptyList();
+    private java.util.List<Integer> towerGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<String> towerGroupFlatSlots = java.util.Collections.emptyList();
+    private int towerScroll = 0;
+    private final java.util.List<WindowSlider> towerRowSliders = new java.util.ArrayList<>();
+    private final int[] towerSliderToGroup = new int[6];
+    private final java.util.List<IconHit> towerIconHits = new java.util.ArrayList<>();
+    private String towerDraggingBlockId = null;
+    private String towerPendingAssignBlockId = null;
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
         IconHit(String blockId, int group, int x, int y, int w, int h) { this.blockId = blockId; this.group = group; this.x = x; this.y = y; this.w = w; this.h = h; }
@@ -134,6 +147,25 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         syncWallSliders();
     }
 
+    // Tower mode network sync methods
+    public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts) {
+        this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+        this.towerBlockCounts.clear();
+        if (ids != null && counts != null) {
+            for (int i = 0; i < Math.min(ids.size(), counts.size()); i++) {
+                this.towerBlockCounts.put(ids.get(i), counts.get(i));
+            }
+        }
+    }
+    public void setTowerBlockGroups(java.util.List<Integer> groups) {
+        this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+    }
+    public void setTowerGroupsState(java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+        this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+        syncTowerSliders();
+    }
+
     private void scrollWall(int delta) {
         int rows = getVisibleGroups().size();
         int maxScroll = Math.max(0, rows - 6);
@@ -175,6 +207,67 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 s.syncTo(0, G, w);
             }
         }
+    }
+
+    // Tower mode helper methods
+    private void scrollTower(int delta) {
+        int rows = getTowerVisibleGroups().size();
+        int maxScroll = Math.max(0, rows - 6);
+        int ns = Math.max(0, Math.min(maxScroll, towerScroll + delta));
+        if (ns != towerScroll) {
+            towerScroll = ns;
+            syncTowerSliders();
+        }
+    }
+
+    private int effectiveTowerGroupG(int group) {
+        if (towerGroupFlatSlots == null) return 0;
+        int start = group * 9;
+        int end = Math.min(start + 9, towerGroupFlatSlots.size());
+        int G = 0;
+        for (int i = end - 1; i >= start; i--) {
+            String s = towerGroupFlatSlots.get(i);
+            if (s != null && !s.isEmpty()) { G = (i - start) + 1; break; }
+        }
+        if (G == 0) G = 9;
+        return G;
+    }
+
+    private void syncTowerSliders() {
+        if (this.handler.isSliderEnabled()) return;
+        java.util.List<Integer> vis = getTowerVisibleGroups();
+        int rows = vis.size();
+        for (int i = 0; i < 6; i++) {
+            int idx = i + towerScroll;
+            int group = (idx < rows) ? vis.get(idx) : -1;
+            towerSliderToGroup[i] = group;
+            WindowSlider s = i < towerRowSliders.size() ? towerRowSliders.get(i) : null;
+            if (s == null) continue;
+            boolean visible = idx < rows;
+            s.visible = visible;
+            if (visible) {
+                int G = effectiveTowerGroupG(group);
+                int w = (group >= 0 && group < towerGroupWindows.size()) ? towerGroupWindows.get(group) : 0;
+                s.syncTo(0, G, w);
+            }
+        }
+    }
+
+    private int indexOfTowerBlockId(String id) {
+        if (towerUniqueBlocks == null) return -1;
+        for (int i = 0; i < towerUniqueBlocks.size(); i++) {
+            if (towerUniqueBlocks.get(i).equals(id)) return i;
+        }
+        return -1;
+    }
+
+    private java.util.List<Integer> getTowerVisibleGroups() {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        if (towerGroupWindows == null) return out;
+        int total = towerGroupWindows.size();
+        if (total <= 0) return out;
+        for (int g = 0; g < total; g++) out.add(g);
+        return out;
     }
 
     private int indexOfBlockId(String id) {
