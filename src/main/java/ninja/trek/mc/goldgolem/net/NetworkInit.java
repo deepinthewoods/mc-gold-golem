@@ -28,6 +28,10 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetTowerGroupSlotC2SPayload.ID, SetTowerGroupSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetTowerGroupWindowC2SPayload.ID, SetTowerGroupWindowC2SPayload.CODEC);
 
+        // Excavation Mode payloads
+        PayloadTypeRegistry.playC2S().register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
+
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -138,6 +142,28 @@ public class NetworkInit {
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setTowerGroupWindow(payload.group(), payload.window());
                     sendTowerUiState(player, golem);
+                }
+            });
+        });
+
+        // Excavation Mode UI receivers
+        ServerPlayNetworking.registerGlobalReceiver(SetExcavationHeightC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setExcavationSliders(payload.height(), golem.getExcavationDepth());
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetExcavationDepthC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setExcavationSliders(golem.getExcavationHeight(), payload.depth());
                 }
             });
         });
