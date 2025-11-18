@@ -1,5 +1,6 @@
 package ninja.trek.mc.goldgolem.world.entity;
 
+import net.minecraft.block.BlockState;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
@@ -32,7 +33,6 @@ import ninja.trek.mc.goldgolem.screen.GolemScreens;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
-import net.minecraft.block.BlockState;
 
 import java.util.Optional;
 
