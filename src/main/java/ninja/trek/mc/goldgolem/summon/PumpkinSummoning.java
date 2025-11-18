@@ -32,14 +32,32 @@ public class PumpkinSummoning {
 
         if (world.isClient()) return ActionResult.SUCCESS;
 
+        // Check for Mining Mode: exactly one chest on one horizontal side
+        net.minecraft.util.math.Direction chestDirection = null;
+        int chestCount = 0;
+        for (var dir : new net.minecraft.util.math.Direction[]{
+                net.minecraft.util.math.Direction.NORTH,
+                net.minecraft.util.math.Direction.SOUTH,
+                net.minecraft.util.math.Direction.EAST,
+                net.minecraft.util.math.Direction.WEST
+        }) {
+            var np = below.offset(dir);
+            var st = world.getBlockState(np);
+            if (st.isOf(Blocks.CHEST)) {
+                chestCount++;
+                chestDirection = dir;
+            }
+        }
+        boolean miningMode = (chestCount == 1);
+
         // Check for Tower Mode: gold block below the pumpkin's gold block
         BlockPos belowBelow = below.down();
-        boolean towerMode = world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
+        boolean towerMode = !miningMode && world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
 
         // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
-        // Tower mode takes precedence over wall mode
+        // Tower and mining modes take precedence over wall mode
         boolean wallMode = false;
-        if (!towerMode) {
+        if (!towerMode && !miningMode) {
             for (var dir : new net.minecraft.util.math.Direction[]{
                     net.minecraft.util.math.Direction.NORTH,
                     net.minecraft.util.math.Direction.SOUTH,
@@ -53,7 +71,23 @@ public class PumpkinSummoning {
             }
         }
 
-        if (towerMode) {
+        if (miningMode) {
+            // Mining Mode: chest on one side, mine in opposite direction
+            BlockPos chestPos = below.offset(chestDirection);
+            net.minecraft.util.math.Direction miningDir = chestDirection.getOpposite();
+
+            // Spawn golem with mining mode
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+            golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(GoldGolemEntity.BuildMode.MINING);
+            golem.setMiningConfig(chestPos, miningDir, below);
+
+            world.breakBlock(below, false, player);
+            ((ServerWorld) world).spawnEntity(golem);
+            if (!player.isCreative()) stack.decrement(1);
+            return ActionResult.SUCCESS;
+        } else if (towerMode) {
             // Tower Mode: Find bottom gold block and count total height
             BlockPos bottomGold = belowBelow;
             // Find the actual bottom gold block by going down until we hit a non-gold block
