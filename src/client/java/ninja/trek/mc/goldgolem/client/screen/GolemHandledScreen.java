@@ -57,6 +57,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private final java.util.List<IconHit> towerIconHits = new java.util.ArrayList<>();
     private String towerDraggingBlockId = null;
     private String towerPendingAssignBlockId = null;
+
+    // Excavation mode state
+    private int excavationHeight = 3; // 1-5
+    private int excavationDepth = 16; // 1-64
+    private ExcavationHeightSlider excavationHeightSlider;
+    private ExcavationDepthSlider excavationDepthSlider;
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
         IconHit(String blockId, int group, int x, int y, int w, int h) { this.blockId = blockId; this.group = group; this.x = x; this.y = y; this.w = w; this.h = h; }
@@ -129,6 +135,56 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
+    private class ExcavationHeightSlider extends SliderWidget {
+        public ExcavationHeightSlider(int x, int y, int width, int height, int initialHeight) {
+            super(x, y, width, height, Text.literal("Height"), toValueInit(initialHeight));
+        }
+        private static double toValueInit(int h) { return (h - 1) / 4.0; } // 1-5 range
+        private static int toHeight(double v) { return Math.max(1, Math.min(5, 1 + (int)Math.round(v * 4.0))); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Height: " + toHeight(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int h = toHeight(this.value);
+            if (h != excavationHeight) {
+                excavationHeight = h;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetExcavationHeightC2SPayload(getEntityId(), excavationHeight));
+                updateMessage();
+            }
+        }
+        public void syncTo(int h) {
+            this.value = toValueInit(h);
+            updateMessage();
+        }
+    }
+
+    private class ExcavationDepthSlider extends SliderWidget {
+        public ExcavationDepthSlider(int x, int y, int width, int height, int initialDepth) {
+            super(x, y, width, height, Text.literal("Depth"), toValueInit(initialDepth));
+        }
+        private static double toValueInit(int d) { return (d - 1) / 63.0; } // 1-64 range
+        private static int toDepth(double v) { return Math.max(1, Math.min(64, 1 + (int)Math.round(v * 63.0))); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Depth: " + toDepth(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int d = toDepth(this.value);
+            if (d != excavationDepth) {
+                excavationDepth = d;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetExcavationDepthC2SPayload(getEntityId(), excavationDepth));
+                updateMessage();
+            }
+        }
+        public void syncTo(int d) {
+            this.value = toValueInit(d);
+            updateMessage();
+        }
+    }
+
     public GolemHandledScreen(GolemInventoryScreenHandler handler, PlayerInventory inventory, Text title) {
         super(handler, inventory, title);
         this.backgroundWidth = 176; // vanilla chest width
@@ -164,6 +220,18 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
         syncTowerSliders();
+    }
+
+    // Excavation mode network sync method
+    public void setExcavationValues(int height, int depth) {
+        this.excavationHeight = height;
+        this.excavationDepth = depth;
+        if (this.excavationHeightSlider != null) {
+            this.excavationHeightSlider.syncTo(height);
+        }
+        if (this.excavationDepthSlider != null) {
+            this.excavationDepthSlider.syncTo(depth);
+        }
     }
 
     private void scrollWall(int delta) {
@@ -276,6 +344,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     private boolean isWallMode() {
         return !this.handler.isSliderEnabled() && towerUniqueBlocks.isEmpty() && !wallUniqueBlocks.isEmpty();
+    }
+
+    private boolean isExcavationMode() {
+        // slider value of 2 indicates excavation mode
+        return this.handler.getSliderMode() == 2;
+    }
+
+    private boolean isMiningMode() {
+        // slider value of 3 indicates mining mode
+        return this.handler.getSliderMode() == 3;
     }
 
     private int indexOfBlockId(String id) {
@@ -551,6 +629,19 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             this.addDrawableChild(upBtn);
             this.addDrawableChild(dnBtn);
             syncTowerSliders();
+        } else if (isExcavationMode()) {
+            // Excavation Mode UI: simple sliders for height and depth
+            int sliderW = 120;
+            int sliderH = 12;
+            int sliderX = this.x + this.backgroundWidth - 8 - sliderW;
+            int sliderY1 = this.y + 26; // First slider position
+            int sliderY2 = sliderY1 + sliderH + 14; // Second slider below with gap
+
+            excavationHeightSlider = new ExcavationHeightSlider(sliderX, sliderY1, sliderW, sliderH, excavationHeight);
+            excavationDepthSlider = new ExcavationDepthSlider(sliderX, sliderY2, sliderW, sliderH, excavationDepth);
+
+            this.addDrawableChild(excavationHeightSlider);
+            this.addDrawableChild(excavationDepthSlider);
         }
     }
 
@@ -755,6 +846,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (this.handler.isSliderEnabled()) {
             drawSliderMarkers(context, windowSliderMain, effectiveG(0));
             drawSliderMarkers(context, windowSliderStep, effectiveG(1));
+        }
+
+        // Excavation Mode UI: labels for sliders
+        if (isExcavationMode()) {
+            context.drawText(this.textRenderer, Text.literal("Excavation Settings"), 8, 18, 0xA0A0A0, false);
         }
 
         // Wall Mode and Tower Mode UI: label icons aligned to group rows + group rows (foreground coords are relative to GUI origin)

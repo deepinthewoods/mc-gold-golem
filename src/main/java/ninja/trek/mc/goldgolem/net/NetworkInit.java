@@ -31,6 +31,7 @@ public class NetworkInit {
         // Excavation Mode payloads
         PayloadTypeRegistry.playC2S().register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(SyncExcavationS2CPayload.ID, SyncExcavationS2CPayload.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
