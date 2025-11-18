@@ -37,7 +37,7 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import java.util.Optional;
 
 public class GoldGolemEntity extends PathAwareEntity {
-    public enum BuildMode { PATH, WALL, TOWER }
+    public enum BuildMode { PATH, WALL, TOWER, MINING }
     public static final int INVENTORY_SIZE = 27;
 
     // Data trackers for client-server sync
@@ -98,6 +98,25 @@ public class GoldGolemEntity extends PathAwareEntity {
     // Tower building state
     private int towerCurrentY = 0; // current Y layer being placed (0 = bottom)
     private int towerPlacementCursor = 0; // cursor within current Y layer
+
+    // Mining-mode state
+    private BlockPos miningChestPos = null; // chest location for deposit
+    private net.minecraft.util.math.Direction miningDirection = null; // primary tunnel direction (opposite to chest)
+    private BlockPos miningStartPos = null; // starting position (at chest)
+    private int miningBranchDepth = 16; // how far each branch extends (1-512)
+    private int miningBranchSpacing = 3; // spacing between branches (1-16)
+    private int miningTunnelHeight = 2; // tunnel height (2-6)
+    private int miningPrimaryProgress = 0; // blocks mined in primary tunnel
+    private int miningCurrentBranch = -1; // -1 = primary, 0+ = branch index
+    private boolean miningBranchLeft = true; // true = mining left branch, false = right
+    private int miningBranchProgress = 0; // blocks mined in current branch
+    private boolean miningReturningToChest = false; // returning to deposit
+    private boolean miningIdleAtChest = false; // waiting for chest space or nugget
+    private java.util.Set<BlockPos> miningPendingOres = new java.util.HashSet<>(); // ores detected but not yet mined
+    private String miningBuildingBlockType = null; // block ID to keep for placing under feet
+    private int miningBreakProgress = 0; // ticks spent breaking current block
+    private BlockPos miningCurrentTarget = null; // block currently being broken
+
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
     private LineSeg currentLine = null;
@@ -319,6 +338,22 @@ public class GoldGolemEntity extends PathAwareEntity {
         arr[slot] = (id == null) ? "" : id;
     }
 
+    // Mining mode configuration
+    public void setMiningConfig(BlockPos chestPos, net.minecraft.util.math.Direction miningDir, BlockPos startPos) {
+        this.miningChestPos = chestPos;
+        this.miningDirection = miningDir;
+        this.miningStartPos = startPos;
+        this.miningIdleAtChest = true; // Start idle, waiting for gold nugget
+    }
+    public void setMiningSliders(int branchDepth, int branchSpacing, int tunnelHeight) {
+        this.miningBranchDepth = Math.max(1, Math.min(512, branchDepth));
+        this.miningBranchSpacing = Math.max(1, Math.min(16, branchSpacing));
+        this.miningTunnelHeight = Math.max(2, Math.min(6, tunnelHeight));
+    }
+    public int getMiningBranchDepth() { return miningBranchDepth; }
+    public int getMiningBranchSpacing() { return miningBranchSpacing; }
+    public int getMiningTunnelHeight() { return miningTunnelHeight; }
+
     public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
         super(type, world);
     }
@@ -335,6 +370,128 @@ public class GoldGolemEntity extends PathAwareEntity {
         builder.add(LEFT_HAND_NEXT_POS, Optional.empty());
         builder.add(RIGHT_HAND_NEXT_POS, Optional.empty());
         builder.add(BUILDING_PATHS, false);
+    }
+
+    @Override
+    protected void writeCustomDataToNbt(NbtCompound nbt) {
+        super.writeCustomDataToNbt(nbt);
+
+        // Save build mode
+        nbt.putString("BuildMode", buildMode.name());
+
+        // Save owner
+        if (ownerUuid != null) {
+            nbt.putUuid("Owner", ownerUuid);
+        }
+
+        // Save inventory
+        DefaultedList<ItemStack> items = DefaultedList.ofSize(inventory.size(), ItemStack.EMPTY);
+        for (int i = 0; i < inventory.size(); i++) {
+            items.set(i, inventory.getStack(i));
+        }
+        Inventories.writeNbt(nbt, items, this.getWorld().getRegistryManager());
+
+        // Save gradient settings (Path mode)
+        nbt.putInt("PathWidth", pathWidth);
+        nbt.putInt("GradientWindow", gradientWindow);
+        nbt.putInt("StepGradientWindow", stepGradientWindow);
+
+        // Save mining mode state
+        if (buildMode == BuildMode.MINING && miningChestPos != null) {
+            nbt.putInt("MiningChestX", miningChestPos.getX());
+            nbt.putInt("MiningChestY", miningChestPos.getY());
+            nbt.putInt("MiningChestZ", miningChestPos.getZ());
+
+            if (miningDirection != null) {
+                nbt.putString("MiningDirection", miningDirection.name());
+            }
+
+            if (miningStartPos != null) {
+                nbt.putInt("MiningStartX", miningStartPos.getX());
+                nbt.putInt("MiningStartY", miningStartPos.getY());
+                nbt.putInt("MiningStartZ", miningStartPos.getZ());
+            }
+
+            nbt.putInt("MiningBranchDepth", miningBranchDepth);
+            nbt.putInt("MiningBranchSpacing", miningBranchSpacing);
+            nbt.putInt("MiningTunnelHeight", miningTunnelHeight);
+            nbt.putInt("MiningPrimaryProgress", miningPrimaryProgress);
+            nbt.putInt("MiningCurrentBranch", miningCurrentBranch);
+            nbt.putBoolean("MiningBranchLeft", miningBranchLeft);
+            nbt.putInt("MiningBranchProgress", miningBranchProgress);
+            nbt.putBoolean("MiningReturningToChest", miningReturningToChest);
+            nbt.putBoolean("MiningIdleAtChest", miningIdleAtChest);
+
+            if (miningBuildingBlockType != null) {
+                nbt.putString("MiningBuildingBlockType", miningBuildingBlockType);
+            }
+        }
+    }
+
+    @Override
+    protected void readCustomDataFromNbt(NbtCompound nbt) {
+        super.readCustomDataFromNbt(nbt);
+
+        // Load build mode
+        if (nbt.contains("BuildMode")) {
+            try {
+                buildMode = BuildMode.valueOf(nbt.getString("BuildMode"));
+            } catch (IllegalArgumentException e) {
+                buildMode = BuildMode.PATH;
+            }
+        }
+
+        // Load owner
+        if (nbt.containsUuid("Owner")) {
+            ownerUuid = nbt.getUuid("Owner");
+        }
+
+        // Load inventory
+        DefaultedList<ItemStack> items = DefaultedList.ofSize(inventory.size(), ItemStack.EMPTY);
+        Inventories.readNbt(nbt, items, this.getWorld().getRegistryManager());
+        for (int i = 0; i < items.size() && i < inventory.size(); i++) {
+            inventory.setStack(i, items.get(i));
+        }
+
+        // Load gradient settings
+        pathWidth = nbt.getInt("PathWidth");
+        gradientWindow = nbt.getInt("GradientWindow");
+        stepGradientWindow = nbt.getInt("StepGradientWindow");
+
+        // Load mining mode state
+        if (buildMode == BuildMode.MINING) {
+            if (nbt.contains("MiningChestX")) {
+                miningChestPos = new BlockPos(nbt.getInt("MiningChestX"),
+                    nbt.getInt("MiningChestY"), nbt.getInt("MiningChestZ"));
+            }
+
+            if (nbt.contains("MiningDirection")) {
+                try {
+                    miningDirection = net.minecraft.util.math.Direction.valueOf(nbt.getString("MiningDirection"));
+                } catch (IllegalArgumentException e) {
+                    miningDirection = null;
+                }
+            }
+
+            if (nbt.contains("MiningStartX")) {
+                miningStartPos = new BlockPos(nbt.getInt("MiningStartX"),
+                    nbt.getInt("MiningStartY"), nbt.getInt("MiningStartZ"));
+            }
+
+            miningBranchDepth = nbt.getInt("MiningBranchDepth");
+            miningBranchSpacing = nbt.getInt("MiningBranchSpacing");
+            miningTunnelHeight = nbt.getInt("MiningTunnelHeight");
+            miningPrimaryProgress = nbt.getInt("MiningPrimaryProgress");
+            miningCurrentBranch = nbt.getInt("MiningCurrentBranch");
+            miningBranchLeft = nbt.getBoolean("MiningBranchLeft");
+            miningBranchProgress = nbt.getInt("MiningBranchProgress");
+            miningReturningToChest = nbt.getBoolean("MiningReturningToChest");
+            miningIdleAtChest = nbt.getBoolean("MiningIdleAtChest");
+
+            if (nbt.contains("MiningBuildingBlockType")) {
+                miningBuildingBlockType = nbt.getString("MiningBuildingBlockType");
+            }
+        }
     }
 
     public static DefaultAttributeContainer.Builder createAttributes() {
@@ -441,7 +598,11 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (buildingPaths) {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
-            // Look at owner while building
+
+            // Mining mode has different behavior - doesn't track owner
+            if (this.buildMode == BuildMode.MINING) { tickMiningMode(); return; }
+
+            // Look at owner while building (Path/Wall/Tower modes)
             PlayerEntity owner = getOwnerPlayer();
             if (owner != null) {
                 this.getLookControl().lookAt(owner, 30.0f, 30.0f);
@@ -1076,6 +1237,574 @@ public class GoldGolemEntity extends PathAwareEntity {
         return Math.max(0, Math.min(G - 1, index));
     }
 
+    private void tickMiningMode() {
+        // Mining mode state machine
+        if (miningChestPos == null || miningDirection == null || miningStartPos == null) {
+            // Invalid state, stop mining
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+            return;
+        }
+
+        // State 1: Idle at chest (waiting for gold nugget)
+        if (miningIdleAtChest) {
+            // Navigate to start position and stay there
+            double dx = this.getX() - (miningStartPos.getX() + 0.5);
+            double dz = this.getZ() - (miningStartPos.getZ() + 0.5);
+            double distSq = dx * dx + dz * dz;
+            if (distSq > 4.0) {
+                this.getNavigation().startMovingTo(miningStartPos.getX() + 0.5,
+                    miningStartPos.getY(), miningStartPos.getZ() + 0.5, 1.0);
+            } else {
+                this.getNavigation().stop();
+            }
+            return;
+        }
+
+        // State 2: Returning to chest to deposit
+        if (miningReturningToChest) {
+            tickMiningReturn();
+            return;
+        }
+
+        // State 3: Check if inventory is full (need to return)
+        if (isMiningInventoryFull()) {
+            miningReturningToChest = true;
+            miningCurrentTarget = null;
+            miningBreakProgress = 0;
+            return;
+        }
+
+        // State 4: Active mining
+        tickMiningActive();
+    }
+
+    private void tickMiningReturn() {
+        // Navigate back to chest
+        double dx = this.getX() - (miningStartPos.getX() + 0.5);
+        double dz = this.getZ() - (miningStartPos.getZ() + 0.5);
+        double distSq = dx * dx + dz * dz;
+
+        if (distSq > 4.0) {
+            // Still far from chest, navigate
+            this.getNavigation().startMovingTo(miningStartPos.getX() + 0.5,
+                miningStartPos.getY(), miningStartPos.getZ() + 0.5, 1.1);
+
+            // Check if stuck and teleport if necessary
+            if (this.getNavigation().isIdle() && distSq > 16.0) {
+                stuckTicks++;
+                if (stuckTicks >= 60) {
+                    // Teleport to start position
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(),
+                            40, 0.5, 0.5, 0.5, 0.2);
+                        sw.spawnParticles(ParticleTypes.PORTAL, miningStartPos.getX() + 0.5,
+                            miningStartPos.getY() + 0.5, miningStartPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
+                    }
+                    this.refreshPositionAndAngles(miningStartPos.getX() + 0.5, miningStartPos.getY(),
+                        miningStartPos.getZ() + 0.5, this.getYaw(), this.getPitch());
+                    this.getNavigation().stop();
+                    stuckTicks = 0;
+                }
+            } else {
+                stuckTicks = 0;
+            }
+        } else {
+            // Close to chest, deposit inventory
+            this.getNavigation().stop();
+            depositInventoryToChest();
+            miningReturningToChest = false;
+            // Check if chest is full after deposit
+            if (isMiningInventoryFull()) {
+                // Chest is full, go idle
+                miningIdleAtChest = true;
+                buildingPaths = false;
+                this.dataTracker.set(BUILDING_PATHS, false);
+            }
+        }
+    }
+
+    private void tickMiningActive() {
+        // Place blocks under feet if needed
+        placeBlocksUnderFeet();
+
+        // Scan for nearby ores and add to pending list
+        scanForOres();
+
+        // Determine next mining target
+        BlockPos targetPos = getNextMiningTarget();
+        if (targetPos == null) {
+            // No more blocks to mine, stop
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+            return;
+        }
+
+        // Navigate to target
+        double ty = targetPos.getY();
+        this.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
+
+        // Check if close enough to mine
+        double dx = this.getX() - (targetPos.getX() + 0.5);
+        double dy = this.getY() - targetPos.getY();
+        double dz = this.getZ() - (targetPos.getZ() + 0.5);
+        double distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq <= 25.0) { // Within 5 block reach
+            // Mine the block
+            mineBlock(targetPos);
+        } else {
+            // Reset mining progress if too far
+            if (miningCurrentTarget != null && !miningCurrentTarget.equals(targetPos)) {
+                miningCurrentTarget = null;
+                miningBreakProgress = 0;
+            }
+        }
+
+        // Check if stuck and teleport if necessary
+        if (this.getNavigation().isIdle() && distSq > 16.0) {
+            stuckTicks++;
+            if (stuckTicks >= 60) {
+                // Teleport to start position
+                if (this.getEntityWorld() instanceof ServerWorld sw) {
+                    sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(),
+                        40, 0.5, 0.5, 0.5, 0.2);
+                    sw.spawnParticles(ParticleTypes.PORTAL, miningStartPos.getX() + 0.5,
+                        miningStartPos.getY() + 0.5, miningStartPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
+                }
+                this.refreshPositionAndAngles(miningStartPos.getX() + 0.5, miningStartPos.getY(),
+                    miningStartPos.getZ() + 0.5, this.getYaw(), this.getPitch());
+                this.getNavigation().stop();
+                stuckTicks = 0;
+                miningCurrentTarget = null;
+                miningBreakProgress = 0;
+                // Reset mining state
+                miningPrimaryProgress = 0;
+                miningCurrentBranch = -1;
+                miningBranchProgress = 0;
+                miningPendingOres.clear();
+            }
+        } else {
+            stuckTicks = 0;
+        }
+    }
+
+    private boolean isMiningInventoryFull() {
+        // Check if inventory has space (excluding one stack of building blocks)
+        int emptySlots = 0;
+        int buildingBlockCount = 0;
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) {
+                emptySlots++;
+            } else if (miningBuildingBlockType != null) {
+                String blockId = getBlockIdFromStack(stack);
+                if (blockId != null && blockId.equals(miningBuildingBlockType)) {
+                    buildingBlockCount += stack.getCount();
+                }
+            }
+        }
+        // Full if less than 2 empty slots (need room for building blocks)
+        return emptySlots < 2;
+    }
+
+    private void depositInventoryToChest() {
+        if (miningChestPos == null || this.getEntityWorld().isClient()) return;
+
+        // Get chest inventory
+        var chestEntity = this.getEntityWorld().getBlockEntity(miningChestPos);
+        if (!(chestEntity instanceof net.minecraft.inventory.Inventory chestInv)) return;
+
+        // Keep one stack of building blocks, deposit everything else
+        int buildingBlocksKept = 0;
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+
+            String blockId = getBlockIdFromStack(stack);
+            boolean isBuildingBlock = miningBuildingBlockType != null && blockId != null &&
+                blockId.equals(miningBuildingBlockType);
+
+            if (isBuildingBlock && buildingBlocksKept < 64) {
+                // Keep up to one stack of building blocks
+                int toKeep = Math.min(64 - buildingBlocksKept, stack.getCount());
+                buildingBlocksKept += toKeep;
+                if (stack.getCount() > toKeep) {
+                    // Deposit excess
+                    ItemStack toDeposit = stack.copy();
+                    toDeposit.setCount(stack.getCount() - toKeep);
+                    ItemStack remainder = transferToInventory(toDeposit, chestInv);
+                    stack.setCount(toKeep + (remainder.isEmpty() ? 0 : remainder.getCount()));
+                    inventory.setStack(i, stack);
+                }
+            } else {
+                // Deposit non-building blocks
+                ItemStack remainder = transferToInventory(stack, chestInv);
+                inventory.setStack(i, remainder);
+            }
+        }
+    }
+
+    private ItemStack transferToInventory(ItemStack stack, net.minecraft.inventory.Inventory targetInv) {
+        if (stack.isEmpty()) return ItemStack.EMPTY;
+
+        // Try to merge with existing stacks first
+        for (int i = 0; i < targetInv.size(); i++) {
+            ItemStack targetStack = targetInv.getStack(i);
+            if (targetStack.isEmpty()) continue;
+            if (ItemStack.areItemsAndComponentsEqual(stack, targetStack)) {
+                int space = targetStack.getMaxCount() - targetStack.getCount();
+                if (space > 0) {
+                    int toTransfer = Math.min(space, stack.getCount());
+                    targetStack.setCount(targetStack.getCount() + toTransfer);
+                    targetInv.setStack(i, targetStack);
+                    stack.decrement(toTransfer);
+                    if (stack.isEmpty()) return ItemStack.EMPTY;
+                }
+            }
+        }
+
+        // Place in empty slots
+        for (int i = 0; i < targetInv.size(); i++) {
+            if (targetInv.getStack(i).isEmpty()) {
+                targetInv.setStack(i, stack.copy());
+                return ItemStack.EMPTY;
+            }
+        }
+
+        // Chest is full, return remainder
+        return stack;
+    }
+
+    private void placeBlocksUnderFeet() {
+        if (this.getEntityWorld().isClient()) return;
+
+        BlockPos below = this.getBlockPos().down();
+        if (!this.getEntityWorld().getBlockState(below).isAir()) return;
+
+        // Find a building block in inventory
+        if (miningBuildingBlockType == null) {
+            // Select first non-ore, non-gravity block as building block type
+            for (int i = 0; i < inventory.size(); i++) {
+                ItemStack stack = inventory.getStack(i);
+                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
+
+                var block = blockItem.getBlock();
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
+
+                if (!isOreBlock(blockId) && !isGravityBlock(block)) {
+                    miningBuildingBlockType = blockId;
+                    break;
+                }
+            }
+        }
+
+        if (miningBuildingBlockType != null) {
+            // Find and consume the building block
+            for (int i = 0; i < inventory.size(); i++) {
+                ItemStack stack = inventory.getStack(i);
+                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
+
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
+                if (blockId.equals(miningBuildingBlockType)) {
+                    BlockState state = blockItem.getBlock().getDefaultState();
+                    this.getEntityWorld().setBlockState(below, state);
+                    stack.decrement(1);
+                    inventory.setStack(i, stack);
+                    return;
+                }
+            }
+        }
+    }
+
+    private void scanForOres() {
+        if (this.getEntityWorld().isClient()) return;
+
+        // Scan 3 block radius for ores
+        BlockPos center = this.getBlockPos();
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -3; dz <= 3; dz++) {
+                    BlockPos pos = center.add(dx, dy, dz);
+                    BlockState state = this.getEntityWorld().getBlockState(pos);
+                    String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
+
+                    if (isOreBlock(blockId) && !miningPendingOres.contains(pos)) {
+                        miningPendingOres.add(pos);
+                    }
+                }
+            }
+        }
+    }
+
+    private BlockPos getNextMiningTarget() {
+        // Priority 1: Mine pending ores
+        if (!miningPendingOres.isEmpty()) {
+            BlockPos orePos = miningPendingOres.iterator().next();
+            // Check if ore still exists
+            BlockState state = this.getEntityWorld().getBlockState(orePos);
+            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
+            if (!isOreBlock(blockId) || state.isAir()) {
+                miningPendingOres.remove(orePos);
+                return getNextMiningTarget(); // Recursive call to get next
+            }
+            return orePos;
+        }
+
+        // Priority 2: Continue branch mining pattern
+        return getNextBranchMiningTarget();
+    }
+
+    private BlockPos getNextBranchMiningTarget() {
+        // Branch mining pattern:
+        // - Primary tunnel in miningDirection
+        // - Branches perpendicular every miningBranchSpacing blocks
+        // - Each branch extends miningBranchDepth blocks to left and right
+
+        if (miningCurrentBranch == -1) {
+            // Mining primary tunnel
+            BlockPos primaryStart = miningStartPos.offset(miningDirection, 1);
+            BlockPos target = primaryStart.offset(miningDirection, miningPrimaryProgress);
+
+            // Check if we should start a branch
+            if (miningPrimaryProgress > 0 && miningPrimaryProgress % miningBranchSpacing == 0) {
+                // Start a branch (left first)
+                miningCurrentBranch = miningPrimaryProgress / miningBranchSpacing;
+                miningBranchLeft = true;
+                miningBranchProgress = 0;
+                return getNextBranchMiningTarget(); // Get first block of branch
+            }
+
+            // Return next block in primary tunnel (height layers, don't mine floor)
+            for (int y = 1; y < miningTunnelHeight; y++) {
+                BlockPos layerTarget = target.up(y - 1);
+                if (shouldMineBlock(layerTarget)) {
+                    return layerTarget;
+                }
+            }
+
+            // All layers mined, advance primary
+            miningPrimaryProgress++;
+            return getNextBranchMiningTarget();
+        } else {
+            // Mining a branch
+            net.minecraft.util.math.Direction branchDir = getBranchDirection(miningBranchLeft);
+            BlockPos branchStart = miningStartPos.offset(miningDirection, 1 + miningCurrentBranch * miningBranchSpacing);
+            BlockPos target = branchStart.offset(branchDir, miningBranchProgress + 1);
+
+            // Return next block in branch (height layers, don't mine floor)
+            for (int y = 1; y < miningTunnelHeight; y++) {
+                BlockPos layerTarget = target.up(y - 1);
+                if (shouldMineBlock(layerTarget)) {
+                    return layerTarget;
+                }
+            }
+
+            // All layers mined, advance branch
+            miningBranchProgress++;
+
+            // Check if branch is complete
+            if (miningBranchProgress >= miningBranchDepth) {
+                if (miningBranchLeft) {
+                    // Switch to right branch
+                    miningBranchLeft = false;
+                    miningBranchProgress = 0;
+                } else {
+                    // Both branches complete, return to primary
+                    miningCurrentBranch = -1;
+                    miningBranchProgress = 0;
+                }
+            }
+
+            return getNextBranchMiningTarget();
+        }
+    }
+
+    private net.minecraft.util.math.Direction getBranchDirection(boolean left) {
+        // Get perpendicular direction
+        if (miningDirection == net.minecraft.util.math.Direction.NORTH) {
+            return left ? net.minecraft.util.math.Direction.WEST : net.minecraft.util.math.Direction.EAST;
+        } else if (miningDirection == net.minecraft.util.math.Direction.SOUTH) {
+            return left ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST;
+        } else if (miningDirection == net.minecraft.util.math.Direction.EAST) {
+            return left ? net.minecraft.util.math.Direction.NORTH : net.minecraft.util.math.Direction.SOUTH;
+        } else { // WEST
+            return left ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH;
+        }
+    }
+
+    private boolean shouldMineBlock(BlockPos pos) {
+        BlockState state = this.getEntityWorld().getBlockState(pos);
+        return !state.isAir() && state.getHardness(this.getEntityWorld(), pos) >= 0;
+    }
+
+    private boolean isOreBlock(String blockId) {
+        return blockId.contains("_ore") || blockId.contains("ancient_debris") ||
+               blockId.equals("minecraft:gilded_blackstone");
+    }
+
+    private boolean isGravityBlock(net.minecraft.block.Block block) {
+        return block instanceof net.minecraft.block.FallingBlock;
+    }
+
+    private String getBlockIdFromStack(ItemStack stack) {
+        if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) {
+            return null;
+        }
+        return net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
+    }
+
+    private void mineBlock(BlockPos pos) {
+        if (this.getEntityWorld().isClient()) return;
+
+        BlockState state = this.getEntityWorld().getBlockState(pos);
+        if (state.isAir()) {
+            // Block already mined, clear pending ore if applicable
+            miningPendingOres.remove(pos);
+            miningCurrentTarget = null;
+            miningBreakProgress = 0;
+            return;
+        }
+
+        // Start mining a new block
+        if (miningCurrentTarget == null || !miningCurrentTarget.equals(pos)) {
+            miningCurrentTarget = pos;
+            miningBreakProgress = 0;
+        }
+
+        // Find best tool in inventory
+        ItemStack bestTool = findBestTool(state);
+        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
+
+        // Golem mines at half speed (double the time)
+        breakSpeed *= 0.5f;
+
+        // Calculate break time in ticks
+        float hardness = state.getHardness(this.getEntityWorld(), pos);
+        if (hardness < 0) {
+            // Unbreakable block
+            miningCurrentTarget = null;
+            miningBreakProgress = 0;
+            return;
+        }
+
+        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
+        requiredTicks = Math.max(1, requiredTicks); // At least 1 tick
+
+        miningBreakProgress++;
+
+        // Show breaking animation (optional - could add later)
+
+        if (miningBreakProgress >= requiredTicks) {
+            // Break the block
+            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
+            boolean isOre = isOreBlock(blockId);
+
+            // Drop items into golem inventory
+            if (this.getEntityWorld() instanceof ServerWorld sw) {
+                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
+                    this.getEntityWorld().getBlockEntity(pos), this, bestTool);
+
+                for (ItemStack drop : drops) {
+                    // Add to inventory
+                    addToInventory(drop);
+                }
+            }
+
+            // Break the block
+            this.getEntityWorld().breakBlock(pos, false);
+
+            // Damage tool if used
+            if (!bestTool.isEmpty() && bestTool.isDamageable()) {
+                bestTool.damage(1, this, net.minecraft.entity.EquipmentSlot.MAINHAND);
+                // Update inventory
+                for (int i = 0; i < inventory.size(); i++) {
+                    if (inventory.getStack(i) == bestTool) {
+                        inventory.setStack(i, bestTool);
+                        break;
+                    }
+                }
+            }
+
+            // Clear pending ore
+            miningPendingOres.remove(pos);
+            miningCurrentTarget = null;
+            miningBreakProgress = 0;
+
+            // If it was an ore, mine surrounding blocks
+            if (isOre) {
+                mineOreSurroundings(pos);
+            }
+        }
+    }
+
+    private void mineOreSurroundings(BlockPos center) {
+        // Mine 1 block in each of the 6 directions
+        for (net.minecraft.util.math.Direction dir : net.minecraft.util.math.Direction.values()) {
+            BlockPos adjacent = center.offset(dir);
+            BlockState state = this.getEntityWorld().getBlockState(adjacent);
+
+            if (!state.isAir() && state.getHardness(this.getEntityWorld(), adjacent) >= 0) {
+                // Add to pending mining targets (will be mined next)
+                if (!miningPendingOres.contains(adjacent)) {
+                    miningPendingOres.add(adjacent);
+                }
+            }
+        }
+    }
+
+    private ItemStack findBestTool(BlockState state) {
+        ItemStack bestTool = ItemStack.EMPTY;
+        float bestSpeed = 1.0f;
+
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
+
+            float speed = stack.getMiningSpeedMultiplier(state);
+            if (speed > bestSpeed) {
+                bestSpeed = speed;
+                bestTool = stack;
+            }
+        }
+
+        return bestTool;
+    }
+
+    private void addToInventory(ItemStack stack) {
+        if (stack.isEmpty()) return;
+
+        // Try to merge with existing stacks
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack slot = inventory.getStack(i);
+            if (slot.isEmpty()) continue;
+
+            if (ItemStack.areItemsAndComponentsEqual(stack, slot)) {
+                int space = slot.getMaxCount() - slot.getCount();
+                if (space > 0) {
+                    int toAdd = Math.min(space, stack.getCount());
+                    slot.setCount(slot.getCount() + toAdd);
+                    inventory.setStack(i, slot);
+                    stack.decrement(toAdd);
+                    if (stack.isEmpty()) return;
+                }
+            }
+        }
+
+        // Place in empty slots
+        for (int i = 0; i < inventory.size(); i++) {
+            if (inventory.getStack(i).isEmpty()) {
+                inventory.setStack(i, stack.copy());
+                return;
+            }
+        }
+
+        // Inventory full, drop on ground
+        if (this.getEntityWorld() instanceof ServerWorld sw) {
+            this.dropStack(sw, stack);
+        }
+    }
+
     private void placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
         // Check if block already exists at position
         if (this.getEntityWorld().getBlockState(pos).equals(state)) return;
@@ -1436,20 +2165,36 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
             if (!this.getEntityWorld().isClient()) {
-                this.buildingPaths = true;
-                this.dataTracker.set(BUILDING_PATHS, true);
-                if (!player.isCreative()) stack.decrement(1);
-                spawnHearts();
-                // Initialize anchor at golem feet for preview when starting
-                this.trackStart = new Vec3d(this.getX(), this.getY() + 0.05, this.getZ());
-                // send initial (possibly empty) line list with anchor
-                var owner = getOwnerPlayer();
-                if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
-                    ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
+                if (this.buildMode == BuildMode.MINING) {
+                    // Mining mode: only start if idle at chest
+                    if (this.miningIdleAtChest) {
+                        this.miningIdleAtChest = false;
+                        this.buildingPaths = true;
+                        this.dataTracker.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.decrement(1);
+                        spawnHearts();
+                    } else {
+                        // Already mining or returning, ignore
+                        sp.sendMessage(Text.literal("[Gold Golem] Already mining!"), true);
+                        return ActionResult.FAIL;
+                    }
+                } else {
+                    // Path/Wall/Tower modes: start building as before
+                    this.buildingPaths = true;
+                    this.dataTracker.set(BUILDING_PATHS, true);
+                    if (!player.isCreative()) stack.decrement(1);
+                    spawnHearts();
+                    // Initialize anchor at golem feet for preview when starting
+                    this.trackStart = new Vec3d(this.getX(), this.getY() + 0.05, this.getZ());
+                    // send initial (possibly empty) line list with anchor
+                    var owner = getOwnerPlayer();
+                    if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
+                    }
+                    // reset recent placements cache
+                    recentPlaced.clear();
+                    placedHead = placedSize = 0;
                 }
-                // reset recent placements cache
-                recentPlaced.clear();
-                placedHead = placedSize = 0;
             }
             return ActionResult.CONSUME;
         }
@@ -1476,14 +2221,23 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Stop building on owner hit; show angry particles; ignore damage
             this.buildingPaths = false;
             this.dataTracker.set(BUILDING_PATHS, false);
-            this.trackStart = null;
-            this.pendingLines.clear();
-            this.currentLine = null;
+            if (this.buildMode == BuildMode.MINING) {
+                // Reset to idle state for mining mode
+                this.miningIdleAtChest = true;
+                this.miningReturningToChest = false;
+                this.miningCurrentTarget = null;
+                this.miningBreakProgress = 0;
+            } else {
+                // Path/Wall/Tower mode cleanup
+                this.trackStart = null;
+                this.pendingLines.clear();
+                this.currentLine = null;
+                // clear client lines
+                if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                    ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
+                }
+            }
             spawnAngry();
-            // clear client lines
-                    if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
-                        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
-                    }
             recentPlaced.clear();
             placedHead = placedSize = 0;
             return false; // cancel damage
@@ -2236,6 +2990,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public boolean canStart() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.buildMode == GoldGolemEntity.BuildMode.MINING) return false; // Never follow in mining mode
         // Only follow the owner; find the owner player in-world
         PlayerEntity owner = null;
         for (PlayerEntity player : golem.getEntityWorld().getPlayers()) {
@@ -2251,6 +3006,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.buildMode == GoldGolemEntity.BuildMode.MINING) return false; // Never follow in mining mode
         if (target == null || !target.isAlive()) return false;
         // Ensure target remains the owner
         if (!golem.isOwner(target)) return false;
@@ -2294,12 +3050,14 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
     @Override
     public boolean canStart() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.buildMode == GoldGolemEntity.BuildMode.MINING) return false; // Never wander in mining mode
         return super.canStart();
     }
 
     @Override
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.buildMode == GoldGolemEntity.BuildMode.MINING) return false; // Never wander in mining mode
         return super.shouldContinue();
     }
 
