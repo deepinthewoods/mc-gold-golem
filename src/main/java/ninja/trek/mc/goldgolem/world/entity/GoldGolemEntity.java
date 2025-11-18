@@ -1,5 +1,6 @@
 package ninja.trek.mc.goldgolem.world.entity;
 
+import net.minecraft.block.BlockState;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
@@ -36,7 +37,7 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import java.util.Optional;
 
 public class GoldGolemEntity extends PathAwareEntity {
-    public enum BuildMode { PATH, WALL }
+    public enum BuildMode { PATH, WALL, TOWER }
     public static final int INVENTORY_SIZE = 27;
 
     // Data trackers for client-server sync
@@ -82,6 +83,21 @@ public class GoldGolemEntity extends PathAwareEntity {
     private final java.util.List<String[]> wallGroupSlots = new java.util.ArrayList<>(); // each String[9]
     private final java.util.List<Integer> wallGroupWindows = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> wallBlockGroup = new java.util.HashMap<>();
+
+    // Tower-mode captured data
+    private java.util.List<String> towerUniqueBlockIds = java.util.Collections.emptyList();
+    private java.util.Map<String, Integer> towerBlockCounts = java.util.Collections.emptyMap();
+    private net.minecraft.util.math.BlockPos towerOrigin = null; // absolute origin (bottom gold block)
+    private String towerJsonFile = null; // saved snapshot path (relative to game dir)
+    private int towerHeight = 0; // total height to build (in blocks)
+    private ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate = null;
+    // Tower UI state: dynamic gradient groups (same as wall mode)
+    private final java.util.List<String[]> towerGroupSlots = new java.util.ArrayList<>(); // each String[9]
+    private final java.util.List<Integer> towerGroupWindows = new java.util.ArrayList<>();
+    private final java.util.Map<String, Integer> towerBlockGroup = new java.util.HashMap<>();
+    // Tower building state
+    private int towerCurrentY = 0; // current Y layer being placed (0 = bottom)
+    private int towerPlacementCursor = 0; // cursor within current Y layer
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
     private LineSeg currentLine = null;
@@ -239,6 +255,70 @@ public class GoldGolemEntity extends PathAwareEntity {
         arr[slot] = (id == null) ? "" : id;
     }
 
+    // Tower mode methods
+    public void setTowerCapture(java.util.List<String> uniqueIds, java.util.Map<String, Integer> counts,
+                                net.minecraft.util.math.BlockPos origin, String jsonPath, int height,
+                                ninja.trek.mc.goldgolem.tower.TowerModuleTemplate template) {
+        this.towerUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
+        this.towerBlockCounts = counts == null ? java.util.Collections.emptyMap() : new java.util.HashMap<>(counts);
+        this.towerOrigin = origin;
+        this.towerJsonFile = jsonPath;
+        this.towerHeight = height;
+        this.towerTemplate = template;
+        // Initialize tower groups
+        initTowerGroups(uniqueIds);
+    }
+    public java.util.List<String> getTowerUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.towerUniqueBlockIds); }
+    public java.util.Map<String, Integer> getTowerBlockCounts() { return java.util.Collections.unmodifiableMap(this.towerBlockCounts); }
+    public int getTowerHeight() { return towerHeight; }
+    public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() { return towerTemplate; }
+
+    public void initTowerGroups(java.util.List<String> uniqueBlocks) {
+        towerGroupSlots.clear(); towerGroupWindows.clear(); towerBlockGroup.clear();
+        // Default: one group per unique block type
+        int idx = 0;
+        for (String id : uniqueBlocks) {
+            String[] arr = new String[9];
+            towerGroupSlots.add(arr);
+            towerGroupWindows.add(1);
+            towerBlockGroup.put(id, idx);
+            idx++;
+        }
+    }
+    public java.util.List<Integer> getTowerBlockGroupMap(java.util.List<String> uniqueBlocks) {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>(uniqueBlocks.size());
+        for (String id : uniqueBlocks) out.add(towerBlockGroup.getOrDefault(id, 0));
+        return out;
+    }
+    public java.util.List<Integer> getTowerGroupWindows() { return new java.util.ArrayList<>(towerGroupWindows); }
+    public java.util.List<String> getTowerGroupFlatSlots() {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>(towerGroupSlots.size() * 9);
+        for (String[] arr : towerGroupSlots) {
+            for (int i = 0; i < 9; i++) out.add(arr[i] == null ? "" : arr[i]);
+        }
+        return out;
+    }
+    public void setTowerBlockGroup(String blockId, int group) {
+        if (group < 0) { // create new
+            towerGroupSlots.add(new String[9]);
+            towerGroupWindows.add(1);
+            group = towerGroupSlots.size() - 1;
+        } else if (group >= towerGroupSlots.size()) {
+            return;
+        }
+        towerBlockGroup.put(blockId, group);
+    }
+    public void setTowerGroupWindow(int group, int window) {
+        if (group < 0 || group >= towerGroupWindows.size()) return;
+        towerGroupWindows.set(group, Math.max(0, Math.min(9, window)));
+    }
+    public void setTowerGroupSlot(int group, int slot, String id) {
+        if (group < 0 || group >= towerGroupSlots.size()) return;
+        if (slot < 0 || slot >= 9) return;
+        String[] arr = towerGroupSlots.get(group);
+        arr[slot] = (id == null) ? "" : id;
+    }
+
     public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
         super(type, world);
     }
@@ -367,6 +447,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 this.getLookControl().lookAt(owner, 30.0f, 30.0f);
             }
             if (this.buildMode == BuildMode.WALL) { tickWallMode(owner); return; }
+            if (this.buildMode == BuildMode.TOWER) { tickTowerMode(owner); return; }
             // Lines are now rendered client-side using RenderLayer lines via networking; no server particles.
             // Track lines while owner moves (require grounded for stability, no distance gate in pathing mode)
             if (owner != null && owner.isOnGround()) {
@@ -804,6 +885,239 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
+    private void tickTowerMode(PlayerEntity owner) {
+        // Tower mode: build at fixed location (towerOrigin), no player tracking
+        if (!buildingPaths || towerTemplate == null || towerOrigin == null) return;
+
+        // Check if we've finished building the tower
+        if (towerCurrentY >= towerHeight) {
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+            return;
+        }
+
+        // Get all voxels for the current Y layer
+        java.util.List<BlockPos> currentLayerVoxels = getCurrentTowerLayerVoxels();
+
+        if (currentLayerVoxels.isEmpty()) {
+            // No voxels in this layer, move to next Y level
+            towerCurrentY++;
+            towerPlacementCursor = 0;
+            return;
+        }
+
+        // Place blocks at 2-tick intervals (same as other modes)
+        if (placementTickCounter == 0 && towerPlacementCursor < currentLayerVoxels.size()) {
+            BlockPos targetPos = currentLayerVoxels.get(towerPlacementCursor);
+
+            // Try to pathfind to the target position
+            double ty = computeGroundTargetY(new Vec3d(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5));
+            this.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
+
+            // Check if stuck and teleport if necessary
+            double dx = this.getX() - (targetPos.getX() + 0.5);
+            double dz = this.getZ() - (targetPos.getZ() + 0.5);
+            double distSq = dx * dx + dz * dz;
+            if (this.getNavigation().isIdle() && distSq > 1.0) {
+                stuckTicks++;
+                if (stuckTicks >= 20) {
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
+                        sw.spawnParticles(ParticleTypes.PORTAL, targetPos.getX() + 0.5, ty + 0.5, targetPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
+                    }
+                    this.refreshPositionAndAngles(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, this.getYaw(), this.getPitch());
+                    this.getNavigation().stop();
+                    stuckTicks = 0;
+                }
+            } else {
+                stuckTicks = 0;
+            }
+
+            // Determine next block for animation preview
+            BlockPos nextPos = null;
+            if (towerPlacementCursor + 1 < currentLayerVoxels.size()) {
+                nextPos = currentLayerVoxels.get(towerPlacementCursor + 1);
+            }
+
+            // Place the block
+            placeTowerBlock(targetPos, nextPos);
+            towerPlacementCursor++;
+        }
+
+        // Check if we've finished this layer
+        if (towerPlacementCursor >= currentLayerVoxels.size()) {
+            towerCurrentY++;
+            towerPlacementCursor = 0;
+        }
+    }
+
+    private java.util.List<BlockPos> getCurrentTowerLayerVoxels() {
+        if (towerTemplate == null) return java.util.Collections.emptyList();
+
+        java.util.List<BlockPos> layerVoxels = new java.util.ArrayList<>();
+        int moduleHeight = towerTemplate.moduleHeight;
+        if (moduleHeight == 0) return layerVoxels;
+
+        // Determine which module repetition we're in and the Y offset within that module
+        int moduleIndex = towerCurrentY / moduleHeight;
+        int yWithinModule = towerCurrentY % moduleHeight;
+
+        // Collect all voxels at this Y level within the current module
+        for (var voxel : towerTemplate.voxels) {
+            int relY = voxel.rel.getY();
+            if (relY == yWithinModule) {
+                // Calculate absolute position: origin + module offset + voxel relative position
+                int absoluteY = towerOrigin.getY() + (moduleIndex * moduleHeight) + relY;
+                BlockPos absPos = new BlockPos(
+                    towerOrigin.getX() + voxel.rel.getX(),
+                    absoluteY,
+                    towerOrigin.getZ() + voxel.rel.getZ()
+                );
+                layerVoxels.add(absPos);
+            }
+        }
+
+        return layerVoxels;
+    }
+
+    private void placeTowerBlock(BlockPos pos, BlockPos nextPos) {
+        if (this.getEntityWorld().isClient()) return;
+
+        // Get the original block state from the template
+        BlockState targetState = getTowerBlockStateAt(pos);
+        if (targetState == null) return;
+
+        // Use gradient sampling to potentially replace with a different block
+        String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
+        Integer groupIdx = towerBlockGroup.get(blockId);
+        if (groupIdx == null || groupIdx < 0 || groupIdx >= towerGroupSlots.size()) {
+            // No group mapping, place original block
+            placeBlockFromInventory(pos, targetState, nextPos);
+            return;
+        }
+
+        // Sample gradient based on Y position in total tower (not module)
+        String[] slots = towerGroupSlots.get(groupIdx);
+        int window = (groupIdx < towerGroupWindows.size()) ? towerGroupWindows.get(groupIdx) : 1;
+        int sampledIndex = sampleTowerGradient(slots, window, towerCurrentY, pos);
+
+        if (sampledIndex >= 0 && sampledIndex < 9) {
+            String sampledId = slots[sampledIndex];
+            if (sampledId != null && !sampledId.isEmpty()) {
+                BlockState sampledState = getBlockStateFromId(sampledId);
+                if (sampledState != null) {
+                    placeBlockFromInventory(pos, sampledState, nextPos);
+                    return;
+                }
+            }
+        }
+
+        // Fallback: place original block
+        placeBlockFromInventory(pos, targetState, nextPos);
+    }
+
+    private BlockState getTowerBlockStateAt(BlockPos pos) {
+        if (towerTemplate == null || towerOrigin == null) return null;
+
+        int moduleHeight = towerTemplate.moduleHeight;
+        if (moduleHeight == 0) return null;
+
+        // Calculate relative position from tower origin
+        int relX = pos.getX() - towerOrigin.getX();
+        int relY = pos.getY() - towerOrigin.getY();
+        int relZ = pos.getZ() - towerOrigin.getZ();
+
+        // Determine Y within module
+        int yWithinModule = relY % moduleHeight;
+
+        // Find matching voxel in template
+        for (var voxel : towerTemplate.voxels) {
+            if (voxel.rel.getX() == relX && voxel.rel.getY() == yWithinModule && voxel.rel.getZ() == relZ) {
+                return voxel.state;
+            }
+        }
+
+        return null;
+    }
+
+    private int sampleTowerGradient(String[] slots, int window, int currentY, BlockPos pos) {
+        // Count non-empty gradient slots
+        int G = 0;
+        for (int i = 8; i >= 0; i--) {
+            if (slots[i] != null && !slots[i].isEmpty()) {
+                G = i + 1;
+                break;
+            }
+        }
+        if (G == 0) return -1;
+
+        // Map Y position in tower to gradient space [0, G-1]
+        double s = ((double) currentY / (double) towerHeight) * (G - 1);
+
+        // Apply windowing
+        int W = Math.min(window, G);
+        if (W > 0) {
+            // Deterministic random offset based on position
+            double u = deterministic01(pos.getX(), pos.getZ(), currentY) * W - (W / 2.0);
+            s += u;
+        }
+
+        // Edge reflection (triangle wave)
+        double a = -0.5;
+        double b = G - 0.5;
+        double L = b - a;
+        double y = (s - a) % (2 * L);
+        if (y < 0) y += 2 * L;
+        double r = (y <= L) ? y : (2 * L - y);
+        double s_ref = a + r;
+
+        // Clamp and round
+        int index = (int) Math.round(s_ref);
+        return Math.max(0, Math.min(G - 1, index));
+    }
+
+    private void placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
+        // Check if block already exists at position
+        if (this.getEntityWorld().getBlockState(pos).equals(state)) return;
+
+        // Try to consume block from inventory
+        String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
+        if (consumeBlockFromInventory(blockId)) {
+            this.getEntityWorld().setBlockState(pos, state);
+            // Set hand animation with current and next block positions
+            beginHandAnimation(leftHandActive, pos, nextPos);
+            leftHandActive = !leftHandActive;
+        }
+    }
+
+    private boolean consumeBlockFromInventory(String blockId) {
+        // Search inventory for matching block
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
+                String stackId = net.minecraft.registry.Registries.BLOCK.getId(bi.getBlock()).toString();
+                if (stackId.equals(blockId)) {
+                    stack.decrement(1);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private BlockState getBlockStateFromId(String blockId) {
+        try {
+            net.minecraft.util.Identifier id = net.minecraft.util.Identifier.tryParse(blockId);
+            if (id == null) return null;
+            net.minecraft.block.Block block = net.minecraft.registry.Registries.BLOCK.get(id);
+            if (block == null) return null;
+            return block.getDefaultState();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
     @Override
     protected void writeCustomData(WriteView view) {
@@ -870,6 +1184,53 @@ public class GoldGolemEntity extends PathAwareEntity {
             String id = wallUniqueBlockIds.get(i);
             int grp = wallBlockGroup.getOrDefault(id, 0);
             view.putInt("WallGM" + i, grp);
+        }
+
+        // Tower-mode persisted bits
+        if (this.towerOrigin != null) {
+            view.putInt("TowerOX", this.towerOrigin.getX());
+            view.putInt("TowerOY", this.towerOrigin.getY());
+            view.putInt("TowerOZ", this.towerOrigin.getZ());
+        }
+        if (this.towerJsonFile != null) view.putString("TowerJson", this.towerJsonFile);
+        view.putInt("TowerHeight", this.towerHeight);
+        view.putInt("TowerCurrentY", this.towerCurrentY);
+        view.putInt("TowerPlacementCursor", this.towerPlacementCursor);
+        if (this.towerUniqueBlockIds != null && !this.towerUniqueBlockIds.isEmpty()) {
+            view.putInt("TowerUniqCount", this.towerUniqueBlockIds.size());
+            for (int i = 0; i < this.towerUniqueBlockIds.size(); i++) {
+                view.putString("TowerU" + i, this.towerUniqueBlockIds.get(i));
+            }
+        } else {
+            view.putInt("TowerUniqCount", 0);
+        }
+        // Tower block counts
+        if (this.towerBlockCounts != null && !this.towerBlockCounts.isEmpty()) {
+            view.putInt("TowerCountsSize", this.towerBlockCounts.size());
+            int idx = 0;
+            for (var entry : this.towerBlockCounts.entrySet()) {
+                view.putString("TowerC_id" + idx, entry.getKey());
+                view.putInt("TowerC_cnt" + idx, entry.getValue());
+                idx++;
+            }
+        } else {
+            view.putInt("TowerCountsSize", 0);
+        }
+        // Tower groups persistence
+        view.putInt("TowerGroupCount", towerGroupSlots.size());
+        for (int g = 0; g < towerGroupSlots.size(); g++) {
+            view.putInt("TowerGW" + g, (g < towerGroupWindows.size()) ? towerGroupWindows.get(g) : 1);
+            String[] arr = towerGroupSlots.get(g);
+            for (int i = 0; i < 9; i++) {
+                String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
+                view.putString("TowerGS" + g + "_" + i, v);
+            }
+        }
+        // Mapping for unique ids → group index
+        for (int i = 0; i < towerUniqueBlockIds.size(); i++) {
+            String id = towerUniqueBlockIds.get(i);
+            int grp = towerBlockGroup.getOrDefault(id, 0);
+            view.putInt("TowerGM" + i, grp);
         }
     }
 
@@ -947,6 +1308,53 @@ public class GoldGolemEntity extends PathAwareEntity {
             int grp = view.getInt("WallGM" + i, 0);
             String id = wallUniqueBlockIds.get(i);
             wallBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, wallGroupSlots.size() - 1), grp)));
+        }
+
+        // Tower-mode bits
+        if (view.contains("TowerOX")) {
+            this.towerOrigin = new net.minecraft.util.math.BlockPos(view.getInt("TowerOX", 0), view.getInt("TowerOY", 0), view.getInt("TowerOZ", 0));
+        } else {
+            this.towerOrigin = null;
+        }
+        this.towerJsonFile = view.getString("TowerJson", null);
+        this.towerHeight = view.getInt("TowerHeight", 0);
+        this.towerCurrentY = view.getInt("TowerCurrentY", 0);
+        this.towerPlacementCursor = view.getInt("TowerPlacementCursor", 0);
+        int tc = view.getInt("TowerUniqCount", 0);
+        if (tc > 0) {
+            java.util.ArrayList<String> ids = new java.util.ArrayList<>(tc);
+            for (int i = 0; i < tc; i++) ids.add(view.getString("TowerU" + i, ""));
+            this.towerUniqueBlockIds = ids;
+        } else {
+            this.towerUniqueBlockIds = java.util.Collections.emptyList();
+        }
+        // Tower block counts
+        int tcs = view.getInt("TowerCountsSize", 0);
+        if (tcs > 0) {
+            java.util.HashMap<String, Integer> counts = new java.util.HashMap<>();
+            for (int i = 0; i < tcs; i++) {
+                String id = view.getString("TowerC_id" + i, "");
+                int cnt = view.getInt("TowerC_cnt" + i, 0);
+                if (!id.isEmpty()) counts.put(id, cnt);
+            }
+            this.towerBlockCounts = counts;
+        } else {
+            this.towerBlockCounts = java.util.Collections.emptyMap();
+        }
+        // Tower groups
+        towerGroupSlots.clear(); towerGroupWindows.clear(); towerBlockGroup.clear();
+        int tgc = view.getInt("TowerGroupCount", 0);
+        for (int g = 0; g < tgc; g++) {
+            int w = view.getInt("TowerGW" + g, 1);
+            towerGroupWindows.add(Math.max(0, Math.min(9, w)));
+            String[] arr = new String[9];
+            for (int i = 0; i < 9; i++) arr[i] = view.getString("TowerGS" + g + "_" + i, "");
+            towerGroupSlots.add(arr);
+        }
+        for (int i = 0; i < towerUniqueBlockIds.size(); i++) {
+            int grp = view.getInt("TowerGM" + i, 0);
+            String id = towerUniqueBlockIds.get(i);
+            towerBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, towerGroupSlots.size() - 1), grp)));
         }
     }
 

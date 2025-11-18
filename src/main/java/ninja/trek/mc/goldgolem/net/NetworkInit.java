@@ -20,6 +20,14 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetWallGroupSlotC2SPayload.ID, SetWallGroupSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetWallGroupWindowC2SPayload.ID, SetWallGroupWindowC2SPayload.CODEC);
 
+        // Tower Mode payloads
+        PayloadTypeRegistry.playS2C().register(TowerBlockCountsS2CPayload.ID, TowerBlockCountsS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TowerBlockGroupsS2CPayload.ID, TowerBlockGroupsS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TowerGroupsStateS2CPayload.ID, TowerGroupsStateS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTowerBlockGroupC2SPayload.ID, SetTowerBlockGroupC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTowerGroupSlotC2SPayload.ID, SetTowerGroupSlotC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTowerGroupWindowC2SPayload.ID, SetTowerGroupWindowC2SPayload.CODEC);
+
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -97,6 +105,42 @@ public class NetworkInit {
                 }
             });
         });
+
+        // Tower Mode UI receivers
+        ServerPlayNetworking.registerGlobalReceiver(SetTowerBlockGroupC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTowerBlockGroup(payload.blockId(), payload.group());
+                    sendTowerUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetTowerGroupSlotC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    String id = payload.block().map(Identifier::toString).orElse("");
+                    golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
+                    sendTowerUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetTowerGroupWindowC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTowerGroupWindow(payload.group(), payload.window());
+                    sendTowerUiState(player, golem);
+                }
+            });
+        });
     }
 
     private static void sendWallUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
@@ -107,6 +151,25 @@ public class NetworkInit {
         var wins = golem.getWallGroupWindows();
         var slots = golem.getWallGroupFlatSlots();
         ServerPlayNetworking.send(player, new WallGroupsStateS2CPayload(golem.getId(), wins, slots));
+    }
+
+    private static void sendTowerUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
+        var ids = golem.getTowerUniqueBlockIds();
+        var counts = golem.getTowerBlockCounts();
+        // Convert counts map to parallel lists
+        java.util.List<String> countIds = new java.util.ArrayList<>();
+        java.util.List<Integer> countVals = new java.util.ArrayList<>();
+        for (String id : ids) {
+            countIds.add(id);
+            countVals.add(counts.getOrDefault(id, 0));
+        }
+        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), ids));
+        ServerPlayNetworking.send(player, new TowerBlockCountsS2CPayload(golem.getId(), countIds, countVals));
+        var groups = golem.getTowerBlockGroupMap(ids);
+        ServerPlayNetworking.send(player, new TowerBlockGroupsS2CPayload(golem.getId(), groups));
+        var wins = golem.getTowerGroupWindows();
+        var slots = golem.getTowerGroupFlatSlots();
+        ServerPlayNetworking.send(player, new TowerGroupsStateS2CPayload(golem.getId(), wins, slots));
     }
 
     private static GoldGolemEntity findNearestOwnedGolem(net.minecraft.server.network.ServerPlayerEntity player, double radius) {

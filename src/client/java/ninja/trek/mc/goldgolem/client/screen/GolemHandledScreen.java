@@ -44,6 +44,19 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private int draggingStartY = 0;
     private boolean draggingFromIcon = false;
     private final java.util.List<IconHit> wallIconHits = new java.util.ArrayList<>();
+
+    // Tower mode state
+    private java.util.List<String> towerUniqueBlocks = java.util.Collections.emptyList();
+    private java.util.Map<String, Integer> towerBlockCounts = new java.util.HashMap<>();
+    private java.util.List<Integer> towerBlockGroups = java.util.Collections.emptyList();
+    private java.util.List<Integer> towerGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<String> towerGroupFlatSlots = java.util.Collections.emptyList();
+    private int towerScroll = 0;
+    private final java.util.List<WindowSlider> towerRowSliders = new java.util.ArrayList<>();
+    private final int[] towerSliderToGroup = new int[6];
+    private final java.util.List<IconHit> towerIconHits = new java.util.ArrayList<>();
+    private String towerDraggingBlockId = null;
+    private String towerPendingAssignBlockId = null;
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
         IconHit(String blockId, int group, int x, int y, int w, int h) { this.blockId = blockId; this.group = group; this.x = x; this.y = y; this.w = w; this.h = h; }
@@ -134,6 +147,25 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         syncWallSliders();
     }
 
+    // Tower mode network sync methods
+    public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts) {
+        this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+        this.towerBlockCounts.clear();
+        if (ids != null && counts != null) {
+            for (int i = 0; i < Math.min(ids.size(), counts.size()); i++) {
+                this.towerBlockCounts.put(ids.get(i), counts.get(i));
+            }
+        }
+    }
+    public void setTowerBlockGroups(java.util.List<Integer> groups) {
+        this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+    }
+    public void setTowerGroupsState(java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+        this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+        syncTowerSliders();
+    }
+
     private void scrollWall(int delta) {
         int rows = getVisibleGroups().size();
         int maxScroll = Math.max(0, rows - 6);
@@ -175,6 +207,75 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 s.syncTo(0, G, w);
             }
         }
+    }
+
+    // Tower mode helper methods
+    private void scrollTower(int delta) {
+        int rows = getTowerVisibleGroups().size();
+        int maxScroll = Math.max(0, rows - 6);
+        int ns = Math.max(0, Math.min(maxScroll, towerScroll + delta));
+        if (ns != towerScroll) {
+            towerScroll = ns;
+            syncTowerSliders();
+        }
+    }
+
+    private int effectiveTowerGroupG(int group) {
+        if (towerGroupFlatSlots == null) return 0;
+        int start = group * 9;
+        int end = Math.min(start + 9, towerGroupFlatSlots.size());
+        int G = 0;
+        for (int i = end - 1; i >= start; i--) {
+            String s = towerGroupFlatSlots.get(i);
+            if (s != null && !s.isEmpty()) { G = (i - start) + 1; break; }
+        }
+        if (G == 0) G = 9;
+        return G;
+    }
+
+    private void syncTowerSliders() {
+        if (this.handler.isSliderEnabled()) return;
+        java.util.List<Integer> vis = getTowerVisibleGroups();
+        int rows = vis.size();
+        for (int i = 0; i < 6; i++) {
+            int idx = i + towerScroll;
+            int group = (idx < rows) ? vis.get(idx) : -1;
+            towerSliderToGroup[i] = group;
+            WindowSlider s = i < towerRowSliders.size() ? towerRowSliders.get(i) : null;
+            if (s == null) continue;
+            boolean visible = idx < rows;
+            s.visible = visible;
+            if (visible) {
+                int G = effectiveTowerGroupG(group);
+                int w = (group >= 0 && group < towerGroupWindows.size()) ? towerGroupWindows.get(group) : 0;
+                s.syncTo(0, G, w);
+            }
+        }
+    }
+
+    private int indexOfTowerBlockId(String id) {
+        if (towerUniqueBlocks == null) return -1;
+        for (int i = 0; i < towerUniqueBlocks.size(); i++) {
+            if (towerUniqueBlocks.get(i).equals(id)) return i;
+        }
+        return -1;
+    }
+
+    private java.util.List<Integer> getTowerVisibleGroups() {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        if (towerGroupWindows == null) return out;
+        int total = towerGroupWindows.size();
+        if (total <= 0) return out;
+        for (int g = 0; g < total; g++) out.add(g);
+        return out;
+    }
+
+    private boolean isTowerMode() {
+        return !this.handler.isSliderEnabled() && !towerUniqueBlocks.isEmpty();
+    }
+
+    private boolean isWallMode() {
+        return !this.handler.isSliderEnabled() && towerUniqueBlocks.isEmpty() && !wallUniqueBlocks.isEmpty();
     }
 
     private int indexOfBlockId(String id) {
@@ -386,7 +487,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
             widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
             this.addDrawableChild(widthSlider);
-        } else {
+        } else if (isWallMode()) {
             // Wall Mode UI: create per-row sliders and scroll buttons
             wallRowSliders.clear();
             int gridTop = this.y + 26;
@@ -418,6 +519,38 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             this.addDrawableChild(upBtn);
             this.addDrawableChild(dnBtn);
             syncWallSliders();
+        } else if (isTowerMode()) {
+            // Tower Mode UI: create per-row sliders and scroll buttons
+            towerRowSliders.clear();
+            int gridTop = this.y + 26;
+            int rowSpacing = 18 + 6;
+            int gridX = this.x + 8;
+            int towerWx2 = gridX + 9 * 18 + 12;
+            int towerW2 = 90;
+            int towerH2 = 10;
+            for (int r = 0; r < 6; r++) {
+                int sy = gridTop + r * rowSpacing + 3;
+                WindowSlider s = new WindowSlider(towerWx2, sy, towerW2, towerH2, 0.0, 0) {
+                    @Override
+                    protected void applyValue() {
+                        int sliderIdx = towerRowSliders.indexOf(this);
+                        if (sliderIdx < 0 || sliderIdx >= 6) return;
+                        int group = towerSliderToGroup[sliderIdx];
+                        if (group < 0) return;
+                        int G = effectiveTowerGroupG(group);
+                        int w = (G <= 0) ? 0 : (int) Math.round(this.value * G);
+                        w = Math.max(0, Math.min(G, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTowerGroupWindowC2SPayload(getEntityId(), group, w));
+                    }
+                };
+                towerRowSliders.add(s);
+                this.addDrawableChild(s);
+            }
+            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> { scrollTower(-1); }).dimensions(towerWx2 + towerW2 + 4, gridTop, 14, 12).build();
+            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollTower(1); }).dimensions(towerWx2 + towerW2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
+            this.addDrawableChild(upBtn);
+            this.addDrawableChild(dnBtn);
+            syncTowerSliders();
         }
     }
 
@@ -624,8 +757,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             drawSliderMarkers(context, windowSliderStep, effectiveG(1));
         }
 
-        // Wall Mode UI: label icons aligned to group rows + group rows (foreground coords are relative to GUI origin)
-        if (!this.handler.isSliderEnabled()) {
+        // Wall Mode and Tower Mode UI: label icons aligned to group rows + group rows (foreground coords are relative to GUI origin)
+        if (isWallMode()) {
             int iconX = -20; // relative to GUI left (first icon for a row). Additional icons for same row draw to the left.
             int startY = 26; // relative to GUI top
             int rowSpacing = 18 + 6;
@@ -692,10 +825,84 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     }
                 }
             }
+        } else if (isTowerMode()) {
+            // Tower Mode UI: similar to wall mode but with block counts displayed
+            int iconX = -50; // relative to GUI left, shifted to make room for count text
+            int startY = 26; // relative to GUI top
+            int rowSpacing = 18 + 6;
+            // Draw icons per visible group row; stack multiple icons leftward
+            towerIconHits.clear();
+            java.util.List<Integer> vis = getTowerVisibleGroups();
+            int rows = vis.size();
+            int drawRows = Math.min(Math.max(0, rows - towerScroll), 6);
+            if (towerUniqueBlocks != null && towerBlockGroups != null && !towerUniqueBlocks.isEmpty() && !towerBlockGroups.isEmpty()) {
+                java.util.Map<Integer, java.util.List<String>> groupToBlocks = new java.util.HashMap<>();
+                int n = Math.min(towerUniqueBlocks.size(), towerBlockGroups.size());
+                for (int i = 0; i < n; i++) {
+                    int g = towerBlockGroups.get(i);
+                    groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(towerUniqueBlocks.get(i));
+                }
+                for (int r = 0; r < drawRows; r++) {
+                    int groupIdx = vis.get(r + towerScroll);
+                    java.util.List<String> list = groupToBlocks.getOrDefault(groupIdx, java.util.Collections.emptyList());
+                    int y = startY + r * rowSpacing;
+                    for (int i = 0; i < list.size(); i++) {
+                        String id = list.get(i);
+                        var ident = Identifier.tryParse(id);
+                        if (ident == null) continue;
+                        var block = Registries.BLOCK.get(ident);
+                        if (block == null) continue;
+                        ItemStack icon = new ItemStack(block.asItem());
+                        int ix = iconX - i * 18; // stack leftward
+                        context.drawItem(icon, ix, y);
+                        // Draw block count next to icon
+                        int count = towerBlockCounts.getOrDefault(id, 0);
+                        String countText = "x" + count;
+                        int textX = ix + 18;
+                        int textY = y + 4;
+                        context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+                        towerIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));
+                    }
+                }
+            }
+            // Group rows (ghost slots + items)
+            vis = getTowerVisibleGroups();
+            rows = vis.size();
+            drawRows = Math.min(Math.max(0, rows - towerScroll), 6);
+            int gridX = 8; // relative to GUI left, align with path mode
+            for (int r = 0; r < drawRows; r++) {
+                int groupIdx = vis.get(r + towerScroll);
+                int y = startY + r * rowSpacing;
+                for (int c = 0; c < 9; c++) {
+                    int x = gridX + c * 18;
+                    int col = 0xFF404040;
+                    int ix1 = x, iy1 = y, ix2 = x + 16, iy2 = y + 16;
+                    context.fill(ix1, iy1, ix2, iy2, 0x80000000);
+                    // border 1px
+                    context.fill(ix1 - 1, iy1 - 1, ix2 + 1, iy1, col); // top
+                    context.fill(ix1 - 1, iy2, ix2 + 1, iy2 + 1, col); // bottom
+                    context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
+                    context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
+                    int flatIndex = groupIdx * 9 + c;
+                    if (flatIndex >= 0 && flatIndex < towerGroupFlatSlots.size()) {
+                        String bid = towerGroupFlatSlots.get(flatIndex);
+                        if (bid != null && !bid.isEmpty()) {
+                            var ident = Identifier.tryParse(bid);
+                            if (ident != null) {
+                                var block = Registries.BLOCK.get(ident);
+                                if (block != null) {
+                                    ItemStack st = new ItemStack(block.asItem());
+                                    context.drawItem(st, x, y);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Cursor-following visual when dragging a label icon
-        if (!this.handler.isSliderEnabled() && draggingFromIcon && draggingBlockId != null) {
+        if ((isWallMode() || isTowerMode()) && draggingFromIcon && draggingBlockId != null) {
             var ident = Identifier.tryParse(draggingBlockId);
             if (ident != null) {
                 var block = Registries.BLOCK.get(ident);

@@ -32,21 +32,108 @@ public class PumpkinSummoning {
 
         if (world.isClient()) return ActionResult.SUCCESS;
 
+        // Check for Tower Mode: gold block below the pumpkin's gold block
+        BlockPos belowBelow = below.down();
+        boolean towerMode = world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
+
         // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
+        // Tower mode takes precedence over wall mode
         boolean wallMode = false;
-        for (var dir : new net.minecraft.util.math.Direction[]{
-                net.minecraft.util.math.Direction.NORTH,
-                net.minecraft.util.math.Direction.SOUTH,
-                net.minecraft.util.math.Direction.EAST,
-                net.minecraft.util.math.Direction.WEST,
-                net.minecraft.util.math.Direction.UP
-        }) {
-            var np = below.offset(dir);
-            var st = world.getBlockState(np);
-            if (!st.isAir() && !st.isOf(Blocks.SNOW)) { wallMode = true; break; }
+        if (!towerMode) {
+            for (var dir : new net.minecraft.util.math.Direction[]{
+                    net.minecraft.util.math.Direction.NORTH,
+                    net.minecraft.util.math.Direction.SOUTH,
+                    net.minecraft.util.math.Direction.EAST,
+                    net.minecraft.util.math.Direction.WEST,
+                    net.minecraft.util.math.Direction.UP
+            }) {
+                var np = below.offset(dir);
+                var st = world.getBlockState(np);
+                if (!st.isAir() && !st.isOf(Blocks.SNOW)) { wallMode = true; break; }
+            }
         }
 
-        if (wallMode) {
+        if (towerMode) {
+            // Tower Mode: Find bottom gold block and count total height
+            BlockPos bottomGold = belowBelow;
+            // Find the actual bottom gold block by going down until we hit a non-gold block
+            while (world.getBlockState(bottomGold.down()).isOf(Blocks.GOLD_BLOCK)) {
+                bottomGold = bottomGold.down();
+            }
+
+            // Count gold blocks upward from below (pumpkin's gold block) to determine tower height
+            int towerHeight = 0;
+            BlockPos checkPos = below; // Start from the pumpkin's gold block
+            while (world.getBlockState(checkPos).isOf(Blocks.GOLD_BLOCK)) {
+                towerHeight++;
+                checkPos = checkPos.up();
+            }
+
+            if (towerHeight == 0) {
+                if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
+                    sp.sendMessage(net.minecraft.text.Text.literal("[Gold Golem] Tower mode: No gold blocks found for height"), true);
+                }
+                return ActionResult.FAIL;
+            }
+
+            // Scan the module structure from the bottom gold block
+            var res = ninja.trek.mc.goldgolem.tower.TowerScanner.scan(world, bottomGold, player);
+            if (!res.ok()) {
+                if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
+                    sp.sendMessage(net.minecraft.text.Text.literal("[Gold Golem] Tower mode summon failed: " + res.error()), true);
+                }
+                return ActionResult.FAIL;
+            }
+            var def = res.def();
+
+            // Spawn golem with tower mode
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+            golem.refreshPositionAndAngles(bottomGold.getX() + 0.5, bottomGold.getY(), bottomGold.getZ() + 0.5, player.getYaw(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(GoldGolemEntity.BuildMode.TOWER);
+
+            // Persist JSON file under game dir
+            String jsonRel = null;
+            try {
+                java.nio.file.Path gameDir = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir();
+                java.nio.file.Path out = ninja.trek.mc.goldgolem.tower.TowerScanner.writeJson(gameDir, golem.getUuid(), def);
+                jsonRel = gameDir.relativize(out).toString();
+            } catch (Exception ioe) {
+                // Non-fatal; continue without external snapshot
+                jsonRel = null;
+            }
+
+            // Build module template with voxels relative to origin
+            java.util.List<ninja.trek.mc.goldgolem.tower.TowerModuleTemplate.Voxel> vox = new java.util.ArrayList<>();
+            int minY = Integer.MAX_VALUE;
+            int maxY = Integer.MIN_VALUE;
+            for (var r : def.voxels) {
+                var abs = def.origin.add(r);
+                var st = world.getBlockState(abs);
+                vox.add(new ninja.trek.mc.goldgolem.tower.TowerModuleTemplate.Voxel(r, st));
+                minY = Math.min(minY, r.getY());
+                maxY = Math.max(maxY, r.getY());
+            }
+            ninja.trek.mc.goldgolem.tower.TowerModuleTemplate template =
+                new ninja.trek.mc.goldgolem.tower.TowerModuleTemplate(vox,
+                    minY == Integer.MAX_VALUE ? 0 : minY,
+                    maxY == Integer.MIN_VALUE ? 0 : maxY);
+
+            // Set tower data on golem
+            golem.setTowerCapture(def.uniqueBlockIds, def.blockCounts, bottomGold, jsonRel, towerHeight, template);
+
+            // Remove all gold blocks in the column
+            BlockPos removePos = bottomGold;
+            while (world.getBlockState(removePos).isOf(Blocks.GOLD_BLOCK)) {
+                world.breakBlock(removePos, false, player);
+                removePos = removePos.up();
+            }
+
+            ServerWorld sw = (ServerWorld) world;
+            sw.spawnEntity(golem);
+            if (!player.isCreative()) stack.decrement(1);
+            return ActionResult.SUCCESS;
+        } else if (wallMode) {
             // Scan combined module per spec
             var res = ninja.trek.mc.goldgolem.wall.WallScanner.scan(world, below, player);
             if (!res.ok()) {
