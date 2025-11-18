@@ -32,6 +32,7 @@ import ninja.trek.mc.goldgolem.screen.GolemScreens;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
+import net.minecraft.block.BlockState;
 
 import java.util.Optional;
 
