@@ -373,15 +373,15 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    protected void writeCustomDataToNbt(NbtCompound nbt) {
-        super.writeCustomDataToNbt(nbt);
+    public void writeNbt(NbtCompound nbt, net.minecraft.registry.RegistryWrapper.WrapperLookup registryLookup) {
+        super.writeNbt(nbt, registryLookup);
 
         // Save build mode
         nbt.putString("BuildMode", buildMode.name());
 
-        // Save owner
+        // Save owner UUID as int array
         if (ownerUuid != null) {
-            nbt.putUuid("Owner", ownerUuid);
+            nbt.putIntArray("Owner", uuidToIntArray(ownerUuid));
         }
 
         // Save inventory
@@ -389,7 +389,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (int i = 0; i < inventory.size(); i++) {
             items.set(i, inventory.getStack(i));
         }
-        Inventories.writeNbt(nbt, items, this.getWorld().getRegistryManager());
+        Inventories.writeNbt(nbt, items, registryLookup);
 
         // Save gradient settings (Path mode)
         nbt.putInt("PathWidth", pathWidth);
@@ -429,69 +429,94 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    protected void readCustomDataFromNbt(NbtCompound nbt) {
-        super.readCustomDataFromNbt(nbt);
+    public void readNbt(NbtCompound nbt, net.minecraft.registry.RegistryWrapper.WrapperLookup registryLookup) {
+        super.readNbt(nbt, registryLookup);
 
         // Load build mode
-        if (nbt.contains("BuildMode")) {
+        nbt.getString("BuildMode").ifPresent(mode -> {
             try {
-                buildMode = BuildMode.valueOf(nbt.getString("BuildMode"));
+                buildMode = BuildMode.valueOf(mode);
             } catch (IllegalArgumentException e) {
                 buildMode = BuildMode.PATH;
             }
-        }
+        });
 
-        // Load owner
-        if (nbt.containsUuid("Owner")) {
-            ownerUuid = nbt.getUuid("Owner");
+        // Load owner UUID from int array
+        if (nbt.contains("Owner")) {
+            int[] ownerArray = nbt.getIntArray("Owner");
+            if (ownerArray.length == 4) {
+                ownerUuid = intArrayToUuid(ownerArray);
+            }
         }
 
         // Load inventory
         DefaultedList<ItemStack> items = DefaultedList.ofSize(inventory.size(), ItemStack.EMPTY);
-        Inventories.readNbt(nbt, items, this.getWorld().getRegistryManager());
+        Inventories.readNbt(nbt, items, registryLookup);
         for (int i = 0; i < items.size() && i < inventory.size(); i++) {
             inventory.setStack(i, items.get(i));
         }
 
         // Load gradient settings
-        pathWidth = nbt.getInt("PathWidth");
-        gradientWindow = nbt.getInt("GradientWindow");
-        stepGradientWindow = nbt.getInt("StepGradientWindow");
+        pathWidth = nbt.getInt("PathWidth").orElse(3);
+        gradientWindow = nbt.getInt("GradientWindow").orElse(1);
+        stepGradientWindow = nbt.getInt("StepGradientWindow").orElse(1);
 
         // Load mining mode state
         if (buildMode == BuildMode.MINING) {
             if (nbt.contains("MiningChestX")) {
-                miningChestPos = new BlockPos(nbt.getInt("MiningChestX"),
-                    nbt.getInt("MiningChestY"), nbt.getInt("MiningChestZ"));
+                miningChestPos = new BlockPos(
+                    nbt.getInt("MiningChestX").orElse(0),
+                    nbt.getInt("MiningChestY").orElse(0),
+                    nbt.getInt("MiningChestZ").orElse(0)
+                );
             }
 
-            if (nbt.contains("MiningDirection")) {
+            nbt.getString("MiningDirection").ifPresent(dirStr -> {
                 try {
-                    miningDirection = net.minecraft.util.math.Direction.valueOf(nbt.getString("MiningDirection"));
+                    miningDirection = net.minecraft.util.math.Direction.valueOf(dirStr);
                 } catch (IllegalArgumentException e) {
                     miningDirection = null;
                 }
-            }
+            });
 
             if (nbt.contains("MiningStartX")) {
-                miningStartPos = new BlockPos(nbt.getInt("MiningStartX"),
-                    nbt.getInt("MiningStartY"), nbt.getInt("MiningStartZ"));
+                miningStartPos = new BlockPos(
+                    nbt.getInt("MiningStartX").orElse(0),
+                    nbt.getInt("MiningStartY").orElse(0),
+                    nbt.getInt("MiningStartZ").orElse(0)
+                );
             }
 
-            miningBranchDepth = nbt.getInt("MiningBranchDepth");
-            miningBranchSpacing = nbt.getInt("MiningBranchSpacing");
-            miningTunnelHeight = nbt.getInt("MiningTunnelHeight");
-            miningPrimaryProgress = nbt.getInt("MiningPrimaryProgress");
-            miningCurrentBranch = nbt.getInt("MiningCurrentBranch");
-            miningBranchLeft = nbt.getBoolean("MiningBranchLeft");
-            miningBranchProgress = nbt.getInt("MiningBranchProgress");
-            miningReturningToChest = nbt.getBoolean("MiningReturningToChest");
-            miningIdleAtChest = nbt.getBoolean("MiningIdleAtChest");
+            miningBranchDepth = nbt.getInt("MiningBranchDepth").orElse(16);
+            miningBranchSpacing = nbt.getInt("MiningBranchSpacing").orElse(3);
+            miningTunnelHeight = nbt.getInt("MiningTunnelHeight").orElse(2);
+            miningPrimaryProgress = nbt.getInt("MiningPrimaryProgress").orElse(0);
+            miningCurrentBranch = nbt.getInt("MiningCurrentBranch").orElse(-1);
+            miningBranchLeft = nbt.getBoolean("MiningBranchLeft").orElse(true);
+            miningBranchProgress = nbt.getInt("MiningBranchProgress").orElse(0);
+            miningReturningToChest = nbt.getBoolean("MiningReturningToChest").orElse(false);
+            miningIdleAtChest = nbt.getBoolean("MiningIdleAtChest").orElse(true);
 
-            if (nbt.contains("MiningBuildingBlockType")) {
-                miningBuildingBlockType = nbt.getString("MiningBuildingBlockType");
-            }
+            miningBuildingBlockType = nbt.getString("MiningBuildingBlockType").orElse(null);
         }
+    }
+
+    // UUID conversion helpers for NBT
+    private static int[] uuidToIntArray(java.util.UUID uuid) {
+        long most = uuid.getMostSignificantBits();
+        long least = uuid.getLeastSignificantBits();
+        return new int[]{
+            (int)(most >> 32),
+            (int)most,
+            (int)(least >> 32),
+            (int)least
+        };
+    }
+
+    private static java.util.UUID intArrayToUuid(int[] array) {
+        long most = ((long)array[0] << 32) | (array[1] & 0xFFFFFFFFL);
+        long least = ((long)array[2] << 32) | (array[3] & 0xFFFFFFFFL);
+        return new java.util.UUID(most, least);
     }
 
     public static DefaultAttributeContainer.Builder createAttributes() {
