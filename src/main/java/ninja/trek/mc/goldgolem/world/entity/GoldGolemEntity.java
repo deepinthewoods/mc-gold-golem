@@ -373,7 +373,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    public void writeCustomDataToNbt(NbtCompound nbt) {
+    protected void writeCustomDataToNbt(NbtCompound nbt) {
         super.writeCustomDataToNbt(nbt);
 
         // Save build mode
@@ -389,7 +389,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (int i = 0; i < inventory.size(); i++) {
             items.set(i, inventory.getStack(i));
         }
-        Inventories.writeNbt(nbt, items, this.getRegistryManager());
+        Inventories.writeNbt(nbt, items, this.getWorld().getRegistryManager());
 
         // Save gradient settings (Path mode)
         nbt.putInt("PathWidth", pathWidth);
@@ -429,7 +429,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    public void readCustomDataFromNbt(NbtCompound nbt) {
+    protected void readCustomDataFromNbt(NbtCompound nbt) {
         super.readCustomDataFromNbt(nbt);
 
         // Load build mode
@@ -448,7 +448,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
         // Load inventory
         DefaultedList<ItemStack> items = DefaultedList.ofSize(inventory.size(), ItemStack.EMPTY);
-        Inventories.readNbt(nbt, items, this.getRegistryManager());
+        Inventories.readNbt(nbt, items, this.getWorld().getRegistryManager());
         for (int i = 0; i < items.size() && i < inventory.size(); i++) {
             inventory.setStack(i, items.get(i));
         }
@@ -1674,7 +1674,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
         // Find best tool in inventory
         ItemStack bestTool = findBestTool(state);
-        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeed(state);
+        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
 
         // Golem mines at half speed (double the time)
         breakSpeed *= 0.5f;
@@ -1761,7 +1761,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             ItemStack stack = inventory.getStack(i);
             if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
 
-            float speed = stack.getMiningSpeed(state);
+            float speed = stack.getMiningSpeedMultiplier(state);
             if (speed > bestSpeed) {
                 bestSpeed = speed;
                 bestTool = stack;
