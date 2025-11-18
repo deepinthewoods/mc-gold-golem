@@ -1902,16 +1902,16 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private BlockPos getNearestExcavationChest() {
-        double dist1 = this.getPos().squaredDistanceTo(
-            excavationChestPos1.getX() + 0.5,
-            excavationChestPos1.getY() + 0.5,
-            excavationChestPos1.getZ() + 0.5
-        );
-        double dist2 = this.getPos().squaredDistanceTo(
-            excavationChestPos2.getX() + 0.5,
-            excavationChestPos2.getY() + 0.5,
-            excavationChestPos2.getZ() + 0.5
-        );
+        double dx1 = this.getX() - (excavationChestPos1.getX() + 0.5);
+        double dy1 = this.getY() - (excavationChestPos1.getY() + 0.5);
+        double dz1 = this.getZ() - (excavationChestPos1.getZ() + 0.5);
+        double dist1 = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
+
+        double dx2 = this.getX() - (excavationChestPos2.getX() + 0.5);
+        double dy2 = this.getY() - (excavationChestPos2.getY() + 0.5);
+        double dz2 = this.getZ() - (excavationChestPos2.getZ() + 0.5);
+        double dist2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+
         return dist1 <= dist2 ? excavationChestPos1 : excavationChestPos2;
     }
 
@@ -2138,7 +2138,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
             // Show particles
             if (this.getEntityWorld() instanceof ServerWorld sw) {
-                sw.spawnParticles(ParticleTypes.BLOCK, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                sw.spawnParticles(ParticleTypes.CLOUD, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
                     10, 0.25, 0.25, 0.25, 0.1);
             }
 
@@ -2146,40 +2146,6 @@ public class GoldGolemEntity extends PathAwareEntity {
             excavationCurrentTarget = null;
             excavationBreakProgress = 0;
         }
-    }
-
-    private ItemStack transferToInventory(ItemStack stack, net.minecraft.inventory.Inventory targetInv) {
-        if (stack.isEmpty()) return ItemStack.EMPTY;
-
-        ItemStack remaining = stack.copy();
-
-        // Try to merge with existing stacks first
-        for (int i = 0; i < targetInv.size(); i++) {
-            ItemStack targetStack = targetInv.getStack(i);
-            if (targetStack.isEmpty()) continue;
-
-            if (ItemStack.areItemsAndComponentsEqual(remaining, targetStack)) {
-                int space = targetStack.getMaxCount() - targetStack.getCount();
-                if (space > 0) {
-                    int toTransfer = Math.min(space, remaining.getCount());
-                    targetStack.setCount(targetStack.getCount() + toTransfer);
-                    targetInv.setStack(i, targetStack);
-                    remaining.decrement(toTransfer);
-                    if (remaining.isEmpty()) return ItemStack.EMPTY;
-                }
-            }
-        }
-
-        // Place in empty slots
-        for (int i = 0; i < targetInv.size(); i++) {
-            if (targetInv.getStack(i).isEmpty()) {
-                targetInv.setStack(i, remaining.copy());
-                return ItemStack.EMPTY;
-            }
-        }
-
-        // Chest is full, return remaining
-        return remaining;
     }
 
     // ========== END EXCAVATION MODE METHODS ==========
