@@ -933,8 +933,14 @@ public class GoldGolemEntity extends PathAwareEntity {
                 stuckTicks = 0;
             }
 
+            // Determine next block for animation preview
+            BlockPos nextPos = null;
+            if (towerPlacementCursor + 1 < currentLayerVoxels.size()) {
+                nextPos = currentLayerVoxels.get(towerPlacementCursor + 1);
+            }
+
             // Place the block
-            placeTowerBlock(targetPos);
+            placeTowerBlock(targetPos, nextPos);
             towerPlacementCursor++;
         }
 
@@ -974,7 +980,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return layerVoxels;
     }
 
-    private void placeTowerBlock(BlockPos pos) {
+    private void placeTowerBlock(BlockPos pos, BlockPos nextPos) {
         if (this.getEntityWorld().isClient()) return;
 
         // Get the original block state from the template
@@ -986,7 +992,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         Integer groupIdx = towerBlockGroup.get(blockId);
         if (groupIdx == null || groupIdx < 0 || groupIdx >= towerGroupSlots.size()) {
             // No group mapping, place original block
-            placeBlockFromInventory(pos, targetState);
+            placeBlockFromInventory(pos, targetState, nextPos);
             return;
         }
 
@@ -1000,14 +1006,14 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (sampledId != null && !sampledId.isEmpty()) {
                 BlockState sampledState = getBlockStateFromId(sampledId);
                 if (sampledState != null) {
-                    placeBlockFromInventory(pos, sampledState);
+                    placeBlockFromInventory(pos, sampledState, nextPos);
                     return;
                 }
             }
         }
 
         // Fallback: place original block
-        placeBlockFromInventory(pos, targetState);
+        placeBlockFromInventory(pos, targetState, nextPos);
     }
 
     private BlockState getTowerBlockStateAt(BlockPos pos) {
@@ -1070,7 +1076,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return Math.max(0, Math.min(G - 1, index));
     }
 
-    private void placeBlockFromInventory(BlockPos pos, BlockState state) {
+    private void placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
         // Check if block already exists at position
         if (this.getEntityWorld().getBlockState(pos).equals(state)) return;
 
@@ -1078,8 +1084,9 @@ public class GoldGolemEntity extends PathAwareEntity {
         String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
         if (consumeBlockFromInventory(blockId)) {
             this.getEntityWorld().setBlockState(pos, state);
-            // Set animation targets
-            setNextBlockTarget(pos);
+            // Set hand animation with current and next block positions
+            beginHandAnimation(leftHandActive, pos, nextPos);
+            leftHandActive = !leftHandActive;
         }
     }
 
