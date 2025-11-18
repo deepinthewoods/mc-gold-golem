@@ -16,6 +16,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     private final int controlsMargin;
     private final int golemRows;
     private final boolean sliderEnabled;
+    private final int sliderMode; // 0=none, 1=path, 2=excavation, 3=mining
 
     // Client-side constructor (from ExtendedScreenHandlerType buffer)
     public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, GolemOpenData data) {
@@ -26,6 +27,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         int titleLine = 10;
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), titleLine);
         this.sliderEnabled = data.sliderEnabled();
+        this.sliderMode = data.slider();
         this.golemInventory = new SimpleInventory(this.golemSlotCount);
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -39,6 +41,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.golemRows = (this.golemSlotCount + 8) / 9;
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), 10);
         this.sliderEnabled = data.sliderEnabled();
+        this.sliderMode = data.slider();
         this.golemInventory = golemInventory;
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -81,6 +84,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     public int getGolemSlotCount() { return golemSlotCount; }
     public int getGolemRows() { return golemRows; }
     public boolean isSliderEnabled() { return sliderEnabled; }
+    public int getSliderMode() { return sliderMode; }
 
     @Override
     public ItemStack quickMove(PlayerEntity player, int index) {

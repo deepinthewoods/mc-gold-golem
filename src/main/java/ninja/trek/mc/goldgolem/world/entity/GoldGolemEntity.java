@@ -37,7 +37,7 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import java.util.Optional;
 
 public class GoldGolemEntity extends PathAwareEntity {
-    public enum BuildMode { PATH, WALL, TOWER, MINING }
+    public enum BuildMode { PATH, WALL, TOWER, MINING, EXCAVATION }
     public static final int INVENTORY_SIZE = 27;
 
     // Data trackers for client-server sync
@@ -116,6 +116,22 @@ public class GoldGolemEntity extends PathAwareEntity {
     private String miningBuildingBlockType = null; // block ID to keep for placing under feet
     private int miningBreakProgress = 0; // ticks spent breaking current block
     private BlockPos miningCurrentTarget = null; // block currently being broken
+
+    // Excavation-mode state
+    private BlockPos excavationChestPos1 = null; // first chest location
+    private BlockPos excavationChestPos2 = null; // second chest location
+    private net.minecraft.util.math.Direction excavationDir1 = null; // direction of first chest
+    private net.minecraft.util.math.Direction excavationDir2 = null; // direction of second chest
+    private BlockPos excavationStartPos = null; // starting position (center/gold block)
+    private int excavationHeight = 3; // tunnel height (1-5) - mines upward
+    private int excavationDepth = 16; // radius from center (1-64)
+    private int excavationCurrentRing = 0; // current concentric square ring (0 = center)
+    private int excavationRingProgress = 0; // position within current ring (clockwise)
+    private boolean excavationReturningToChest = false; // returning to deposit
+    private boolean excavationIdleAtStart = false; // waiting for nugget
+    private String excavationBuildingBlockType = null; // block ID to keep for placing floor
+    private int excavationBreakProgress = 0; // ticks spent breaking current block
+    private BlockPos excavationCurrentTarget = null; // block currently being broken
 
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
@@ -354,6 +370,22 @@ public class GoldGolemEntity extends PathAwareEntity {
     public int getMiningBranchSpacing() { return miningBranchSpacing; }
     public int getMiningTunnelHeight() { return miningTunnelHeight; }
 
+    // Excavation mode configuration
+    public void setExcavationConfig(BlockPos chest1, BlockPos chest2, net.minecraft.util.math.Direction dir1, net.minecraft.util.math.Direction dir2, BlockPos startPos) {
+        this.excavationChestPos1 = chest1;
+        this.excavationChestPos2 = chest2;
+        this.excavationDir1 = dir1;
+        this.excavationDir2 = dir2;
+        this.excavationStartPos = startPos;
+        this.excavationIdleAtStart = true; // Start idle, waiting for gold nugget
+    }
+    public void setExcavationSliders(int height, int depth) {
+        this.excavationHeight = Math.max(1, Math.min(5, height));
+        this.excavationDepth = Math.max(1, Math.min(64, depth));
+    }
+    public int getExcavationHeight() { return excavationHeight; }
+    public int getExcavationDepth() { return excavationDepth; }
+
     public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
         super(type, world);
     }
@@ -495,8 +527,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
 
-            // Mining mode has different behavior - doesn't track owner
+            // Mining and Excavation modes have different behavior - doesn't track owner
             if (this.buildMode == BuildMode.MINING) { tickMiningMode(); return; }
+            if (this.buildMode == BuildMode.EXCAVATION) { tickExcavationMode(); return; }
 
             // Look at owner while building (Path/Wall/Tower modes)
             PlayerEntity owner = getOwnerPlayer();
@@ -1743,6 +1776,380 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
+    // ========== EXCAVATION MODE METHODS ==========
+
+    private void tickExcavationMode() {
+        // Excavation mode state machine
+        if (excavationChestPos1 == null || excavationChestPos2 == null || excavationStartPos == null) {
+            // Invalid state, stop excavation
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+            return;
+        }
+
+        // State 1: Idle at start (waiting for gold nugget)
+        if (excavationIdleAtStart) {
+            // Navigate to start position and stay there
+            double dx = this.getX() - (excavationStartPos.getX() + 0.5);
+            double dz = this.getZ() - (excavationStartPos.getZ() + 0.5);
+            double distSq = dx * dx + dz * dz;
+            if (distSq > 4.0) {
+                this.getNavigation().startMovingTo(excavationStartPos.getX() + 0.5,
+                    excavationStartPos.getY(), excavationStartPos.getZ() + 0.5, 1.0);
+            } else {
+                this.getNavigation().stop();
+            }
+            return;
+        }
+
+        // State 2: Returning to chest to deposit
+        if (excavationReturningToChest) {
+            tickExcavationReturn();
+            return;
+        }
+
+        // State 3: Check if inventory is full (need to return)
+        if (isExcavationInventoryFull()) {
+            excavationReturningToChest = true;
+            excavationCurrentTarget = null;
+            excavationBreakProgress = 0;
+            return;
+        }
+
+        // State 4: Active excavation
+        tickExcavationActive();
+    }
+
+    private void tickExcavationReturn() {
+        // Navigate to nearest chest
+        BlockPos nearestChest = getNearestExcavationChest();
+        double dx = this.getX() - (nearestChest.getX() + 0.5);
+        double dz = this.getZ() - (nearestChest.getZ() + 0.5);
+        double distSq = dx * dx + dz * dz;
+
+        if (distSq > 4.0) {
+            // Still far from chest, navigate
+            this.getNavigation().startMovingTo(nearestChest.getX() + 0.5,
+                nearestChest.getY(), nearestChest.getZ() + 0.5, 1.1);
+
+            // Check if stuck and teleport if necessary
+            if (this.getNavigation().isIdle() && distSq > 16.0) {
+                stuckTicks++;
+                if (stuckTicks >= 60) {
+                    // Teleport to chest
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(),
+                            40, 0.5, 0.5, 0.5, 0.2);
+                        sw.spawnParticles(ParticleTypes.PORTAL, nearestChest.getX() + 0.5,
+                            nearestChest.getY() + 0.5, nearestChest.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
+                    }
+                    this.refreshPositionAndAngles(nearestChest.getX() + 0.5, nearestChest.getY(),
+                        nearestChest.getZ() + 0.5, this.getYaw(), this.getPitch());
+                    this.getNavigation().stop();
+                    stuckTicks = 0;
+                }
+            } else {
+                stuckTicks = 0;
+            }
+        } else {
+            // Close to chest, deposit inventory
+            this.getNavigation().stop();
+            depositExcavationInventoryToChest(nearestChest);
+            excavationReturningToChest = false;
+            // Check if chest is full after deposit
+            if (isExcavationInventoryFull()) {
+                // Chest is full, go idle
+                excavationIdleAtStart = true;
+                buildingPaths = false;
+                this.dataTracker.set(BUILDING_PATHS, false);
+            }
+        }
+    }
+
+    private void tickExcavationActive() {
+        // Place floor blocks if needed
+        placeExcavationFloorBlocks();
+
+        // Determine next excavation target
+        BlockPos targetPos = getNextExcavationTarget();
+        if (targetPos == null) {
+            // Excavation complete, stop
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+            return;
+        }
+
+        // Navigate to target
+        double ty = targetPos.getY();
+        this.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
+
+        // Check if close enough to mine
+        double dx = this.getX() - (targetPos.getX() + 0.5);
+        double dy = this.getY() - targetPos.getY();
+        double dz = this.getZ() - (targetPos.getZ() + 0.5);
+        double distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq <= 25.0) { // Within 5 block reach
+            // Mine the block
+            excavateBlock(targetPos);
+        } else {
+            // Reset mining progress if too far
+            if (excavationCurrentTarget != null && !excavationCurrentTarget.equals(targetPos)) {
+                excavationCurrentTarget = null;
+                excavationBreakProgress = 0;
+            }
+        }
+    }
+
+    private BlockPos getNearestExcavationChest() {
+        double dx1 = this.getX() - (excavationChestPos1.getX() + 0.5);
+        double dy1 = this.getY() - (excavationChestPos1.getY() + 0.5);
+        double dz1 = this.getZ() - (excavationChestPos1.getZ() + 0.5);
+        double dist1 = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
+
+        double dx2 = this.getX() - (excavationChestPos2.getX() + 0.5);
+        double dy2 = this.getY() - (excavationChestPos2.getY() + 0.5);
+        double dz2 = this.getZ() - (excavationChestPos2.getZ() + 0.5);
+        double dist2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+
+        return dist1 <= dist2 ? excavationChestPos1 : excavationChestPos2;
+    }
+
+    private BlockPos getNextExcavationTarget() {
+        // Mine in concentric square rings, clockwise
+        // Each position mines a full column from golem Y up to Y + height - 1
+
+        // Check if current ring is complete
+        int ringSize = excavationCurrentRing == 0 ? 1 : (excavationCurrentRing * 8);
+        if (excavationRingProgress >= ringSize) {
+            // Move to next ring
+            excavationCurrentRing++;
+            excavationRingProgress = 0;
+        }
+
+        // Check if excavation is complete (reached depth)
+        if (excavationCurrentRing > excavationDepth) {
+            return null; // Done
+        }
+
+        // Get current position in the ring
+        BlockPos ringPos = getRingPosition(excavationCurrentRing, excavationRingProgress);
+
+        // Check each Y level in the column (golem Y level up to Y + height)
+        int golemY = (int) this.getY();
+        for (int dy = 0; dy < excavationHeight; dy++) {
+            BlockPos checkPos = ringPos.up(dy);
+            if (shouldMineBlock(checkPos)) {
+                return checkPos;
+            }
+        }
+
+        // All layers mined at this position, advance to next position in ring
+        excavationRingProgress++;
+        return getNextExcavationTarget(); // Recursive call
+    }
+
+    private BlockPos getRingPosition(int ring, int progress) {
+        // Ring 0 is just the center
+        if (ring == 0) {
+            return excavationStartPos;
+        }
+
+        // For ring > 0, calculate position in clockwise square
+        // Start from top-left corner, go clockwise
+        int sideLength = ring * 2;
+        int x = excavationStartPos.getX();
+        int z = excavationStartPos.getZ();
+
+        // Determine which side of the square we're on
+        int perimeter = sideLength * 4;
+        int pos = progress % perimeter;
+
+        if (pos < sideLength) {
+            // Top side (moving east)
+            x = x - ring + pos;
+            z = z - ring;
+        } else if (pos < sideLength * 2) {
+            // Right side (moving south)
+            x = x + ring;
+            z = z - ring + (pos - sideLength);
+        } else if (pos < sideLength * 3) {
+            // Bottom side (moving west)
+            x = x + ring - (pos - sideLength * 2);
+            z = z + ring;
+        } else {
+            // Left side (moving north)
+            x = x - ring;
+            z = z + ring - (pos - sideLength * 3);
+        }
+
+        return new BlockPos(x, excavationStartPos.getY(), z);
+    }
+
+    private boolean isExcavationInventoryFull() {
+        // Check if inventory has space (excluding one stack of building blocks)
+        int emptySlots = 0;
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) {
+                emptySlots++;
+            }
+        }
+        // Full if less than 2 empty slots
+        return emptySlots < 2;
+    }
+
+    private void depositExcavationInventoryToChest(BlockPos chestPos) {
+        if (chestPos == null || this.getEntityWorld().isClient()) return;
+
+        // Get chest inventory
+        var chestEntity = this.getEntityWorld().getBlockEntity(chestPos);
+        if (!(chestEntity instanceof net.minecraft.inventory.Inventory chestInv)) return;
+
+        // Keep one stack of building blocks, deposit everything else
+        int buildingBlocksKept = 0;
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+
+            String blockId = getBlockIdFromStack(stack);
+            boolean isBuildingBlock = excavationBuildingBlockType != null && blockId != null &&
+                blockId.equals(excavationBuildingBlockType);
+
+            if (isBuildingBlock && buildingBlocksKept < 64) {
+                // Keep up to one stack of building blocks
+                int toKeep = Math.min(64 - buildingBlocksKept, stack.getCount());
+                buildingBlocksKept += toKeep;
+                if (stack.getCount() > toKeep) {
+                    // Deposit excess
+                    ItemStack toDeposit = stack.copy();
+                    toDeposit.setCount(stack.getCount() - toKeep);
+                    ItemStack remainder = transferToInventory(toDeposit, chestInv);
+                    stack.setCount(toKeep + (remainder.isEmpty() ? 0 : remainder.getCount()));
+                    inventory.setStack(i, stack);
+                }
+            } else if (!isBuildingBlock) {
+                // Deposit all non-building blocks
+                ItemStack remainder = transferToInventory(stack, chestInv);
+                if (remainder.isEmpty()) {
+                    inventory.setStack(i, ItemStack.EMPTY);
+                } else {
+                    inventory.setStack(i, remainder);
+                }
+            }
+        }
+    }
+
+    private void placeExcavationFloorBlocks() {
+        if (this.getEntityWorld().isClient()) return;
+
+        BlockPos below = this.getBlockPos().down();
+        if (!this.getEntityWorld().getBlockState(below).isAir()) return;
+
+        // Find a building block in inventory
+        if (excavationBuildingBlockType == null) {
+            // Select first non-gravity block as building block type
+            for (int i = 0; i < inventory.size(); i++) {
+                ItemStack stack = inventory.getStack(i);
+                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
+
+                var block = blockItem.getBlock();
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
+
+                if (!isGravityBlock(block)) {
+                    excavationBuildingBlockType = blockId;
+                    break;
+                }
+            }
+        }
+
+        if (excavationBuildingBlockType != null) {
+            // Find and consume the building block
+            for (int i = 0; i < inventory.size(); i++) {
+                ItemStack stack = inventory.getStack(i);
+                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
+
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
+                if (blockId.equals(excavationBuildingBlockType)) {
+                    // Place the block
+                    BlockState state = blockItem.getBlock().getDefaultState();
+                    this.getEntityWorld().setBlockState(below, state);
+                    stack.decrement(1);
+                    return;
+                }
+            }
+        }
+    }
+
+    private void excavateBlock(BlockPos pos) {
+        if (this.getEntityWorld().isClient()) return;
+
+        BlockState state = this.getEntityWorld().getBlockState(pos);
+        if (state.isAir()) {
+            // Block already mined
+            excavationCurrentTarget = null;
+            excavationBreakProgress = 0;
+            return;
+        }
+
+        // Start mining a new block
+        if (excavationCurrentTarget == null || !excavationCurrentTarget.equals(pos)) {
+            excavationCurrentTarget = pos;
+            excavationBreakProgress = 0;
+        }
+
+        // Find best tool in inventory
+        ItemStack bestTool = findBestTool(state);
+        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
+
+        // Golem mines at half speed (double the time)
+        breakSpeed *= 0.5f;
+
+        // Calculate break time in ticks
+        float hardness = state.getHardness(this.getEntityWorld(), pos);
+        if (hardness < 0) {
+            // Unbreakable block
+            excavationCurrentTarget = null;
+            excavationBreakProgress = 0;
+            return;
+        }
+
+        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
+        requiredTicks = Math.max(1, requiredTicks);
+
+        excavationBreakProgress++;
+
+        if (excavationBreakProgress >= requiredTicks) {
+            // Break the block
+            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
+
+            // Drop items into golem inventory
+            if (this.getEntityWorld() instanceof ServerWorld sw) {
+                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
+                    this.getEntityWorld().getBlockEntity(pos), this, bestTool);
+
+                for (ItemStack drop : drops) {
+                    addToInventory(drop);
+                }
+            }
+
+            // Remove the block
+            this.getEntityWorld().breakBlock(pos, false);
+
+            // Show particles
+            if (this.getEntityWorld() instanceof ServerWorld sw) {
+                sw.spawnParticles(ParticleTypes.CLOUD, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    10, 0.25, 0.25, 0.25, 0.1);
+            }
+
+            // Reset for next block
+            excavationCurrentTarget = null;
+            excavationBreakProgress = 0;
+        }
+    }
+
+    // ========== END EXCAVATION MODE METHODS ==========
+
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
     @Override
     protected void writeCustomData(WriteView view) {
@@ -1857,6 +2264,55 @@ public class GoldGolemEntity extends PathAwareEntity {
             int grp = towerBlockGroup.getOrDefault(id, 0);
             view.putInt("TowerGM" + i, grp);
         }
+
+        // Mining-mode persisted bits
+        if (this.miningChestPos != null) {
+            view.putInt("MiningChestX", this.miningChestPos.getX());
+            view.putInt("MiningChestY", this.miningChestPos.getY());
+            view.putInt("MiningChestZ", this.miningChestPos.getZ());
+        }
+        if (this.miningDirection != null) view.putString("MiningDir", this.miningDirection.name());
+        if (this.miningStartPos != null) {
+            view.putInt("MiningStartX", this.miningStartPos.getX());
+            view.putInt("MiningStartY", this.miningStartPos.getY());
+            view.putInt("MiningStartZ", this.miningStartPos.getZ());
+        }
+        view.putInt("MiningBranchDepth", this.miningBranchDepth);
+        view.putInt("MiningBranchSpacing", this.miningBranchSpacing);
+        view.putInt("MiningTunnelHeight", this.miningTunnelHeight);
+        view.putInt("MiningPrimaryProgress", this.miningPrimaryProgress);
+        view.putInt("MiningCurrentBranch", this.miningCurrentBranch);
+        view.putBoolean("MiningBranchLeft", this.miningBranchLeft);
+        view.putInt("MiningBranchProgress", this.miningBranchProgress);
+        view.putBoolean("MiningReturningToChest", this.miningReturningToChest);
+        view.putBoolean("MiningIdleAtChest", this.miningIdleAtChest);
+        if (this.miningBuildingBlockType != null) view.putString("MiningBuildingBlock", this.miningBuildingBlockType);
+
+        // Excavation-mode persisted bits
+        if (this.excavationChestPos1 != null) {
+            view.putInt("ExcavChest1X", this.excavationChestPos1.getX());
+            view.putInt("ExcavChest1Y", this.excavationChestPos1.getY());
+            view.putInt("ExcavChest1Z", this.excavationChestPos1.getZ());
+        }
+        if (this.excavationChestPos2 != null) {
+            view.putInt("ExcavChest2X", this.excavationChestPos2.getX());
+            view.putInt("ExcavChest2Y", this.excavationChestPos2.getY());
+            view.putInt("ExcavChest2Z", this.excavationChestPos2.getZ());
+        }
+        if (this.excavationDir1 != null) view.putString("ExcavDir1", this.excavationDir1.name());
+        if (this.excavationDir2 != null) view.putString("ExcavDir2", this.excavationDir2.name());
+        if (this.excavationStartPos != null) {
+            view.putInt("ExcavStartX", this.excavationStartPos.getX());
+            view.putInt("ExcavStartY", this.excavationStartPos.getY());
+            view.putInt("ExcavStartZ", this.excavationStartPos.getZ());
+        }
+        view.putInt("ExcavHeight", this.excavationHeight);
+        view.putInt("ExcavDepth", this.excavationDepth);
+        view.putInt("ExcavCurrentRing", this.excavationCurrentRing);
+        view.putInt("ExcavRingProgress", this.excavationRingProgress);
+        view.putBoolean("ExcavReturningToChest", this.excavationReturningToChest);
+        view.putBoolean("ExcavIdleAtStart", this.excavationIdleAtStart);
+        if (this.excavationBuildingBlockType != null) view.putString("ExcavBuildingBlock", this.excavationBuildingBlockType);
     }
 
     @Override
@@ -1981,6 +2437,64 @@ public class GoldGolemEntity extends PathAwareEntity {
             String id = towerUniqueBlockIds.get(i);
             towerBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, towerGroupSlots.size() - 1), grp)));
         }
+
+        // Mining-mode bits
+        if (view.contains("MiningChestX")) {
+            this.miningChestPos = new BlockPos(view.getInt("MiningChestX", 0), view.getInt("MiningChestY", 0), view.getInt("MiningChestZ", 0));
+        } else {
+            this.miningChestPos = null;
+        }
+        String miningDir = view.getString("MiningDir", null);
+        if (miningDir != null) {
+            try { this.miningDirection = net.minecraft.util.math.Direction.valueOf(miningDir); } catch (IllegalArgumentException ignored) {}
+        }
+        if (view.contains("MiningStartX")) {
+            this.miningStartPos = new BlockPos(view.getInt("MiningStartX", 0), view.getInt("MiningStartY", 0), view.getInt("MiningStartZ", 0));
+        } else {
+            this.miningStartPos = null;
+        }
+        this.miningBranchDepth = view.getInt("MiningBranchDepth", 16);
+        this.miningBranchSpacing = view.getInt("MiningBranchSpacing", 3);
+        this.miningTunnelHeight = view.getInt("MiningTunnelHeight", 2);
+        this.miningPrimaryProgress = view.getInt("MiningPrimaryProgress", 0);
+        this.miningCurrentBranch = view.getInt("MiningCurrentBranch", -1);
+        this.miningBranchLeft = view.getBoolean("MiningBranchLeft", true);
+        this.miningBranchProgress = view.getInt("MiningBranchProgress", 0);
+        this.miningReturningToChest = view.getBoolean("MiningReturningToChest", false);
+        this.miningIdleAtChest = view.getBoolean("MiningIdleAtChest", false);
+        this.miningBuildingBlockType = view.getString("MiningBuildingBlock", null);
+
+        // Excavation-mode bits
+        if (view.contains("ExcavChest1X")) {
+            this.excavationChestPos1 = new BlockPos(view.getInt("ExcavChest1X", 0), view.getInt("ExcavChest1Y", 0), view.getInt("ExcavChest1Z", 0));
+        } else {
+            this.excavationChestPos1 = null;
+        }
+        if (view.contains("ExcavChest2X")) {
+            this.excavationChestPos2 = new BlockPos(view.getInt("ExcavChest2X", 0), view.getInt("ExcavChest2Y", 0), view.getInt("ExcavChest2Z", 0));
+        } else {
+            this.excavationChestPos2 = null;
+        }
+        String excavDir1 = view.getString("ExcavDir1", null);
+        if (excavDir1 != null) {
+            try { this.excavationDir1 = net.minecraft.util.math.Direction.valueOf(excavDir1); } catch (IllegalArgumentException ignored) {}
+        }
+        String excavDir2 = view.getString("ExcavDir2", null);
+        if (excavDir2 != null) {
+            try { this.excavationDir2 = net.minecraft.util.math.Direction.valueOf(excavDir2); } catch (IllegalArgumentException ignored) {}
+        }
+        if (view.contains("ExcavStartX")) {
+            this.excavationStartPos = new BlockPos(view.getInt("ExcavStartX", 0), view.getInt("ExcavStartY", 0), view.getInt("ExcavStartZ", 0));
+        } else {
+            this.excavationStartPos = null;
+        }
+        this.excavationHeight = view.getInt("ExcavHeight", 3);
+        this.excavationDepth = view.getInt("ExcavDepth", 16);
+        this.excavationCurrentRing = view.getInt("ExcavCurrentRing", 0);
+        this.excavationRingProgress = view.getInt("ExcavRingProgress", 0);
+        this.excavationReturningToChest = view.getBoolean("ExcavReturningToChest", false);
+        this.excavationIdleAtStart = view.getBoolean("ExcavIdleAtStart", false);
+        this.excavationBuildingBlockType = view.getString("ExcavBuildingBlock", null);
     }
 
     public Inventory getInventory() { return inventory; }
@@ -2072,6 +2586,19 @@ public class GoldGolemEntity extends PathAwareEntity {
                     } else {
                         // Already mining or returning, ignore
                         sp.sendMessage(Text.literal("[Gold Golem] Already mining!"), true);
+                        return ActionResult.FAIL;
+                    }
+                } else if (this.buildMode == BuildMode.EXCAVATION) {
+                    // Excavation mode: only start if idle at start
+                    if (this.excavationIdleAtStart) {
+                        this.excavationIdleAtStart = false;
+                        this.buildingPaths = true;
+                        this.dataTracker.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.decrement(1);
+                        spawnHearts();
+                    } else {
+                        // Already excavating or returning, ignore
+                        sp.sendMessage(Text.literal("[Gold Golem] Already excavating!"), true);
                         return ActionResult.FAIL;
                     }
                 } else {

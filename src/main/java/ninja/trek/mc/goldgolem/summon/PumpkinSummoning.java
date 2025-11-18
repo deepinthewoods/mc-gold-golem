@@ -32,8 +32,9 @@ public class PumpkinSummoning {
 
         if (world.isClient()) return ActionResult.SUCCESS;
 
-        // Check for Mining Mode: exactly one chest on one horizontal side
-        net.minecraft.util.math.Direction chestDirection = null;
+        // Check for Mining/Excavation Mode: check chest placement
+        net.minecraft.util.math.Direction chestDirection1 = null;
+        net.minecraft.util.math.Direction chestDirection2 = null;
         int chestCount = 0;
         for (var dir : new net.minecraft.util.math.Direction[]{
                 net.minecraft.util.math.Direction.NORTH,
@@ -44,20 +45,29 @@ public class PumpkinSummoning {
             var np = below.offset(dir);
             var st = world.getBlockState(np);
             if (st.isOf(Blocks.CHEST)) {
+                if (chestCount == 0) chestDirection1 = dir;
+                else if (chestCount == 1) chestDirection2 = dir;
                 chestCount++;
-                chestDirection = dir;
             }
         }
+
+        // Check if excavation mode (2 chests on adjacent/non-opposite sides)
+        boolean excavationMode = false;
+        if (chestCount == 2) {
+            // Check if directions are not opposite
+            excavationMode = (chestDirection1 != chestDirection2.getOpposite());
+        }
+
         boolean miningMode = (chestCount == 1);
 
         // Check for Tower Mode: gold block below the pumpkin's gold block
         BlockPos belowBelow = below.down();
-        boolean towerMode = !miningMode && world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
+        boolean towerMode = !miningMode && !excavationMode && world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
 
         // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
-        // Tower and mining modes take precedence over wall mode
+        // Tower, mining, and excavation modes take precedence over wall mode
         boolean wallMode = false;
-        if (!towerMode && !miningMode) {
+        if (!towerMode && !miningMode && !excavationMode) {
             for (var dir : new net.minecraft.util.math.Direction[]{
                     net.minecraft.util.math.Direction.NORTH,
                     net.minecraft.util.math.Direction.SOUTH,
@@ -71,10 +81,26 @@ public class PumpkinSummoning {
             }
         }
 
-        if (miningMode) {
+        if (excavationMode) {
+            // Excavation Mode: 2 chests on adjacent sides, excavate in opposite diagonal
+            BlockPos chest1 = below.offset(chestDirection1);
+            BlockPos chest2 = below.offset(chestDirection2);
+
+            // Spawn golem with excavation mode
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+            golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(GoldGolemEntity.BuildMode.EXCAVATION);
+            golem.setExcavationConfig(chest1, chest2, chestDirection1, chestDirection2, below);
+
+            world.breakBlock(below, false, player);
+            ((ServerWorld) world).spawnEntity(golem);
+            if (!player.isCreative()) stack.decrement(1);
+            return ActionResult.SUCCESS;
+        } else if (miningMode) {
             // Mining Mode: chest on one side, mine in opposite direction
-            BlockPos chestPos = below.offset(chestDirection);
-            net.minecraft.util.math.Direction miningDir = chestDirection.getOpposite();
+            BlockPos chestPos = below.offset(chestDirection1);
+            net.minecraft.util.math.Direction miningDir = chestDirection1.getOpposite();
 
             // Spawn golem with mining mode
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);

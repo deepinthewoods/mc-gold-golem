@@ -18,9 +18,17 @@ public final class GolemScreens {
         var world0 = player.getEntityWorld();
         var ent0 = world0.getEntityById(entityId);
         boolean sliderEnabled = true;
+        boolean excavationMode = false;
+        boolean miningMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.WALL ||
                 g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TOWER) {
+                sliderEnabled = false;
+            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.EXCAVATION) {
+                excavationMode = true;
+                sliderEnabled = false;
+            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.MINING) {
+                miningMode = true;
                 sliderEnabled = false;
             }
         }
@@ -28,7 +36,7 @@ public final class GolemScreens {
         // Build dynamic UI spec
         int gradientRows = 2;
         int golemSlots = golemInventory.size();
-        int slider = sliderEnabled ? 1 : 0;
+        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : 0));
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
 
         player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {
@@ -100,6 +108,10 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new ninja.trek.mc.goldgolem.net.TowerGroupsStateS2CPayload(entityId, golem.getTowerGroupWindows(), golem.getTowerGroupFlatSlots()));
                 }
+            } else if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.EXCAVATION) {
+                // Send excavation sync
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                        new ninja.trek.mc.goldgolem.net.SyncExcavationS2CPayload(entityId, golem.getExcavationHeight(), golem.getExcavationDepth()));
             }
         }
     }
