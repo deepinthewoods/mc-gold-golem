@@ -33,6 +33,12 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncExcavationS2CPayload.ID, SyncExcavationS2CPayload.CODEC);
 
+        // Terraforming Mode payloads
+        PayloadTypeRegistry.playC2S().register(SetTerraformingGradientSlotC2SPayload.ID, SetTerraformingGradientSlotC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTerraformingScanRadiusC2SPayload.ID, SetTerraformingScanRadiusC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTerraformingGradientWindowC2SPayload.ID, SetTerraformingGradientWindowC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(SyncTerraformingS2CPayload.ID, SyncTerraformingS2CPayload.CODEC);
+
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -168,6 +174,52 @@ public class NetworkInit {
                 }
             });
         });
+
+        // Terraforming Mode UI receivers
+        ServerPlayNetworking.registerGlobalReceiver(SetTerraformingGradientSlotC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    String id = payload.block().map(Identifier::toString).orElse("");
+                    switch (payload.gradientType()) {
+                        case 0 -> golem.setTerraformingGradientVerticalSlot(payload.slot(), id);
+                        case 1 -> golem.setTerraformingGradientHorizontalSlot(payload.slot(), id);
+                        case 2 -> golem.setTerraformingGradientSlopedSlot(payload.slot(), id);
+                    }
+                    sendTerraformingSync(player, golem);
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetTerraformingScanRadiusC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTerraformingScanRadius(payload.radius());
+                    sendTerraformingSync(player, golem);
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetTerraformingGradientWindowC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    switch (payload.gradientType()) {
+                        case 0 -> golem.setTerraformingGradientVerticalWindow(payload.window());
+                        case 1 -> golem.setTerraformingGradientHorizontalWindow(payload.window());
+                        case 2 -> golem.setTerraformingGradientSlopedWindow(payload.window());
+                    }
+                    sendTerraformingSync(player, golem);
+                }
+            });
+        });
     }
 
     private static void sendWallUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
@@ -219,6 +271,20 @@ public class NetworkInit {
                 golem.getStepGradientWindow(),
                 java.util.Arrays.asList(golem.getGradientCopy()),
                 java.util.Arrays.asList(golem.getStepGradientCopy())
+        );
+        ServerPlayNetworking.send(player, payload);
+    }
+
+    private static void sendTerraformingSync(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
+        var payload = new SyncTerraformingS2CPayload(
+                golem.getId(),
+                golem.getTerraformingScanRadius(),
+                golem.getTerraformingGradientVerticalWindow(),
+                golem.getTerraformingGradientHorizontalWindow(),
+                golem.getTerraformingGradientSlopedWindow(),
+                java.util.Arrays.asList(golem.getTerraformingGradientVerticalCopy()),
+                java.util.Arrays.asList(golem.getTerraformingGradientHorizontalCopy()),
+                java.util.Arrays.asList(golem.getTerraformingGradientSlopedCopy())
         );
         ServerPlayNetworking.send(player, payload);
     }
