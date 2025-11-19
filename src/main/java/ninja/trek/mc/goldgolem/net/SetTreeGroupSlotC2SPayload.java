@@ -15,7 +15,7 @@ public record SetTreeGroupSlotC2SPayload(int entityId, int group, int slot, Opti
             PacketCodecs.VAR_INT, SetTreeGroupSlotC2SPayload::entityId,
             PacketCodecs.VAR_INT, SetTreeGroupSlotC2SPayload::group,
             PacketCodecs.VAR_INT, SetTreeGroupSlotC2SPayload::slot,
-            Identifier.PACKET_CODEC.collect(PacketCodecs.toOptional()), SetTreeGroupSlotC2SPayload::block,
+            PacketCodecs.optional(Identifier.PACKET_CODEC), SetTreeGroupSlotC2SPayload::block,
             SetTreeGroupSlotC2SPayload::new
     );
 

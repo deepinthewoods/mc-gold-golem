@@ -1499,7 +1499,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                     BlockState finalState = sampleTreeGradient(targetState, placePos);
 
                     // Consume from inventory
-                    if (!consumeBlockFromInventory(finalState.getBlock())) {
+                    String blockIdToConsume = net.minecraft.registry.Registries.BLOCK.getId(finalState.getBlock()).toString();
+                    if (!consumeBlockFromInventory(blockIdToConsume)) {
                         // No blocks in inventory - mark as depleted
                         inventoryDepleted = true;
                         continue;
@@ -1571,7 +1572,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             return originalState;
         }
 
-        net.minecraft.block.Block sampledBlock = net.minecraft.registry.Registries.BLOCK.get(new net.minecraft.util.Identifier(sampledBlockId));
+        var id = net.minecraft.util.Identifier.tryParse(sampledBlockId);
+        if (id == null) return originalState;
+        net.minecraft.block.Block sampledBlock = net.minecraft.registry.Registries.BLOCK.get(id);
         return sampledBlock.getDefaultState();
     }
 
