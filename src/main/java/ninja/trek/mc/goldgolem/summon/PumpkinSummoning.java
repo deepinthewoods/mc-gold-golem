@@ -64,10 +64,26 @@ public class PumpkinSummoning {
         BlockPos belowBelow = below.down();
         boolean towerMode = !miningMode && !excavationMode && world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
 
-        // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
-        // Tower, mining, and excavation modes take precedence over wall mode
-        boolean wallMode = false;
+        // Check for Terraforming Mode: 3x3 layer of gold blocks
+        boolean terraformingMode = false;
         if (!towerMode && !miningMode && !excavationMode) {
+            // Check if this gold block is the center of a 3x3 horizontal gold platform
+            boolean is3x3Gold = true;
+            for (int dx = -1; dx <= 1 && is3x3Gold; dx++) {
+                for (int dz = -1; dz <= 1 && is3x3Gold; dz++) {
+                    BlockPos checkPos = below.add(dx, 0, dz);
+                    if (!world.getBlockState(checkPos).isOf(Blocks.GOLD_BLOCK)) {
+                        is3x3Gold = false;
+                    }
+                }
+            }
+            terraformingMode = is3x3Gold;
+        }
+
+        // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
+        // Tower, mining, excavation, and terraforming modes take precedence over wall mode
+        boolean wallMode = false;
+        if (!towerMode && !miningMode && !excavationMode && !terraformingMode) {
             for (var dir : new net.minecraft.util.math.Direction[]{
                     net.minecraft.util.math.Direction.NORTH,
                     net.minecraft.util.math.Direction.SOUTH,
@@ -111,6 +127,36 @@ public class PumpkinSummoning {
 
             world.breakBlock(below, false, player);
             ((ServerWorld) world).spawnEntity(golem);
+            if (!player.isCreative()) stack.decrement(1);
+            return ActionResult.SUCCESS;
+        } else if (terraformingMode) {
+            // Terraforming Mode: scan skeleton structure touching 3x3 gold platform
+            var res = ninja.trek.mc.goldgolem.terraforming.TerraformingScanner.scan(world, below, player);
+            if (!res.ok()) {
+                if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
+                    sp.sendMessage(net.minecraft.text.Text.literal("[Gold Golem] Terraforming mode summon failed: " + res.error()), true);
+                }
+                return ActionResult.FAIL;
+            }
+            var def = res.def();
+
+            // Spawn golem with terraforming mode
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+            golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(GoldGolemEntity.BuildMode.TERRAFORMING);
+            golem.setTerraformingConfig(def, below);
+
+            // Remove the 3x3 gold platform
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    BlockPos removePos = below.add(dx, 0, dz);
+                    world.breakBlock(removePos, false, player);
+                }
+            }
+
+            ServerWorld sw = (ServerWorld) world;
+            sw.spawnEntity(golem);
             if (!player.isCreative()) stack.decrement(1);
             return ActionResult.SUCCESS;
         } else if (towerMode) {
