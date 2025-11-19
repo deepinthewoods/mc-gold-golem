@@ -39,6 +39,14 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetTerraformingGradientWindowC2SPayload.ID, SetTerraformingGradientWindowC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncTerraformingS2CPayload.ID, SyncTerraformingS2CPayload.CODEC);
 
+        // Tree Mode payloads
+        PayloadTypeRegistry.playS2C().register(TreeBlockGroupsS2CPayload.ID, TreeBlockGroupsS2CPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TreeGroupsStateS2CPayload.ID, TreeGroupsStateS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTreeBlockGroupC2SPayload.ID, SetTreeBlockGroupC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTreeGroupSlotC2SPayload.ID, SetTreeGroupSlotC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTreeGroupWindowC2SPayload.ID, SetTreeGroupWindowC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTreeTilingPresetC2SPayload.ID, SetTreeTilingPresetC2SPayload.CODEC);
+
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -220,6 +228,54 @@ public class NetworkInit {
                 }
             });
         });
+
+        // Tree Mode UI receivers
+        ServerPlayNetworking.registerGlobalReceiver(SetTreeBlockGroupC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTreeBlockGroup(payload.blockId(), payload.group());
+                    sendTreeUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetTreeGroupSlotC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    String id = payload.block().map(Identifier::toString).orElse("");
+                    golem.setTreeGroupSlot(payload.group(), payload.slot(), id);
+                    sendTreeUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetTreeGroupWindowC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTreeGroupWindow(payload.group(), payload.window());
+                    sendTreeUiState(player, golem);
+                }
+            });
+        });
+        ServerPlayNetworking.registerGlobalReceiver(SetTreeTilingPresetC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    ninja.trek.mc.goldgolem.tree.TilingPreset preset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(payload.presetOrdinal());
+                    golem.setTreeTilingPreset(preset);
+                    sendTreeUiState(player, golem);
+                }
+            });
+        });
     }
 
     private static void sendWallUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
@@ -249,6 +305,17 @@ public class NetworkInit {
         var wins = golem.getTowerGroupWindows();
         var slots = golem.getTowerGroupFlatSlots();
         ServerPlayNetworking.send(player, new TowerGroupsStateS2CPayload(golem.getId(), wins, slots));
+    }
+
+    private static void sendTreeUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
+        var ids = golem.getTreeUniqueBlockIds();
+        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), ids));
+        var groups = golem.getTreeBlockGroupMap(ids);
+        ServerPlayNetworking.send(player, new TreeBlockGroupsS2CPayload(golem.getId(), groups));
+        var wins = golem.getTreeGroupWindows();
+        var slots = golem.getTreeGroupFlatSlots();
+        int presetOrdinal = golem.getTreeTilingPreset().ordinal();
+        ServerPlayNetworking.send(player, new TreeGroupsStateS2CPayload(golem.getId(), presetOrdinal, wins, slots));
     }
 
     private static GoldGolemEntity findNearestOwnedGolem(net.minecraft.server.network.ServerPlayerEntity player, double radius) {
