@@ -13,6 +13,8 @@ import ninja.trek.mc.goldgolem.net.TowerBlockGroupsS2CPayload;
 import ninja.trek.mc.goldgolem.net.TowerGroupsStateS2CPayload;
 import ninja.trek.mc.goldgolem.net.SyncExcavationS2CPayload;
 import ninja.trek.mc.goldgolem.net.SyncTerraformingS2CPayload;
+import ninja.trek.mc.goldgolem.net.TreeBlockGroupsS2CPayload;
+import ninja.trek.mc.goldgolem.net.TreeGroupsStateS2CPayload;
 
 public final class ClientNet {
     private ClientNet() {}
@@ -40,7 +42,9 @@ public final class ClientNet {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    // Set for both wall and tree - the screen will use whichever is appropriate for the current mode
                     screen.setWallUniqueBlocks(payload.blockIds());
+                    screen.setTreeUniqueBlocks(payload.blockIds());
                 }
             });
         });
@@ -111,6 +115,24 @@ public final class ClientNet {
                             payload.horizontalGradient(),
                             payload.slopedGradient()
                     );
+                }
+            });
+        });
+
+        // Tree mode receivers
+        ClientPlayNetworking.registerGlobalReceiver(TreeBlockGroupsS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setTreeBlockGroups(payload.groups());
+                }
+            });
+        });
+        ClientPlayNetworking.registerGlobalReceiver(TreeGroupsStateS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setTreeGroupsState(payload.presetOrdinal(), payload.windows(), payload.flatSlots());
                 }
             });
         });

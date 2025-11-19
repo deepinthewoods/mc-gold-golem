@@ -80,10 +80,31 @@ public class PumpkinSummoning {
             terraformingMode = is3x3Gold;
         }
 
-        // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
-        // Tower, mining, excavation, and terraforming modes take precedence over wall mode
-        boolean wallMode = false;
+        // Check for Tree Mode: second gold block touching pumpkin's gold block
+        boolean treeMode = false;
+        BlockPos secondGoldPos = null;
         if (!towerMode && !miningMode && !excavationMode && !terraformingMode) {
+            for (var dir : new net.minecraft.util.math.Direction[]{
+                    net.minecraft.util.math.Direction.NORTH,
+                    net.minecraft.util.math.Direction.SOUTH,
+                    net.minecraft.util.math.Direction.EAST,
+                    net.minecraft.util.math.Direction.WEST,
+                    net.minecraft.util.math.Direction.UP,
+                    net.minecraft.util.math.Direction.DOWN
+            }) {
+                var np = below.offset(dir);
+                if (world.getBlockState(np).isOf(Blocks.GOLD_BLOCK)) {
+                    treeMode = true;
+                    secondGoldPos = np;
+                    break;
+                }
+            }
+        }
+
+        // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
+        // Tower, mining, excavation, terraforming, and tree modes take precedence over wall mode
+        boolean wallMode = false;
+        if (!towerMode && !miningMode && !excavationMode && !terraformingMode && !treeMode) {
             for (var dir : new net.minecraft.util.math.Direction[]{
                     net.minecraft.util.math.Direction.NORTH,
                     net.minecraft.util.math.Direction.SOUTH,
@@ -154,6 +175,45 @@ public class PumpkinSummoning {
                     world.breakBlock(removePos, false, player);
                 }
             }
+
+            ServerWorld sw = (ServerWorld) world;
+            sw.spawnEntity(golem);
+            if (!player.isCreative()) stack.decrement(1);
+            return ActionResult.SUCCESS;
+        } else if (treeMode) {
+            // Tree Mode: scan for input modules separated by gold blocks
+            var res = ninja.trek.mc.goldgolem.tree.TreeScanner.scan(world, secondGoldPos, player);
+            if (!res.ok()) {
+                if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
+                    sp.sendMessage(net.minecraft.text.Text.literal("[Gold Golem] Tree mode summon failed: " + res.error()), true);
+                }
+                return ActionResult.FAIL;
+            }
+            var def = res.def();
+
+            // Spawn golem with tree mode
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+            golem.refreshPositionAndAngles(secondGoldPos.getX() + 0.5, secondGoldPos.getY(), secondGoldPos.getZ() + 0.5, player.getYaw(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(GoldGolemEntity.BuildMode.TREE);
+
+            // Persist JSON file under game dir
+            String jsonRel = null;
+            try {
+                java.nio.file.Path gameDir = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir();
+                java.nio.file.Path out = ninja.trek.mc.goldgolem.tree.TreeScanner.writeJson(gameDir, golem.getUuid(), def);
+                jsonRel = gameDir.relativize(out).toString();
+            } catch (Exception ioe) {
+                // Non-fatal; continue without external snapshot
+                jsonRel = null;
+            }
+
+            // Set tree capture data on golem
+            golem.setTreeCapture(def.modules, def.uniqueBlockIds, secondGoldPos, jsonRel);
+
+            // Remove both gold blocks (pumpkin gold and second gold)
+            world.breakBlock(below, false, player);
+            world.breakBlock(secondGoldPos, false, player);
 
             ServerWorld sw = (ServerWorld) world;
             sw.spawnEntity(golem);

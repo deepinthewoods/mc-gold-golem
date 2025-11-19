@@ -37,7 +37,7 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import java.util.Optional;
 
 public class GoldGolemEntity extends PathAwareEntity {
-    public enum BuildMode { PATH, WALL, TOWER, MINING, EXCAVATION, TERRAFORMING }
+    public enum BuildMode { PATH, WALL, TOWER, MINING, EXCAVATION, TERRAFORMING, TREE }
     public static final int INVENTORY_SIZE = 27;
 
     // Data trackers for client-server sync
@@ -152,6 +152,21 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int terraformingGradientVerticalWindow = 1; // window for vertical gradient (0..9)
     private int terraformingGradientHorizontalWindow = 1; // window for horizontal gradient (0..9)
     private int terraformingGradientSlopedWindow = 1; // window for sloped gradient (0..9)
+
+    // Tree-mode state
+    private java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> treeModules = java.util.Collections.emptyList();
+    private java.util.List<String> treeUniqueBlockIds = java.util.Collections.emptyList();
+    private net.minecraft.util.math.BlockPos treeOrigin = null; // second gold block position
+    private String treeJsonFile = null; // saved snapshot path (relative to game dir)
+    private ninja.trek.mc.goldgolem.tree.TilingPreset treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.SMALL_3x3;
+    private ninja.trek.mc.goldgolem.tree.TreeTileCache treeTileCache = null; // lazy-loaded when building starts
+    private ninja.trek.mc.goldgolem.tree.TreeWFCBuilder treeWFCBuilder = null; // active WFC state
+    private boolean treeTilesCached = false;
+    private boolean treeWaitingForInventory = false; // true when out of blocks, waiting for restock
+    // Tree UI state: dynamic gradient groups (same pattern as wall/tower)
+    private final java.util.List<String[]> treeGroupSlots = new java.util.ArrayList<>(); // each String[9]
+    private final java.util.List<Integer> treeGroupWindows = new java.util.ArrayList<>();
+    private final java.util.Map<String, Integer> treeBlockGroup = new java.util.HashMap<>();
 
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
@@ -371,6 +386,75 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (group < 0 || group >= towerGroupSlots.size()) return;
         if (slot < 0 || slot >= 9) return;
         String[] arr = towerGroupSlots.get(group);
+        arr[slot] = (id == null) ? "" : id;
+    }
+
+    // Tree mode configuration
+    public void setTreeCapture(java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> modules,
+                              java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
+        this.treeModules = modules == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(modules);
+        this.treeUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
+        this.treeOrigin = origin;
+        this.treeJsonFile = jsonPath;
+        // Initialize tree groups
+        initTreeGroups(uniqueIds);
+    }
+    public java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> getTreeModules() { return java.util.Collections.unmodifiableList(this.treeModules); }
+    public java.util.List<String> getTreeUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.treeUniqueBlockIds); }
+    public ninja.trek.mc.goldgolem.tree.TilingPreset getTreeTilingPreset() { return treeTilingPreset; }
+    public void setTreeTilingPreset(ninja.trek.mc.goldgolem.tree.TilingPreset preset) {
+        if (preset != null && preset != this.treeTilingPreset) {
+            this.treeTilingPreset = preset;
+            // Invalidate tile cache so it will be regenerated with new size
+            this.treeTilesCached = false;
+            this.treeTileCache = null;
+            this.treeWFCBuilder = null;
+        }
+    }
+
+    public void initTreeGroups(java.util.List<String> uniqueBlocks) {
+        treeGroupSlots.clear(); treeGroupWindows.clear(); treeBlockGroup.clear();
+        // Default: one group per unique block type
+        int idx = 0;
+        for (String id : uniqueBlocks) {
+            String[] arr = new String[9];
+            treeGroupSlots.add(arr);
+            treeGroupWindows.add(1);
+            treeBlockGroup.put(id, idx);
+            idx++;
+        }
+    }
+    public java.util.List<Integer> getTreeBlockGroupMap(java.util.List<String> uniqueBlocks) {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>(uniqueBlocks.size());
+        for (String id : uniqueBlocks) out.add(treeBlockGroup.getOrDefault(id, 0));
+        return out;
+    }
+    public java.util.List<Integer> getTreeGroupWindows() { return new java.util.ArrayList<>(treeGroupWindows); }
+    public java.util.List<String> getTreeGroupFlatSlots() {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>(treeGroupSlots.size() * 9);
+        for (String[] arr : treeGroupSlots) {
+            for (int i = 0; i < 9; i++) out.add(arr[i] == null ? "" : arr[i]);
+        }
+        return out;
+    }
+    public void setTreeBlockGroup(String blockId, int group) {
+        if (group < 0) { // create new
+            treeGroupSlots.add(new String[9]);
+            treeGroupWindows.add(1);
+            group = treeGroupSlots.size() - 1;
+        } else if (group >= treeGroupSlots.size()) {
+            return;
+        }
+        treeBlockGroup.put(blockId, group);
+    }
+    public void setTreeGroupWindow(int group, int window) {
+        if (group < 0 || group >= treeGroupWindows.size()) return;
+        treeGroupWindows.set(group, Math.max(0, Math.min(9, window)));
+    }
+    public void setTreeGroupSlot(int group, int slot, String id) {
+        if (group < 0 || group >= treeGroupSlots.size()) return;
+        if (slot < 0 || slot >= 9) return;
+        String[] arr = treeGroupSlots.get(group);
         arr[slot] = (id == null) ? "" : id;
     }
 
@@ -623,6 +707,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             }
             if (this.buildMode == BuildMode.WALL) { tickWallMode(owner); return; }
             if (this.buildMode == BuildMode.TOWER) { tickTowerMode(owner); return; }
+            if (this.buildMode == BuildMode.TREE) { tickTreeMode(owner); return; }
             // Lines are now rendered client-side using RenderLayer lines via networking; no server particles.
             // Track lines while owner moves (require grounded for stability, no distance gate in pathing mode)
             if (owner != null && owner.isOnGround()) {
@@ -1249,6 +1334,248 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Clamp and round
         int index = (int) Math.round(s_ref);
         return Math.max(0, Math.min(G - 1, index));
+    }
+
+    private void tickTreeMode(PlayerEntity owner) {
+        // Tree mode: WFC-based building that follows player with nuggets
+        if (!buildingPaths || treeModules.isEmpty() || treeOrigin == null) return;
+
+        // If waiting for inventory, show angry particles and don't build
+        if (treeWaitingForInventory) {
+            // Show angry villager particles periodically
+            if (this.age % 20 == 0) {
+                if (this.getEntityWorld() instanceof ServerWorld sw) {
+                    sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
+                        this.getX(), this.getY() + 2.0, this.getZ(),
+                        1, 0.2, 0.2, 0.2, 0.0);
+                }
+            }
+            // Don't do any building work while waiting
+            return;
+        }
+
+        // Cache tiles if not already done
+        if (!treeTilesCached || treeTileCache == null) {
+            try {
+                // Build stop blocks set (air, gold, ground types)
+                java.util.Set<net.minecraft.block.Block> stopBlocks = new java.util.HashSet<>();
+                stopBlocks.add(net.minecraft.block.Blocks.GOLD_BLOCK);
+                if (owner != null) {
+                    BlockPos playerGround = owner.getBlockPos().down();
+                    BlockState gs = this.getEntityWorld().getBlockState(playerGround);
+                    net.minecraft.block.Block groundType = gs.getBlock();
+                    if (groundType == net.minecraft.block.Blocks.GRASS_BLOCK ||
+                        groundType == net.minecraft.block.Blocks.DIRT ||
+                        groundType == net.minecraft.block.Blocks.DIRT_PATH) {
+                        stopBlocks.add(net.minecraft.block.Blocks.GRASS_BLOCK);
+                        stopBlocks.add(net.minecraft.block.Blocks.DIRT);
+                        stopBlocks.add(net.minecraft.block.Blocks.DIRT_PATH);
+                    }
+                }
+
+                // Extract tiles using current preset
+                ninja.trek.mc.goldgolem.tree.TreeDefinition def =
+                    new ninja.trek.mc.goldgolem.tree.TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds);
+                treeTileCache = ninja.trek.mc.goldgolem.tree.TreeTileExtractor.extract(
+                    this.getEntityWorld(), def, treeTilingPreset, treeOrigin);
+                treeTilesCached = true;
+
+                if (treeTileCache.isEmpty()) {
+                    // No tiles extracted, stop building permanently
+                    buildingPaths = false;
+                    this.dataTracker.set(BUILDING_PATHS, false);
+                    return;
+                }
+
+                // Initialize WFC builder at golem's current position (only if new)
+                if (treeWFCBuilder == null) {
+                    java.util.Random random = new java.util.Random(this.getUuid().getMostSignificantBits());
+                    treeWFCBuilder = new ninja.trek.mc.goldgolem.tree.TreeWFCBuilder(
+                        treeTileCache, this.getEntityWorld(), this.getBlockPos(), stopBlocks, random);
+                }
+
+            } catch (Exception e) {
+                // Failed to cache tiles, stop building
+                buildingPaths = false;
+                this.dataTracker.set(BUILDING_PATHS, false);
+                return;
+            }
+        }
+
+        // Run WFC algorithm steps (run multiple steps per tick for faster generation)
+        if (treeWFCBuilder != null && !treeWFCBuilder.isFinished()) {
+            // Run a few WFC steps per tick
+            for (int i = 0; i < 5 && !treeWFCBuilder.isFinished(); i++) {
+                treeWFCBuilder.step();
+            }
+        }
+
+        // Place blocks from WFC output at 2-tick intervals
+        if (placementTickCounter == 0 && treeWFCBuilder != null && treeWFCBuilder.hasPendingBlocks()) {
+            BlockPos buildPos = treeWFCBuilder.getNextBuildPosition();
+            if (buildPos != null) {
+                // Try to pathfind to the build position
+                double ty = computeGroundTargetY(new Vec3d(buildPos.getX() + 0.5, buildPos.getY(), buildPos.getZ() + 0.5));
+                this.getNavigation().startMovingTo(buildPos.getX() + 0.5, ty, buildPos.getZ() + 0.5, 1.1);
+
+                // Check if stuck and teleport if necessary (same as tower mode)
+                double dx = this.getX() - (buildPos.getX() + 0.5);
+                double dz = this.getZ() - (buildPos.getZ() + 0.5);
+                double distSq = dx * dx + dz * dz;
+                if (this.getNavigation().isIdle() && distSq > 1.0) {
+                    stuckTicks++;
+                    if (stuckTicks >= 20) {
+                        if (this.getEntityWorld() instanceof ServerWorld sw) {
+                            sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
+                            sw.spawnParticles(ParticleTypes.PORTAL, buildPos.getX() + 0.5, ty + 0.5, buildPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
+                        }
+                        this.refreshPositionAndAngles(buildPos.getX() + 0.5, ty, buildPos.getZ() + 0.5, this.getYaw(), this.getPitch());
+                        this.getNavigation().stop();
+                        stuckTicks = 0;
+                    }
+                } else {
+                    stuckTicks = 0;
+                }
+
+                // Place the blocks from the tile - returns false if inventory depleted
+                boolean success = placeTreeTile(buildPos);
+                if (!success) {
+                    // Out of inventory - stop building and wait for restock
+                    buildingPaths = false;
+                    this.dataTracker.set(BUILDING_PATHS, false);
+                    treeWaitingForInventory = true;
+
+                    // Show angry villager particles
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
+                            this.getX(), this.getY() + 2.0, this.getZ(),
+                            5, 0.3, 0.3, 0.3, 0.0);
+                    }
+
+                    // Put the build position back in the queue so we resume from here
+                    // Note: TreeWFCBuilder's getNextBuildPosition already removed it, so we need to re-queue
+                    // For now, we'll just leave it - the next tile will be attempted when resumed
+                    return;
+                }
+            }
+        }
+
+        // Check if finished building (no more pending blocks and WFC is done)
+        if (treeWFCBuilder != null && treeWFCBuilder.isFinished() && !treeWFCBuilder.hasPendingBlocks()) {
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+        }
+    }
+
+    private boolean placeTreeTile(BlockPos tileOriginPos) {
+        if (this.getEntityWorld().isClient()) return true;
+        if (treeWFCBuilder == null) return true;
+
+        String tileId = treeWFCBuilder.getCollapsedTile(tileOriginPos);
+        if (tileId == null) return true;
+
+        ninja.trek.mc.goldgolem.tree.TreeTile tile = treeWFCBuilder.getTile(tileId);
+        if (tile == null) return true;
+
+        // Track if we successfully placed at least one block, and if we failed due to inventory
+        boolean placedAny = false;
+        boolean inventoryDepleted = false;
+
+        // Place all blocks in the tile
+        int tileSize = tile.size;
+        for (int dx = 0; dx < tileSize; dx++) {
+            for (int dy = 0; dy < tileSize; dy++) {
+                for (int dz = 0; dz < tileSize; dz++) {
+                    BlockPos placePos = tileOriginPos.add(dx, dy, dz);
+                    BlockState targetState = tile.getBlock(dx, dy, dz);
+
+                    // Skip air blocks
+                    if (targetState.isAir()) continue;
+
+                    // Don't overwrite existing non-air blocks
+                    if (!this.getEntityWorld().getBlockState(placePos).isAir()) continue;
+
+                    // Sample from gradient for this block type
+                    BlockState finalState = sampleTreeGradient(targetState, placePos);
+
+                    // Consume from inventory
+                    String blockIdToConsume = net.minecraft.registry.Registries.BLOCK.getId(finalState.getBlock()).toString();
+                    if (!consumeBlockFromInventory(blockIdToConsume)) {
+                        // No blocks in inventory - mark as depleted
+                        inventoryDepleted = true;
+                        continue;
+                    }
+
+                    // Place the block
+                    this.getEntityWorld().setBlockState(placePos, finalState, 3);
+                    placedAny = true;
+
+                    // Spawn particles
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.HAPPY_VILLAGER,
+                            placePos.getX() + 0.5, placePos.getY() + 0.5, placePos.getZ() + 0.5,
+                            3, 0.3, 0.3, 0.3, 0.0);
+                    }
+                }
+            }
+        }
+
+        // If we depleted inventory and couldn't place anything this tile, fail
+        if (inventoryDepleted && !placedAny) {
+            return false; // Signal inventory depletion
+        }
+
+        // Update hand animations (use first block of tile for visual)
+        if (placedAny) {
+            BlockPos animPos = tileOriginPos;
+            this.dataTracker.set(LEFT_HAND_TARGET_POS, Optional.of(animPos));
+            this.dataTracker.set(LEFT_ARM_HAS_TARGET, true);
+            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, 0);
+        }
+
+        return true; // Success (or partial success is okay)
+    }
+
+    private BlockState sampleTreeGradient(BlockState originalState, BlockPos pos) {
+        // Get block ID
+        String blockId = net.minecraft.registry.Registries.BLOCK.getId(originalState.getBlock()).toString();
+
+        // Find the gradient group for this block
+        Integer groupIdx = treeBlockGroup.get(blockId);
+        if (groupIdx == null || groupIdx >= treeGroupSlots.size()) {
+            // No gradient assigned, use original
+            return originalState;
+        }
+
+        String[] gradientSlots = treeGroupSlots.get(groupIdx);
+        int window = treeGroupWindows.get(groupIdx);
+
+        // Sample from gradient using position hash
+        int lastNonEmpty = -1;
+        for (int i = gradientSlots.length - 1; i >= 0; i--) {
+            if (gradientSlots[i] != null && !gradientSlots[i].isEmpty()) {
+                lastNonEmpty = i;
+                break;
+            }
+        }
+
+        if (lastNonEmpty < 0) {
+            // Empty gradient, use original
+            return originalState;
+        }
+
+        int idx = Math.abs(pos.getX() + pos.getZ() + pos.getY()) % window;
+        if (idx > lastNonEmpty) idx = lastNonEmpty;
+
+        String sampledBlockId = gradientSlots[idx];
+        if (sampledBlockId == null || sampledBlockId.isEmpty()) {
+            return originalState;
+        }
+
+        var id = net.minecraft.util.Identifier.tryParse(sampledBlockId);
+        if (id == null) return originalState;
+        net.minecraft.block.Block sampledBlock = net.minecraft.registry.Registries.BLOCK.get(id);
+        return sampledBlock.getDefaultState();
     }
 
     private void tickMiningMode() {
@@ -2667,6 +2994,57 @@ public class GoldGolemEntity extends PathAwareEntity {
         } else {
             view.putInt("TFormSkelTypesCount", 0);
         }
+
+        // Tree-mode persisted bits
+        if (this.treeOrigin != null) {
+            view.putInt("TreeOX", this.treeOrigin.getX());
+            view.putInt("TreeOY", this.treeOrigin.getY());
+            view.putInt("TreeOZ", this.treeOrigin.getZ());
+        }
+        if (this.treeJsonFile != null) view.putString("TreeJson", this.treeJsonFile);
+        view.putInt("TreeTilingPreset", this.treeTilingPreset.ordinal());
+        view.putBoolean("TreeWaitingForInventory", this.treeWaitingForInventory);
+
+        // Tree unique block IDs
+        if (this.treeUniqueBlockIds != null && !this.treeUniqueBlockIds.isEmpty()) {
+            view.putInt("TreeUniqCount", this.treeUniqueBlockIds.size());
+            for (int i = 0; i < this.treeUniqueBlockIds.size(); i++) {
+                view.putString("TreeU" + i, this.treeUniqueBlockIds.get(i));
+            }
+        } else {
+            view.putInt("TreeUniqCount", 0);
+        }
+
+        // Tree modules (store voxel positions)
+        view.putInt("TreeModuleCount", this.treeModules.size());
+        for (int m = 0; m < this.treeModules.size(); m++) {
+            ninja.trek.mc.goldgolem.tree.TreeModule module = this.treeModules.get(m);
+            view.putInt("TreeMod" + m + "Size", module.voxels.size());
+            int vIdx = 0;
+            for (net.minecraft.util.math.BlockPos pos : module.voxels) {
+                view.putInt("TreeMod" + m + "V" + vIdx + "X", pos.getX());
+                view.putInt("TreeMod" + m + "V" + vIdx + "Y", pos.getY());
+                view.putInt("TreeMod" + m + "V" + vIdx + "Z", pos.getZ());
+                vIdx++;
+            }
+        }
+
+        // Tree groups persistence
+        view.putInt("TreeGroupCount", treeGroupSlots.size());
+        for (int g = 0; g < treeGroupSlots.size(); g++) {
+            view.putInt("TreeGW" + g, (g < treeGroupWindows.size()) ? treeGroupWindows.get(g) : 1);
+            String[] arr = treeGroupSlots.get(g);
+            for (int i = 0; i < 9; i++) {
+                String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
+                view.putString("TreeGS" + g + "_" + i, v);
+            }
+        }
+        // Mapping for unique ids → group index
+        for (int i = 0; i < treeUniqueBlockIds.size(); i++) {
+            String id = treeUniqueBlockIds.get(i);
+            int grp = treeBlockGroup.getOrDefault(id, 0);
+            view.putInt("TreeGM" + i, grp);
+        }
     }
 
     @Override
@@ -2934,6 +3312,76 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
         }
+
+        // Tree-mode persisted bits
+        if (view.contains("TreeOX")) {
+            int x = view.getInt("TreeOX", 0);
+            int y = view.getInt("TreeOY", 0);
+            int z = view.getInt("TreeOZ", 0);
+            this.treeOrigin = new net.minecraft.util.math.BlockPos(x, y, z);
+        }
+        this.treeJsonFile = view.getOptionalString("TreeJson").orElse(null);
+        int presetOrdinal = view.getInt("TreeTilingPreset", 0);
+        this.treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(presetOrdinal);
+        this.treeWaitingForInventory = view.getBoolean("TreeWaitingForInventory", false);
+
+        // Tree unique block IDs
+        int treeUniqCount = view.getInt("TreeUniqCount", 0);
+        if (treeUniqCount > 0) {
+            this.treeUniqueBlockIds = new java.util.ArrayList<>();
+            for (int i = 0; i < treeUniqCount; i++) {
+                String id = view.getString("TreeU" + i, "");
+                if (!id.isEmpty()) {
+                    this.treeUniqueBlockIds.add(id);
+                }
+            }
+        } else {
+            this.treeUniqueBlockIds = java.util.Collections.emptyList();
+        }
+
+        // Tree modules
+        int treeModCount = view.getInt("TreeModuleCount", 0);
+        if (treeModCount > 0) {
+            this.treeModules = new java.util.ArrayList<>();
+            for (int m = 0; m < treeModCount; m++) {
+                int voxelSize = view.getInt("TreeMod" + m + "Size", 0);
+                java.util.Set<net.minecraft.util.math.BlockPos> voxels = new java.util.HashSet<>();
+                for (int v = 0; v < voxelSize; v++) {
+                    int vx = view.getInt("TreeMod" + m + "V" + v + "X", 0);
+                    int vy = view.getInt("TreeMod" + m + "V" + v + "Y", 0);
+                    int vz = view.getInt("TreeMod" + m + "V" + v + "Z", 0);
+                    voxels.add(new net.minecraft.util.math.BlockPos(vx, vy, vz));
+                }
+                if (!voxels.isEmpty()) {
+                    this.treeModules.add(new ninja.trek.mc.goldgolem.tree.TreeModule(voxels));
+                }
+            }
+        } else {
+            this.treeModules = java.util.Collections.emptyList();
+        }
+
+        // Tree groups persistence
+        int treeGroupCount = view.getInt("TreeGroupCount", 0);
+        this.treeGroupSlots.clear();
+        this.treeGroupWindows.clear();
+        this.treeBlockGroup.clear();
+        for (int g = 0; g < treeGroupCount; g++) {
+            int window = view.getInt("TreeGW" + g, 1);
+            this.treeGroupWindows.add(window);
+            String[] arr = new String[9];
+            for (int i = 0; i < 9; i++) {
+                arr[i] = view.getString("TreeGS" + g + "_" + i, "");
+            }
+            this.treeGroupSlots.add(arr);
+        }
+        // Restore group mappings
+        for (int i = 0; i < treeUniqueBlockIds.size(); i++) {
+            String id = treeUniqueBlockIds.get(i);
+            int grp = view.getInt("TreeGM" + i, 0);
+            this.treeBlockGroup.put(id, grp);
+        }
+
+        // Note: treeTileCache and treeWFCBuilder are NOT persisted - they will be regenerated when building resumes
     }
 
     public Inventory getInventory() { return inventory; }
@@ -3098,6 +3546,23 @@ public class GoldGolemEntity extends PathAwareEntity {
                     this.dataTracker.set(BUILDING_PATHS, true);
                     if (!player.isCreative()) stack.decrement(1);
                     spawnHearts();
+                } else if (this.buildMode == BuildMode.TREE) {
+                    // Tree mode: start or resume building
+                    if (this.treeWaitingForInventory) {
+                        // Resume from where we left off
+                        this.treeWaitingForInventory = false;
+                        this.buildingPaths = true;
+                        this.dataTracker.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.decrement(1);
+                        spawnHearts();
+                        sp.sendMessage(Text.literal("[Gold Golem] Resuming Tree Mode building!"), true);
+                    } else {
+                        // Start fresh
+                        this.buildingPaths = true;
+                        this.dataTracker.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.decrement(1);
+                        spawnHearts();
+                    }
                 } else {
                     // Path/Wall/Tower modes: start building as before
                     this.buildingPaths = true;
@@ -3147,6 +3612,9 @@ public class GoldGolemEntity extends PathAwareEntity {
                 this.miningReturningToChest = false;
                 this.miningCurrentTarget = null;
                 this.miningBreakProgress = 0;
+            } else if (this.buildMode == BuildMode.TREE) {
+                // Tree mode: reset waiting state (allows canceling "out of inventory" state)
+                this.treeWaitingForInventory = false;
             } else {
                 // Path/Wall/Tower mode cleanup
                 this.trackStart = null;
