@@ -20,6 +20,7 @@ public final class GolemScreens {
         boolean sliderEnabled = true;
         boolean excavationMode = false;
         boolean miningMode = false;
+        boolean terraformingMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.WALL ||
                 g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TOWER) {
@@ -30,13 +31,16 @@ public final class GolemScreens {
             } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.MINING) {
                 miningMode = true;
                 sliderEnabled = false;
+            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TERRAFORMING) {
+                terraformingMode = true;
+                sliderEnabled = false;
             }
         }
 
         // Build dynamic UI spec
-        int gradientRows = 2;
+        int gradientRows = terraformingMode ? 3 : 2; // 3 rows for terraforming (vertical, horizontal, sloped)
         int golemSlots = golemInventory.size();
-        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : 0));
+        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : 0)));
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
 
         player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {
@@ -112,6 +116,19 @@ public final class GolemScreens {
                 // Send excavation sync
                 net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                         new ninja.trek.mc.goldgolem.net.SyncExcavationS2CPayload(entityId, golem.getExcavationHeight(), golem.getExcavationDepth()));
+            } else if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TERRAFORMING) {
+                // Send terraforming sync
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                        new ninja.trek.mc.goldgolem.net.SyncTerraformingS2CPayload(
+                                entityId,
+                                golem.getTerraformingScanRadius(),
+                                golem.getTerraformingGradientVerticalWindow(),
+                                golem.getTerraformingGradientHorizontalWindow(),
+                                golem.getTerraformingGradientSlopedWindow(),
+                                java.util.Arrays.asList(golem.getTerraformingGradientVerticalCopy()),
+                                java.util.Arrays.asList(golem.getTerraformingGradientHorizontalCopy()),
+                                java.util.Arrays.asList(golem.getTerraformingGradientSlopedCopy())
+                        ));
             }
         }
     }

@@ -2976,9 +2976,61 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setStepGradientSlot(int idx, String id) {
         if (idx < 0 || idx >= 9) return;
         String value = (id == null || id.isEmpty()) ? "" : id;
-        
+
         stepGradient[idx] = value;
     }
+
+    // Terraforming gradient getters/setters
+    public String[] getTerraformingGradientVerticalCopy() {
+        String[] copy = new String[9];
+        for (int i = 0; i < 9; i++) {
+            copy[i] = (terraformingGradientVertical[i] == null || terraformingGradientVertical[i].isEmpty()) ? "" : terraformingGradientVertical[i];
+        }
+        return copy;
+    }
+
+    public String[] getTerraformingGradientHorizontalCopy() {
+        String[] copy = new String[9];
+        for (int i = 0; i < 9; i++) {
+            copy[i] = (terraformingGradientHorizontal[i] == null || terraformingGradientHorizontal[i].isEmpty()) ? "" : terraformingGradientHorizontal[i];
+        }
+        return copy;
+    }
+
+    public String[] getTerraformingGradientSlopedCopy() {
+        String[] copy = new String[9];
+        for (int i = 0; i < 9; i++) {
+            copy[i] = (terraformingGradientSloped[i] == null || terraformingGradientSloped[i].isEmpty()) ? "" : terraformingGradientSloped[i];
+        }
+        return copy;
+    }
+
+    public void setTerraformingGradientVerticalSlot(int idx, String id) {
+        if (idx < 0 || idx >= 9) return;
+        String value = (id == null || id.isEmpty()) ? "" : id;
+        terraformingGradientVertical[idx] = value;
+    }
+
+    public void setTerraformingGradientHorizontalSlot(int idx, String id) {
+        if (idx < 0 || idx >= 9) return;
+        String value = (id == null || id.isEmpty()) ? "" : id;
+        terraformingGradientHorizontal[idx] = value;
+    }
+
+    public void setTerraformingGradientSlopedSlot(int idx, String id) {
+        if (idx < 0 || idx >= 9) return;
+        String value = (id == null || id.isEmpty()) ? "" : id;
+        terraformingGradientSloped[idx] = value;
+    }
+
+    public int getTerraformingGradientVerticalWindow() { return terraformingGradientVerticalWindow; }
+    public void setTerraformingGradientVerticalWindow(int w) { this.terraformingGradientVerticalWindow = Math.max(0, Math.min(9, w)); }
+
+    public int getTerraformingGradientHorizontalWindow() { return terraformingGradientHorizontalWindow; }
+    public void setTerraformingGradientHorizontalWindow(int w) { this.terraformingGradientHorizontalWindow = Math.max(0, Math.min(9, w)); }
+
+    public int getTerraformingGradientSlopedWindow() { return terraformingGradientSlopedWindow; }
+    public void setTerraformingGradientSlopedWindow(int w) { this.terraformingGradientSlopedWindow = Math.max(0, Math.min(9, w)); }
 
     // Ownership (simple UUID-based)
     private java.util.UUID ownerUuid;

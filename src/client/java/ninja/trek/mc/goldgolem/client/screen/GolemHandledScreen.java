@@ -63,6 +63,20 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private int excavationDepth = 16; // 1-64
     private ExcavationHeightSlider excavationHeightSlider;
     private ExcavationDepthSlider excavationDepthSlider;
+
+    // Terraforming mode state
+    private int terraformingScanRadius = 2; // 1-5
+    private int terraformingGradientVerticalWindow = 1; // 0..9
+    private int terraformingGradientHorizontalWindow = 1; // 0..9
+    private int terraformingGradientSlopedWindow = 1; // 0..9
+    private String[] terraformingGradientVertical = new String[9];
+    private String[] terraformingGradientHorizontal = new String[9];
+    private String[] terraformingGradientSloped = new String[9];
+    private WindowSlider terraformingSliderVertical;
+    private WindowSlider terraformingSliderHorizontal;
+    private WindowSlider terraformingSliderSloped;
+    private TerraformingScanRadiusSlider terraformingScanRadiusSlider;
+
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
         IconHit(String blockId, int group, int x, int y, int w, int h) { this.blockId = blockId; this.group = group; this.x = x; this.y = y; this.w = w; this.h = h; }
@@ -185,6 +199,31 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
+    private class TerraformingScanRadiusSlider extends SliderWidget {
+        public TerraformingScanRadiusSlider(int x, int y, int width, int height, int initialRadius) {
+            super(x, y, width, height, Text.literal("Scan Radius"), toValueInit(initialRadius));
+        }
+        private static double toValueInit(int r) { return (r - 1) / 4.0; } // 1-5 range
+        private static int toRadius(double v) { return Math.max(1, Math.min(5, 1 + (int)Math.round(v * 4.0))); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Scan Radius: " + toRadius(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int r = toRadius(this.value);
+            if (r != terraformingScanRadius) {
+                terraformingScanRadius = r;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingScanRadiusC2SPayload(getEntityId(), terraformingScanRadius));
+                updateMessage();
+            }
+        }
+        public void syncTo(int r) {
+            this.value = toValueInit(r);
+            updateMessage();
+        }
+    }
+
     public GolemHandledScreen(GolemInventoryScreenHandler handler, PlayerInventory inventory, Text title) {
         super(handler, inventory, title);
         this.backgroundWidth = 176; // vanilla chest width
@@ -232,6 +271,58 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (this.excavationDepthSlider != null) {
             this.excavationDepthSlider.syncTo(depth);
         }
+    }
+
+    // Terraforming mode network sync method
+    public void setTerraformingValues(int scanRadius, int verticalWindow, int horizontalWindow, int slopedWindow,
+                                       java.util.List<String> verticalGradient, java.util.List<String> horizontalGradient,
+                                       java.util.List<String> slopedGradient) {
+        this.terraformingScanRadius = scanRadius;
+        this.terraformingGradientVerticalWindow = verticalWindow;
+        this.terraformingGradientHorizontalWindow = horizontalWindow;
+        this.terraformingGradientSlopedWindow = slopedWindow;
+
+        // Sync gradient arrays
+        for (int i = 0; i < 9; i++) {
+            this.terraformingGradientVertical[i] = (verticalGradient != null && i < verticalGradient.size()) ? verticalGradient.get(i) : "";
+            this.terraformingGradientHorizontal[i] = (horizontalGradient != null && i < horizontalGradient.size()) ? horizontalGradient.get(i) : "";
+            this.terraformingGradientSloped[i] = (slopedGradient != null && i < slopedGradient.size()) ? slopedGradient.get(i) : "";
+        }
+
+        // Sync sliders if they exist
+        if (this.terraformingScanRadiusSlider != null) {
+            this.terraformingScanRadiusSlider.syncTo(scanRadius);
+        }
+        if (this.terraformingSliderVertical != null) {
+            int g = effectiveTerraformingG(0);
+            this.terraformingSliderVertical.syncTo(0, g, verticalWindow);
+        }
+        if (this.terraformingSliderHorizontal != null) {
+            int g = effectiveTerraformingG(1);
+            this.terraformingSliderHorizontal.syncTo(0, g, horizontalWindow);
+        }
+        if (this.terraformingSliderSloped != null) {
+            int g = effectiveTerraformingG(2);
+            this.terraformingSliderSloped.syncTo(0, g, slopedWindow);
+        }
+    }
+
+    private int effectiveTerraformingG(int gradientType) {
+        String[] arr = switch (gradientType) {
+            case 0 -> terraformingGradientVertical;
+            case 1 -> terraformingGradientHorizontal;
+            case 2 -> terraformingGradientSloped;
+            default -> null;
+        };
+        if (arr == null) return 0;
+        int g = 0;
+        for (int i = arr.length - 1; i >= 0; i--) {
+            if (arr[i] != null && !arr[i].isEmpty()) {
+                g = i + 1;
+                break;
+            }
+        }
+        return g;
     }
 
     private void scrollWall(int delta) {
@@ -354,6 +445,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private boolean isMiningMode() {
         // slider value of 3 indicates mining mode
         return this.handler.getSliderMode() == 3;
+    }
+
+    private boolean isTerraformingMode() {
+        // slider value of 4 indicates terraforming mode
+        return this.handler.getSliderMode() == 4;
     }
 
     private int indexOfBlockId(String id) {
@@ -485,6 +581,75 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int iconX = this.x - 20;
             context.drawItem(iconMain, iconX, slotY0);
             context.drawItem(iconStep, iconX, slotY1);
+        } else if (isTerraformingMode()) {
+            // Terraforming mode: draw 3 gradient slot rows (vertical, horizontal, sloped)
+            int slotsX = this.x + 8;
+            int slotY0 = this.y + 26; // First row: vertical
+            int slotY1 = slotY0 + 18 + 6; // Second row: horizontal
+            int slotY2 = slotY1 + 18 + 6; // Third row: sloped
+
+            int borderColor = 0xFF555555;
+            int innerColor = 0xFF1C1C1C;
+
+            // Draw frames for all three rows
+            for (int row = 0; row < 3; row++) {
+                int slotY = slotY0 + row * (18 + 6);
+                for (int i = 0; i < 9; i++) {
+                    int fx = slotsX + i * 18;
+                    context.fill(fx - 1, slotY - 1, fx + 17, slotY + 17, borderColor);
+                    context.fill(fx, slotY, fx + 16, slotY + 16, innerColor);
+                }
+            }
+
+            // Draw items for vertical gradient
+            for (int i = 0; i < 9; i++) {
+                String id = (terraformingGradientVertical != null && i < terraformingGradientVertical.length) ? terraformingGradientVertical[i] : "";
+                if (id != null && !id.isEmpty()) {
+                    var ident = net.minecraft.util.Identifier.tryParse(id);
+                    if (ident != null) {
+                        var block = Registries.BLOCK.get(ident);
+                        if (block != null) {
+                            ItemStack stack = new ItemStack(block.asItem());
+                            context.drawItem(stack, slotsX + i * 18, slotY0);
+                        }
+                    }
+                }
+            }
+
+            // Draw items for horizontal gradient
+            for (int i = 0; i < 9; i++) {
+                String id = (terraformingGradientHorizontal != null && i < terraformingGradientHorizontal.length) ? terraformingGradientHorizontal[i] : "";
+                if (id != null && !id.isEmpty()) {
+                    var ident = net.minecraft.util.Identifier.tryParse(id);
+                    if (ident != null) {
+                        var block = Registries.BLOCK.get(ident);
+                        if (block != null) {
+                            ItemStack stack = new ItemStack(block.asItem());
+                            context.drawItem(stack, slotsX + i * 18, slotY1);
+                        }
+                    }
+                }
+            }
+
+            // Draw items for sloped gradient
+            for (int i = 0; i < 9; i++) {
+                String id = (terraformingGradientSloped != null && i < terraformingGradientSloped.length) ? terraformingGradientSloped[i] : "";
+                if (id != null && !id.isEmpty()) {
+                    var ident = net.minecraft.util.Identifier.tryParse(id);
+                    if (ident != null) {
+                        var block = Registries.BLOCK.get(ident);
+                        if (block != null) {
+                            ItemStack stack = new ItemStack(block.asItem());
+                            context.drawItem(stack, slotsX + i * 18, slotY2);
+                        }
+                    }
+                }
+            }
+
+            // Draw labels to the left of each row
+            context.drawText(this.textRenderer, Text.literal("Vertical"), this.x + 8, slotY0 - 10, 0xFFFFFF, false);
+            context.drawText(this.textRenderer, Text.literal("Horizontal"), this.x + 8, slotY1 - 10, 0xFFFFFF, false);
+            context.drawText(this.textRenderer, Text.literal("Sloped"), this.x + 8, slotY2 - 10, 0xFFFFFF, false);
         }
     }
 
@@ -642,6 +807,96 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
             this.addDrawableChild(excavationHeightSlider);
             this.addDrawableChild(excavationDepthSlider);
+        } else if (isTerraformingMode()) {
+            // Terraforming mode: 3 gradient rows + window sliders + scan radius slider
+            int wx = this.x + 8 + 9 * 18 + 12;
+            int wy0 = controlsTop + 18; // First gradient row (vertical)
+            int wy1 = wy0 + 18 + 6;     // Second gradient row (horizontal)
+            int wy2 = wy1 + 18 + 6;     // Third gradient row (sloped)
+            int sliderWidth = 90;
+            int sliderHeight = 12;
+
+            int g0 = effectiveTerraformingG(0);
+            double norm0 = g0 <= 0 ? 0.0 : (double) Math.min(terraformingGradientVerticalWindow, g0) / (double) g0;
+            terraformingSliderVertical = new WindowSlider(wx, wy0, sliderWidth, sliderHeight, norm0, 0);
+            this.addDrawableChild(terraformingSliderVertical);
+
+            int g1 = effectiveTerraformingG(1);
+            double norm1 = g1 <= 0 ? 0.0 : (double) Math.min(terraformingGradientHorizontalWindow, g1) / (double) g1;
+            terraformingSliderHorizontal = new WindowSlider(wx, wy1, sliderWidth, sliderHeight, norm1, 1);
+            this.addDrawableChild(terraformingSliderHorizontal);
+
+            int g2 = effectiveTerraformingG(2);
+            double norm2 = g2 <= 0 ? 0.0 : (double) Math.min(terraformingGradientSlopedWindow, g2) / (double) g2;
+            terraformingSliderSloped = new WindowSlider(wx, wy2, sliderWidth, sliderHeight, norm2, 2);
+            this.addDrawableChild(terraformingSliderSloped);
+
+            // Scan radius slider at the right
+            int scanSliderX = this.x + this.backgroundWidth - 8 - 90;
+            int scanSliderY = controlsTop + 18;
+            terraformingScanRadiusSlider = new TerraformingScanRadiusSlider(scanSliderX, scanSliderY, 90, 12, terraformingScanRadius);
+            this.addDrawableChild(terraformingScanRadiusSlider);
+
+            // Transparent buttons over gradient slots for all three rows
+            int slotsX = this.x + 8;
+            int slotY0 = this.y + 26;
+            int slotY1 = slotY0 + 18 + 6;
+            int slotY2 = slotY1 + 18 + 6;
+            for (int i = 0; i < 9; i++) {
+                final int idx = i;
+                int gx = slotsX + i * 18;
+
+                // Vertical gradient row
+                var btn0 = ButtonWidget.builder(Text.empty(), b -> {
+                    var mc = MinecraftClient.getInstance();
+                    var player = mc.player;
+                    if (player == null) return;
+                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                    boolean clear = cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem);
+                    if (clear) {
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 0, idx, java.util.Optional.empty()));
+                    } else {
+                        BlockItem bi = (BlockItem) cursor.getItem();
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 0, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                    }
+                }).dimensions(gx, slotY0, 18, 18).build();
+                btn0.setAlpha(0f);
+                this.addDrawableChild(btn0);
+
+                // Horizontal gradient row
+                var btn1 = ButtonWidget.builder(Text.empty(), b -> {
+                    var mc = MinecraftClient.getInstance();
+                    var player = mc.player;
+                    if (player == null) return;
+                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                    boolean clear = cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem);
+                    if (clear) {
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 1, idx, java.util.Optional.empty()));
+                    } else {
+                        BlockItem bi = (BlockItem) cursor.getItem();
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 1, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                    }
+                }).dimensions(gx, slotY1, 18, 18).build();
+                btn1.setAlpha(0f);
+                this.addDrawableChild(btn1);
+
+                // Sloped gradient row
+                var btn2 = ButtonWidget.builder(Text.empty(), b -> {
+                    var mc = MinecraftClient.getInstance();
+                    var player = mc.player;
+                    if (player == null) return;
+                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                    boolean clear = cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem);
+                    if (clear) {
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 2, idx, java.util.Optional.empty()));
+                    } else {
+                        BlockItem bi = (BlockItem) cursor.getItem();
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 2, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                    }
+                }).dimensions(gx, slotY2, 18, 18).build();
+                btn2.setAlpha(0f);
+                this.addDrawableChild(btn2);
+            }
         }
     }
 
