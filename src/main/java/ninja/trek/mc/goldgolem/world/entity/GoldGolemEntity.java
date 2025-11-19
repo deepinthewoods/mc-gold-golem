@@ -33,6 +33,9 @@ import ninja.trek.mc.goldgolem.screen.GolemScreens;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
+import net.minecraft.block.ShulkerBoxBlock;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.component.type.ContainerComponent;
 
 import java.util.Optional;
 
@@ -2160,6 +2163,49 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
+    private boolean consumeFromShulkerBox(ItemStack shulkerBox, String blockId) {
+        // Get the container component from the shulker box
+        ContainerComponent container = shulkerBox.get(DataComponentTypes.CONTAINER);
+        if (container == null) return false;
+
+        // Convert stream to list for easier manipulation
+        java.util.List<ItemStack> contents = container.stream().toList();
+
+        // Search through the shulker box contents
+        for (int i = 0; i < contents.size(); i++) {
+            ItemStack stack = contents.get(i);
+            if (stack.isEmpty()) continue;
+
+            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
+                String stackId = net.minecraft.registry.Registries.BLOCK.getId(bi.getBlock()).toString();
+                if (stackId.equals(blockId)) {
+                    // Create a new container with the modified contents
+                    ContainerComponent.Builder builder = ContainerComponent.builder();
+                    for (int j = 0; j < contents.size(); j++) {
+                        if (j == i) {
+                            // Decrement this stack
+                            ItemStack modifiedStack = contents.get(j).copy();
+                            modifiedStack.decrement(1);
+                            if (!modifiedStack.isEmpty()) {
+                                builder.add(modifiedStack);
+                            }
+                        } else {
+                            ItemStack slotStack = contents.get(j);
+                            if (!slotStack.isEmpty()) {
+                                builder.add(slotStack);
+                            }
+                        }
+                    }
+
+                    // Update the shulker box with the new container component
+                    shulkerBox.set(DataComponentTypes.CONTAINER, builder.build());
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private boolean consumeBlockFromInventory(String blockId) {
         // Search inventory for matching block
         for (int i = 0; i < inventory.size(); i++) {
@@ -2173,6 +2219,20 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
         }
+
+        // If not found in regular inventory, check shulker boxes
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+
+            // Check if this is a shulker box
+            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi && bi.getBlock() instanceof ShulkerBoxBlock) {
+                if (consumeFromShulkerBox(stack, blockId)) {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
