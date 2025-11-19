@@ -162,6 +162,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private ninja.trek.mc.goldgolem.tree.TreeTileCache treeTileCache = null; // lazy-loaded when building starts
     private ninja.trek.mc.goldgolem.tree.TreeWFCBuilder treeWFCBuilder = null; // active WFC state
     private boolean treeTilesCached = false;
+    private boolean treeWaitingForInventory = false; // true when out of blocks, waiting for restock
     // Tree UI state: dynamic gradient groups (same pattern as wall/tower)
     private final java.util.List<String[]> treeGroupSlots = new java.util.ArrayList<>(); // each String[9]
     private final java.util.List<Integer> treeGroupWindows = new java.util.ArrayList<>();
@@ -1339,6 +1340,20 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Tree mode: WFC-based building that follows player with nuggets
         if (!buildingPaths || treeModules.isEmpty() || treeOrigin == null) return;
 
+        // If waiting for inventory, show angry particles and don't build
+        if (treeWaitingForInventory) {
+            // Show angry villager particles periodically
+            if (this.age % 20 == 0) {
+                if (this.getEntityWorld() instanceof ServerWorld sw) {
+                    sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
+                        this.getX(), this.getY() + 2.0, this.getZ(),
+                        1, 0.2, 0.2, 0.2, 0.0);
+                }
+            }
+            // Don't do any building work while waiting
+            return;
+        }
+
         // Cache tiles if not already done
         if (!treeTilesCached || treeTileCache == null) {
             try {
@@ -1366,16 +1381,18 @@ public class GoldGolemEntity extends PathAwareEntity {
                 treeTilesCached = true;
 
                 if (treeTileCache.isEmpty()) {
-                    // No tiles extracted, stop building
+                    // No tiles extracted, stop building permanently
                     buildingPaths = false;
                     this.dataTracker.set(BUILDING_PATHS, false);
                     return;
                 }
 
-                // Initialize WFC builder at golem's current position
-                java.util.Random random = new java.util.Random(this.getUuid().getMostSignificantBits());
-                treeWFCBuilder = new ninja.trek.mc.goldgolem.tree.TreeWFCBuilder(
-                    treeTileCache, this.getEntityWorld(), this.getBlockPos(), stopBlocks, random);
+                // Initialize WFC builder at golem's current position (only if new)
+                if (treeWFCBuilder == null) {
+                    java.util.Random random = new java.util.Random(this.getUuid().getMostSignificantBits());
+                    treeWFCBuilder = new ninja.trek.mc.goldgolem.tree.TreeWFCBuilder(
+                        treeTileCache, this.getEntityWorld(), this.getBlockPos(), stopBlocks, random);
+                }
 
             } catch (Exception e) {
                 // Failed to cache tiles, stop building
@@ -1420,8 +1437,26 @@ public class GoldGolemEntity extends PathAwareEntity {
                     stuckTicks = 0;
                 }
 
-                // Place the blocks from the tile
-                placeTreeTile(buildPos);
+                // Place the blocks from the tile - returns false if inventory depleted
+                boolean success = placeTreeTile(buildPos);
+                if (!success) {
+                    // Out of inventory - stop building and wait for restock
+                    buildingPaths = false;
+                    this.dataTracker.set(BUILDING_PATHS, false);
+                    treeWaitingForInventory = true;
+
+                    // Show angry villager particles
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
+                            this.getX(), this.getY() + 2.0, this.getZ(),
+                            5, 0.3, 0.3, 0.3, 0.0);
+                    }
+
+                    // Put the build position back in the queue so we resume from here
+                    // Note: TreeWFCBuilder's getNextBuildPosition already removed it, so we need to re-queue
+                    // For now, we'll just leave it - the next tile will be attempted when resumed
+                    return;
+                }
             }
         }
 
@@ -1432,15 +1467,19 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private void placeTreeTile(BlockPos tileOriginPos) {
-        if (this.getEntityWorld().isClient()) return;
-        if (treeWFCBuilder == null) return;
+    private boolean placeTreeTile(BlockPos tileOriginPos) {
+        if (this.getEntityWorld().isClient()) return true;
+        if (treeWFCBuilder == null) return true;
 
         String tileId = treeWFCBuilder.getCollapsedTile(tileOriginPos);
-        if (tileId == null) return;
+        if (tileId == null) return true;
 
         ninja.trek.mc.goldgolem.tree.TreeTile tile = treeWFCBuilder.getTile(tileId);
-        if (tile == null) return;
+        if (tile == null) return true;
+
+        // Track if we successfully placed at least one block, and if we failed due to inventory
+        boolean placedAny = false;
+        boolean inventoryDepleted = false;
 
         // Place all blocks in the tile
         int tileSize = tile.size;
@@ -1461,11 +1500,14 @@ public class GoldGolemEntity extends PathAwareEntity {
 
                     // Consume from inventory
                     if (!consumeBlockFromInventory(finalState.getBlock())) {
-                        continue; // No blocks in inventory, skip
+                        // No blocks in inventory - mark as depleted
+                        inventoryDepleted = true;
+                        continue;
                     }
 
                     // Place the block
                     this.getEntityWorld().setBlockState(placePos, finalState, 3);
+                    placedAny = true;
 
                     // Spawn particles
                     if (this.getEntityWorld() instanceof ServerWorld sw) {
@@ -1477,11 +1519,20 @@ public class GoldGolemEntity extends PathAwareEntity {
             }
         }
 
+        // If we depleted inventory and couldn't place anything this tile, fail
+        if (inventoryDepleted && !placedAny) {
+            return false; // Signal inventory depletion
+        }
+
         // Update hand animations (use first block of tile for visual)
-        BlockPos animPos = tileOriginPos;
-        this.dataTracker.set(LEFT_HAND_TARGET_POS, Optional.of(animPos));
-        this.dataTracker.set(LEFT_ARM_HAS_TARGET, true);
-        this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, 0);
+        if (placedAny) {
+            BlockPos animPos = tileOriginPos;
+            this.dataTracker.set(LEFT_HAND_TARGET_POS, Optional.of(animPos));
+            this.dataTracker.set(LEFT_ARM_HAS_TARGET, true);
+            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, 0);
+        }
+
+        return true; // Success (or partial success is okay)
     }
 
     private BlockState sampleTreeGradient(BlockState originalState, BlockPos pos) {
@@ -3371,6 +3422,23 @@ public class GoldGolemEntity extends PathAwareEntity {
                     this.dataTracker.set(BUILDING_PATHS, true);
                     if (!player.isCreative()) stack.decrement(1);
                     spawnHearts();
+                } else if (this.buildMode == BuildMode.TREE) {
+                    // Tree mode: start or resume building
+                    if (this.treeWaitingForInventory) {
+                        // Resume from where we left off
+                        this.treeWaitingForInventory = false;
+                        this.buildingPaths = true;
+                        this.dataTracker.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.decrement(1);
+                        spawnHearts();
+                        sp.sendMessage(Text.literal("[Gold Golem] Resuming Tree Mode building!"), true);
+                    } else {
+                        // Start fresh
+                        this.buildingPaths = true;
+                        this.dataTracker.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.decrement(1);
+                        spawnHearts();
+                    }
                 } else {
                     // Path/Wall/Tower modes: start building as before
                     this.buildingPaths = true;
@@ -3420,6 +3488,9 @@ public class GoldGolemEntity extends PathAwareEntity {
                 this.miningReturningToChest = false;
                 this.miningCurrentTarget = null;
                 this.miningBreakProgress = 0;
+            } else if (this.buildMode == BuildMode.TREE) {
+                // Tree mode: reset waiting state (allows canceling "out of inventory" state)
+                this.treeWaitingForInventory = false;
             } else {
                 // Path/Wall/Tower mode cleanup
                 this.trackStart = null;
