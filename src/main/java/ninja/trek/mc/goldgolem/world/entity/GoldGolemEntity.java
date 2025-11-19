@@ -37,7 +37,7 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import java.util.Optional;
 
 public class GoldGolemEntity extends PathAwareEntity {
-    public enum BuildMode { PATH, WALL, TOWER, MINING, EXCAVATION }
+    public enum BuildMode { PATH, WALL, TOWER, MINING, EXCAVATION, TERRAFORMING }
     public static final int INVENTORY_SIZE = 27;
 
     // Data trackers for client-server sync
@@ -132,6 +132,26 @@ public class GoldGolemEntity extends PathAwareEntity {
     private String excavationBuildingBlockType = null; // block ID to keep for placing floor
     private int excavationBreakProgress = 0; // ticks spent breaking current block
     private BlockPos excavationCurrentTarget = null; // block currently being broken
+
+    // Terraforming-mode state
+    private BlockPos terraformingOrigin = null; // center of 3x3 gold platform
+    private java.util.List<BlockPos> terraformingSkeletonBlocks = null; // skeleton block positions
+    private java.util.Set<net.minecraft.block.Block> terraformingSkeletonTypes = null; // skeleton block types
+    private java.util.Map<Integer, java.util.List<BlockPos>> terraformingShellByLayer = null; // Y -> shell positions
+    private int terraformingCurrentY = 0; // current Y layer being built
+    private int terraformingLayerProgress = 0; // progress within current layer
+    private BlockPos terraformingStartPos = null; // where golem was summoned
+    private int terraformingScanRadius = 2; // slope detection radius (1-5)
+    private int terraformingMinY = 0; // minimum Y bound
+    private int terraformingMaxY = 0; // maximum Y bound
+    private int terraformingAlpha = 3; // alpha shape parameter (concavity control, 1-10)
+    // Three gradients for terraforming mode
+    private final String[] terraformingGradientVertical = new String[9]; // steep/cliff surfaces
+    private final String[] terraformingGradientHorizontal = new String[9]; // flat surfaces
+    private final String[] terraformingGradientSloped = new String[9]; // diagonal surfaces
+    private int terraformingGradientVerticalWindow = 1; // window for vertical gradient (0..9)
+    private int terraformingGradientHorizontalWindow = 1; // window for horizontal gradient (0..9)
+    private int terraformingGradientSlopedWindow = 1; // window for sloped gradient (0..9)
 
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
@@ -386,6 +406,70 @@ public class GoldGolemEntity extends PathAwareEntity {
     public int getExcavationHeight() { return excavationHeight; }
     public int getExcavationDepth() { return excavationDepth; }
 
+    public void setTerraformingConfig(ninja.trek.mc.goldgolem.terraforming.TerraformingDefinition def, BlockPos startPos) {
+        this.terraformingOrigin = def.origin();
+        this.terraformingSkeletonBlocks = new java.util.ArrayList<>(def.skeletonBlocks());
+        this.terraformingSkeletonTypes = new java.util.HashSet<>(def.skeletonTypes());
+        this.terraformingStartPos = startPos;
+        this.terraformingMinY = def.minBound().getY();
+        this.terraformingMaxY = def.maxBound().getY();
+
+        // Generate shell using alpha shapes for each Y layer
+        this.terraformingShellByLayer = new java.util.HashMap<>();
+        for (int y = terraformingMinY; y <= terraformingMaxY; y++) {
+            java.util.List<BlockPos> skeletonAtY = new java.util.ArrayList<>();
+            for (BlockPos pos : terraformingSkeletonBlocks) {
+                if (pos.getY() == y) {
+                    skeletonAtY.add(pos);
+                }
+            }
+
+            if (!skeletonAtY.isEmpty()) {
+                java.util.Set<BlockPos> shellSet = ninja.trek.mc.goldgolem.terraforming.AlphaShape.generateShell(
+                        skeletonAtY, terraformingAlpha, y);
+                terraformingShellByLayer.put(y, new java.util.ArrayList<>(shellSet));
+            }
+        }
+
+        // Start from minimum Y
+        this.terraformingCurrentY = terraformingMinY;
+        this.terraformingLayerProgress = 0;
+    }
+
+    public void setTerraformingScanRadius(int radius) {
+        this.terraformingScanRadius = Math.max(1, Math.min(5, radius));
+    }
+
+    public int getTerraformingScanRadius() {
+        return terraformingScanRadius;
+    }
+
+    public void setTerraformingAlpha(int alpha) {
+        this.terraformingAlpha = Math.max(1, Math.min(10, alpha));
+        // Regenerate shell if already initialized
+        if (terraformingSkeletonBlocks != null && !terraformingSkeletonBlocks.isEmpty()) {
+            terraformingShellByLayer = new java.util.HashMap<>();
+            for (int y = terraformingMinY; y <= terraformingMaxY; y++) {
+                java.util.List<BlockPos> skeletonAtY = new java.util.ArrayList<>();
+                for (BlockPos pos : terraformingSkeletonBlocks) {
+                    if (pos.getY() == y) {
+                        skeletonAtY.add(pos);
+                    }
+                }
+
+                if (!skeletonAtY.isEmpty()) {
+                    java.util.Set<BlockPos> shellSet = ninja.trek.mc.goldgolem.terraforming.AlphaShape.generateShell(
+                            skeletonAtY, terraformingAlpha, y);
+                    terraformingShellByLayer.put(y, new java.util.ArrayList<>(shellSet));
+                }
+            }
+        }
+    }
+
+    public int getTerraformingAlpha() {
+        return terraformingAlpha;
+    }
+
     public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
         super(type, world);
     }
@@ -527,9 +611,10 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
 
-            // Mining and Excavation modes have different behavior - doesn't track owner
+            // Mining, Excavation, and Terraforming modes have different behavior - doesn't track owner
             if (this.buildMode == BuildMode.MINING) { tickMiningMode(); return; }
             if (this.buildMode == BuildMode.EXCAVATION) { tickExcavationMode(); return; }
+            if (this.buildMode == BuildMode.TERRAFORMING) { tickTerraformingMode(); return; }
 
             // Look at owner while building (Path/Wall/Tower modes)
             PlayerEntity owner = getOwnerPlayer();
@@ -2150,6 +2235,214 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // ========== END EXCAVATION MODE METHODS ==========
 
+    // ========== TERRAFORMING MODE METHODS ==========
+
+    private void tickTerraformingMode() {
+        // Terraforming mode state machine
+        if (terraformingShellByLayer == null || terraformingOrigin == null) {
+            // Invalid state, stop building
+            buildingPaths = false;
+            this.dataTracker.set(BUILDING_PATHS, false);
+            return;
+        }
+
+        // STATE: WAITING - idle at start position until activated with gold nugget
+        if (!buildingPaths) {
+            // Navigate to start position
+            double dx = this.getX() - (terraformingStartPos.getX() + 0.5);
+            double dz = this.getZ() - (terraformingStartPos.getZ() + 0.5);
+            double distSq = dx * dx + dz * dz;
+            if (distSq > 4.0) {
+                this.getNavigation().startMovingTo(terraformingStartPos.getX() + 0.5,
+                    terraformingStartPos.getY(), terraformingStartPos.getZ() + 0.5, 1.0);
+            } else {
+                this.getNavigation().stop();
+            }
+            return;
+        }
+
+        // STATE: BUILDING - place shell blocks layer by layer
+        java.util.List<BlockPos> currentLayer = terraformingShellByLayer.get(terraformingCurrentY);
+
+        // If no shell at this Y level, move to next level
+        if (currentLayer == null || currentLayer.isEmpty()) {
+            terraformingCurrentY++;
+            terraformingLayerProgress = 0;
+
+            // Check if all layers are complete
+            if (terraformingCurrentY > terraformingMaxY) {
+                // All layers done - COMPLETE
+                buildingPaths = false;
+                this.dataTracker.set(BUILDING_PATHS, false);
+            }
+            return;
+        }
+
+        // If layer is complete, move to next layer
+        if (terraformingLayerProgress >= currentLayer.size()) {
+            terraformingLayerProgress = 0;
+            terraformingCurrentY++;
+
+            if (terraformingCurrentY > terraformingMaxY) {
+                // All layers done - COMPLETE
+                buildingPaths = false;
+                this.dataTracker.set(BUILDING_PATHS, false);
+            }
+            return;
+        }
+
+        // Get current target position
+        BlockPos targetPos = currentLayer.get(terraformingLayerProgress);
+
+        // Navigate to position
+        double distSq = this.getBlockPos().getSquaredDistance(targetPos);
+        if (distSq > 16.0) {
+            this.getNavigation().startMovingTo(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5, 1.0);
+
+            // Stuck detection
+            if (this.getNavigation().isIdle()) {
+                stuckTicks++;
+                if (stuckTicks >= 20) {
+                    // Teleport
+                    this.refreshPositionAndAngles(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5,
+                            this.getYaw(), this.getPitch());
+                    if (this.getEntityWorld() instanceof ServerWorld sw) {
+                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 1.0, this.getZ(),
+                                20, 0.5, 0.5, 0.5, 0.1);
+                    }
+                    stuckTicks = 0;
+                }
+            } else {
+                stuckTicks = 0;
+            }
+            return;
+        }
+
+        stuckTicks = 0;
+
+        // At position - place block every 2 ticks (controlled by placementTickCounter)
+        if (placementTickCounter % 2 == 0) {
+            // Remove skeleton block if present
+            BlockState currentState = this.getEntityWorld().getBlockState(targetPos);
+            if (terraformingSkeletonTypes != null && terraformingSkeletonTypes.contains(currentState.getBlock())) {
+                this.getEntityWorld().breakBlock(targetPos, false);
+            }
+
+            // Place shell block using slope-based gradient sampling
+            BlockState toPlace = sampleTerraformingGradient(targetPos);
+            if (toPlace != null) {
+                placeBlockFromInventory(targetPos, toPlace, targetPos.up());
+            }
+
+            terraformingLayerProgress++;
+        }
+    }
+
+    /**
+     * Samples the appropriate terraforming gradient based on local surface slope.
+     * Classifies the surface as VERTICAL, HORIZONTAL, or SLOPED and samples from the corresponding gradient.
+     */
+    private BlockState sampleTerraformingGradient(BlockPos pos) {
+        // Count surrounding shell blocks in scan radius to determine slope
+        int vertical = 0;
+        int horizontal = 0;
+
+        for (BlockPos nearPos : BlockPos.iterate(
+                pos.add(-terraformingScanRadius, -terraformingScanRadius, -terraformingScanRadius),
+                pos.add(terraformingScanRadius, terraformingScanRadius, terraformingScanRadius))) {
+
+            if (nearPos.equals(pos)) continue;
+
+            // Check if this position is part of the shell or skeleton
+            boolean isShellOrSkeleton = false;
+            if (terraformingSkeletonBlocks != null && terraformingSkeletonBlocks.contains(nearPos)) {
+                isShellOrSkeleton = true;
+            } else {
+                // Check if it's in any shell layer
+                int nearY = nearPos.getY();
+                if (terraformingShellByLayer.containsKey(nearY)) {
+                    java.util.List<BlockPos> layer = terraformingShellByLayer.get(nearY);
+                    if (layer != null && layer.contains(nearPos)) {
+                        isShellOrSkeleton = true;
+                    }
+                }
+            }
+
+            if (!isShellOrSkeleton) continue;
+
+            int dx = Math.abs(nearPos.getX() - pos.getX());
+            int dy = Math.abs(nearPos.getY() - pos.getY());
+            int dz = Math.abs(nearPos.getZ() - pos.getZ());
+
+            // Classify as vertical or horizontal based on dominant axis
+            if (dy > dx && dy > dz) {
+                vertical++;
+            } else {
+                horizontal++;
+            }
+        }
+
+        // Calculate slope ratio
+        float total = vertical + horizontal;
+        if (total == 0) {
+            // No nearby blocks, default to horizontal
+            return sampleGradientArray(terraformingGradientHorizontal, terraformingGradientHorizontalWindow, pos);
+        }
+
+        float ratio = vertical / total;
+
+        // Classify and sample appropriate gradient
+        if (ratio > 0.7f) {
+            // Steep/vertical surface (cliffs, walls)
+            return sampleGradientArray(terraformingGradientVertical, terraformingGradientVerticalWindow, pos);
+        } else if (ratio < 0.3f) {
+            // Flat/horizontal surface (floors, tops)
+            return sampleGradientArray(terraformingGradientHorizontal, terraformingGradientHorizontalWindow, pos);
+        } else {
+            // Sloped/diagonal surface
+            return sampleGradientArray(terraformingGradientSloped, terraformingGradientSlopedWindow, pos);
+        }
+    }
+
+    /**
+     * Samples from a gradient array using positional hashing (similar to path mode sampling).
+     */
+    private BlockState sampleGradientArray(String[] gradientArray, int window, BlockPos pos) {
+        if (gradientArray == null || window <= 0) return null;
+
+        // Count non-empty entries
+        int g = 0;
+        for (int i = gradientArray.length - 1; i >= 0; i--) {
+            if (gradientArray[i] != null && !gradientArray[i].isEmpty()) {
+                g = i + 1;
+                break;
+            }
+        }
+
+        if (g == 0) return null;
+
+        // Clamp window
+        int w = Math.max(0, Math.min(g, window));
+        if (w == 0) return null;
+
+        // Use positional hash to sample from gradient window
+        long hash = (long) pos.getX() * 374761393L + (long) pos.getY() * 668265263L + (long) pos.getZ() * 2147483647L;
+        int idx = (int) ((hash & 0x7FFFFFFFL) % w);
+
+        String blockId = gradientArray[idx];
+        if (blockId == null || blockId.isEmpty()) return null;
+
+        var ident = net.minecraft.util.Identifier.tryParse(blockId);
+        if (ident == null) return null;
+
+        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+        if (block == null) return null;
+
+        return block.getDefaultState();
+    }
+
+    // ========== END TERRAFORMING MODE METHODS ==========
+
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
     @Override
     protected void writeCustomData(WriteView view) {
@@ -2313,6 +2606,67 @@ public class GoldGolemEntity extends PathAwareEntity {
         view.putBoolean("ExcavReturningToChest", this.excavationReturningToChest);
         view.putBoolean("ExcavIdleAtStart", this.excavationIdleAtStart);
         if (this.excavationBuildingBlockType != null) view.putString("ExcavBuildingBlock", this.excavationBuildingBlockType);
+
+        // Terraforming-mode persisted bits
+        if (this.terraformingOrigin != null) {
+            view.putInt("TFormOriginX", this.terraformingOrigin.getX());
+            view.putInt("TFormOriginY", this.terraformingOrigin.getY());
+            view.putInt("TFormOriginZ", this.terraformingOrigin.getZ());
+        }
+        if (this.terraformingStartPos != null) {
+            view.putInt("TFormStartX", this.terraformingStartPos.getX());
+            view.putInt("TFormStartY", this.terraformingStartPos.getY());
+            view.putInt("TFormStartZ", this.terraformingStartPos.getZ());
+        }
+        view.putInt("TFormScanRadius", this.terraformingScanRadius);
+        view.putInt("TFormAlpha", this.terraformingAlpha);
+        view.putInt("TFormMinY", this.terraformingMinY);
+        view.putInt("TFormMaxY", this.terraformingMaxY);
+        view.putInt("TFormCurrentY", this.terraformingCurrentY);
+        view.putInt("TFormLayerProgress", this.terraformingLayerProgress);
+
+        // Terraforming gradients
+        for (int i = 0; i < 9; i++) {
+            String v = (terraformingGradientVertical != null && i < terraformingGradientVertical.length && terraformingGradientVertical[i] != null) ? terraformingGradientVertical[i] : "";
+            view.putString("TFormGV" + i, v);
+        }
+        for (int i = 0; i < 9; i++) {
+            String h = (terraformingGradientHorizontal != null && i < terraformingGradientHorizontal.length && terraformingGradientHorizontal[i] != null) ? terraformingGradientHorizontal[i] : "";
+            view.putString("TFormGH" + i, h);
+        }
+        for (int i = 0; i < 9; i++) {
+            String s = (terraformingGradientSloped != null && i < terraformingGradientSloped.length && terraformingGradientSloped[i] != null) ? terraformingGradientSloped[i] : "";
+            view.putString("TFormGS" + i, s);
+        }
+        view.putInt("TFormGVWindow", this.terraformingGradientVerticalWindow);
+        view.putInt("TFormGHWindow", this.terraformingGradientHorizontalWindow);
+        view.putInt("TFormGSWindow", this.terraformingGradientSlopedWindow);
+
+        // Skeleton blocks
+        if (this.terraformingSkeletonBlocks != null && !this.terraformingSkeletonBlocks.isEmpty()) {
+            view.putInt("TFormSkeletonCount", this.terraformingSkeletonBlocks.size());
+            for (int i = 0; i < this.terraformingSkeletonBlocks.size(); i++) {
+                BlockPos pos = this.terraformingSkeletonBlocks.get(i);
+                view.putInt("TFormSkel" + i + "X", pos.getX());
+                view.putInt("TFormSkel" + i + "Y", pos.getY());
+                view.putInt("TFormSkel" + i + "Z", pos.getZ());
+            }
+        } else {
+            view.putInt("TFormSkeletonCount", 0);
+        }
+
+        // Skeleton types
+        if (this.terraformingSkeletonTypes != null && !this.terraformingSkeletonTypes.isEmpty()) {
+            view.putInt("TFormSkelTypesCount", this.terraformingSkeletonTypes.size());
+            int idx = 0;
+            for (net.minecraft.block.Block block : this.terraformingSkeletonTypes) {
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
+                view.putString("TFormSkelType" + idx, blockId);
+                idx++;
+            }
+        } else {
+            view.putInt("TFormSkelTypesCount", 0);
+        }
     }
 
     @Override
@@ -2495,6 +2849,91 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.excavationReturningToChest = view.getBoolean("ExcavReturningToChest", false);
         this.excavationIdleAtStart = view.getBoolean("ExcavIdleAtStart", false);
         this.excavationBuildingBlockType = view.getString("ExcavBuildingBlock", null);
+
+        // Terraforming-mode bits
+        if (view.contains("TFormOriginX")) {
+            this.terraformingOrigin = new BlockPos(view.getInt("TFormOriginX", 0), view.getInt("TFormOriginY", 0), view.getInt("TFormOriginZ", 0));
+        } else {
+            this.terraformingOrigin = null;
+        }
+        if (view.contains("TFormStartX")) {
+            this.terraformingStartPos = new BlockPos(view.getInt("TFormStartX", 0), view.getInt("TFormStartY", 0), view.getInt("TFormStartZ", 0));
+        } else {
+            this.terraformingStartPos = null;
+        }
+        this.terraformingScanRadius = view.getInt("TFormScanRadius", 2);
+        this.terraformingAlpha = view.getInt("TFormAlpha", 3);
+        this.terraformingMinY = view.getInt("TFormMinY", 0);
+        this.terraformingMaxY = view.getInt("TFormMaxY", 0);
+        this.terraformingCurrentY = view.getInt("TFormCurrentY", 0);
+        this.terraformingLayerProgress = view.getInt("TFormLayerProgress", 0);
+
+        // Terraforming gradients
+        for (int i = 0; i < 9; i++) {
+            terraformingGradientVertical[i] = view.getString("TFormGV" + i, "");
+        }
+        for (int i = 0; i < 9; i++) {
+            terraformingGradientHorizontal[i] = view.getString("TFormGH" + i, "");
+        }
+        for (int i = 0; i < 9; i++) {
+            terraformingGradientSloped[i] = view.getString("TFormGS" + i, "");
+        }
+        this.terraformingGradientVerticalWindow = view.getInt("TFormGVWindow", 1);
+        this.terraformingGradientHorizontalWindow = view.getInt("TFormGHWindow", 1);
+        this.terraformingGradientSlopedWindow = view.getInt("TFormGSWindow", 1);
+
+        // Skeleton blocks
+        int skelCount = view.getInt("TFormSkeletonCount", 0);
+        if (skelCount > 0) {
+            this.terraformingSkeletonBlocks = new java.util.ArrayList<>();
+            for (int i = 0; i < skelCount; i++) {
+                int x = view.getInt("TFormSkel" + i + "X", 0);
+                int y = view.getInt("TFormSkel" + i + "Y", 0);
+                int z = view.getInt("TFormSkel" + i + "Z", 0);
+                this.terraformingSkeletonBlocks.add(new BlockPos(x, y, z));
+            }
+        } else {
+            this.terraformingSkeletonBlocks = null;
+        }
+
+        // Skeleton types
+        int skelTypesCount = view.getInt("TFormSkelTypesCount", 0);
+        if (skelTypesCount > 0) {
+            this.terraformingSkeletonTypes = new java.util.HashSet<>();
+            for (int i = 0; i < skelTypesCount; i++) {
+                String blockId = view.getString("TFormSkelType" + i, "");
+                if (!blockId.isEmpty()) {
+                    var ident = net.minecraft.util.Identifier.tryParse(blockId);
+                    if (ident != null) {
+                        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                        if (block != null) {
+                            this.terraformingSkeletonTypes.add(block);
+                        }
+                    }
+                }
+            }
+        } else {
+            this.terraformingSkeletonTypes = null;
+        }
+
+        // Regenerate shell layers from skeleton if we have the data
+        if (this.terraformingSkeletonBlocks != null && !this.terraformingSkeletonBlocks.isEmpty()) {
+            this.terraformingShellByLayer = new java.util.HashMap<>();
+            for (int y = terraformingMinY; y <= terraformingMaxY; y++) {
+                java.util.List<BlockPos> skeletonAtY = new java.util.ArrayList<>();
+                for (BlockPos pos : terraformingSkeletonBlocks) {
+                    if (pos.getY() == y) {
+                        skeletonAtY.add(pos);
+                    }
+                }
+
+                if (!skeletonAtY.isEmpty()) {
+                    java.util.Set<BlockPos> shellSet = ninja.trek.mc.goldgolem.terraforming.AlphaShape.generateShell(
+                            skeletonAtY, terraformingAlpha, y);
+                    terraformingShellByLayer.put(y, new java.util.ArrayList<>(shellSet));
+                }
+            }
+        }
     }
 
     public Inventory getInventory() { return inventory; }
@@ -2601,6 +3040,12 @@ public class GoldGolemEntity extends PathAwareEntity {
                         sp.sendMessage(Text.literal("[Gold Golem] Already excavating!"), true);
                         return ActionResult.FAIL;
                     }
+                } else if (this.buildMode == BuildMode.TERRAFORMING) {
+                    // Terraforming mode: start building when nugget is fed
+                    this.buildingPaths = true;
+                    this.dataTracker.set(BUILDING_PATHS, true);
+                    if (!player.isCreative()) stack.decrement(1);
+                    spawnHearts();
                 } else {
                     // Path/Wall/Tower modes: start building as before
                     this.buildingPaths = true;
