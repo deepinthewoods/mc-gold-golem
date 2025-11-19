@@ -169,7 +169,7 @@ public final class TerraformingScanner {
         Files.createDirectories(folder);
         String fname = String.format(Locale.ROOT,
                 "terraforming_%d_%d_%d_%d.json",
-                System.currentTimeMillis(), def.origin.getX(), def.origin.getY(), def.origin.getZ());
+                System.currentTimeMillis(), def.origin().getX(), def.origin().getY(), def.origin().getZ());
         Path out = folder.resolve(fname);
 
         // Simple JSON writer
@@ -178,12 +178,12 @@ public final class TerraformingScanner {
         sb.append("  \"version\": 1,\n");
         sb.append("  \"mode\": \"terraforming\",\n");
         sb.append("  \"owner\": \"").append(owner == null ? "" : owner.toString()).append("\",\n");
-        sb.append("  \"origin\": [").append(def.origin.getX()).append(',').append(def.origin.getY()).append(',').append(def.origin.getZ()).append("],\n");
+        sb.append("  \"origin\": [").append(def.origin().getX()).append(',').append(def.origin().getY()).append(',').append(def.origin().getZ()).append("],\n");
 
         // Skeleton types
         sb.append("  \"skeletonTypes\": [");
         int idx = 0;
-        for (Block b : def.skeletonTypes) {
+        for (Block b : def.skeletonTypes()) {
             if (idx++ > 0) sb.append(',');
             sb.append('\"').append(Registries.BLOCK.getId(b).toString()).append('\"');
         }
@@ -191,17 +191,17 @@ public final class TerraformingScanner {
 
         // Skeleton blocks
         sb.append("  \"skeletonBlocks\": [");
-        for (int i = 0; i < def.skeletonBlocks.size(); i++) {
+        for (int i = 0; i < def.skeletonBlocks().size(); i++) {
             if (i > 0) sb.append(',');
-            BlockPos p = def.skeletonBlocks.get(i);
+            BlockPos p = def.skeletonBlocks().get(i);
             sb.append('[').append(p.getX()).append(',').append(p.getY()).append(',').append(p.getZ()).append(']');
         }
         sb.append("],\n");
 
         // Bounds
         sb.append("  \"bounds\": {");
-        sb.append("\"min\": [").append(def.minBound.getX()).append(',').append(def.minBound.getY()).append(',').append(def.minBound.getZ()).append("],");
-        sb.append("\"max\": [").append(def.maxBound.getX()).append(',').append(def.maxBound.getY()).append(',').append(def.maxBound.getZ()).append("]");
+        sb.append("\"min\": [").append(def.minBound().getX()).append(',').append(def.minBound().getY()).append(',').append(def.minBound().getZ()).append("],");
+        sb.append("\"max\": [").append(def.maxBound().getX()).append(',').append(def.maxBound().getY()).append(',').append(def.maxBound().getZ()).append("]");
         sb.append("}\n");
 
         sb.append("}\n");

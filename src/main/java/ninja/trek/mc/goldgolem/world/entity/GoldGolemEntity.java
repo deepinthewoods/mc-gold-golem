@@ -145,7 +145,6 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int terraformingMinY = 0; // minimum Y bound
     private int terraformingMaxY = 0; // maximum Y bound
     private int terraformingAlpha = 3; // alpha shape parameter (concavity control, 1-10)
-    private int placementTickCounter = 0; // tick counter for placement timing
     // Three gradients for terraforming mode
     private final String[] terraformingGradientVertical = new String[9]; // steep/cliff surfaces
     private final String[] terraformingGradientHorizontal = new String[9]; // flat surfaces
