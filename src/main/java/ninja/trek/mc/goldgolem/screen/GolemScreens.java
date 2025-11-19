@@ -44,7 +44,7 @@ public final class GolemScreens {
         // Build dynamic UI spec
         int gradientRows = terraformingMode ? 3 : 2; // 3 rows for terraforming (vertical, horizontal, sloped)
         int golemSlots = golemInventory.size();
-        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : 0)));
+        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : 0))));
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
 
         player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {

@@ -77,6 +77,19 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private WindowSlider terraformingSliderSloped;
     private TerraformingScanRadiusSlider terraformingScanRadiusSlider;
 
+    // Tree mode state
+    private java.util.List<String> treeUniqueBlocks = java.util.Collections.emptyList();
+    private java.util.List<Integer> treeBlockGroups = java.util.Collections.emptyList();
+    private java.util.List<Integer> treeGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<String> treeGroupFlatSlots = java.util.Collections.emptyList();
+    private int treeScroll = 0;
+    private final java.util.List<WindowSlider> treeRowSliders = new java.util.ArrayList<>();
+    private final int[] treeSliderToGroup = new int[6];
+    private final java.util.List<IconHit> treeIconHits = new java.util.ArrayList<>();
+    private String treeDraggingBlockId = null;
+    private String treePendingAssignBlockId = null;
+    private int treeTilingPresetOrdinal = 0; // 0 = 3x3, 1 = 5x5
+
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
         IconHit(String blockId, int group, int x, int y, int w, int h) { this.blockId = blockId; this.group = group; this.x = x; this.y = y; this.w = w; this.h = h; }
@@ -236,6 +249,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setWallBlockGroups(java.util.List<Integer> groups) {
         this.wallBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
     }
+    public void setTreeUniqueBlocks(java.util.List<String> ids) {
+        this.treeUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+    }
     public void setWallGroupsState(java.util.List<Integer> windows, java.util.List<String> flatSlots) {
         this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
@@ -323,6 +339,17 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             }
         }
         return g;
+    }
+
+    // Tree mode network sync methods
+    public void setTreeBlockGroups(java.util.List<Integer> groups) {
+        this.treeBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+    }
+    public void setTreeGroupsState(int presetOrdinal, java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+        this.treeTilingPresetOrdinal = presetOrdinal;
+        this.treeGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.treeGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+        syncTreeSliders();
     }
 
     private void scrollWall(int delta) {
@@ -433,6 +460,67 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return !this.handler.isSliderEnabled() && !towerUniqueBlocks.isEmpty();
     }
 
+    // Tree mode helper methods
+    private void scrollTree(int delta) {
+        int rows = getTreeVisibleGroups().size();
+        int maxScroll = Math.max(0, rows - 6);
+        int ns = Math.max(0, Math.min(maxScroll, treeScroll + delta));
+        if (ns != treeScroll) {
+            treeScroll = ns;
+            syncTreeSliders();
+        }
+    }
+
+    private int effectiveTreeGroupG(int group) {
+        if (treeGroupFlatSlots == null) return 0;
+        int start = group * 9;
+        int end = Math.min(start + 9, treeGroupFlatSlots.size());
+        int G = 0;
+        for (int i = end - 1; i >= start; i--) {
+            String s = treeGroupFlatSlots.get(i);
+            if (s != null && !s.isEmpty()) { G = (i - start) + 1; break; }
+        }
+        if (G == 0) G = 9;
+        return G;
+    }
+
+    private void syncTreeSliders() {
+        if (this.handler.isSliderEnabled()) return;
+        java.util.List<Integer> vis = getTreeVisibleGroups();
+        int rows = vis.size();
+        for (int i = 0; i < 6; i++) {
+            int idx = i + treeScroll;
+            int group = (idx < rows) ? vis.get(idx) : -1;
+            treeSliderToGroup[i] = group;
+            WindowSlider s = i < treeRowSliders.size() ? treeRowSliders.get(i) : null;
+            if (s == null) continue;
+            boolean visible = idx < rows;
+            s.visible = visible;
+            if (visible) {
+                int G = effectiveTreeGroupG(group);
+                int w = (group >= 0 && group < treeGroupWindows.size()) ? treeGroupWindows.get(group) : 0;
+                s.syncTo(0, G, w);
+            }
+        }
+    }
+
+    private int indexOfTreeBlockId(String id) {
+        if (treeUniqueBlocks == null) return -1;
+        for (int i = 0; i < treeUniqueBlocks.size(); i++) {
+            if (treeUniqueBlocks.get(i).equals(id)) return i;
+        }
+        return -1;
+    }
+
+    private java.util.List<Integer> getTreeVisibleGroups() {
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        if (treeGroupWindows == null) return out;
+        int total = treeGroupWindows.size();
+        if (total <= 0) return out;
+        for (int g = 0; g < total; g++) out.add(g);
+        return out;
+    }
+
     private boolean isWallMode() {
         return !this.handler.isSliderEnabled() && towerUniqueBlocks.isEmpty() && !wallUniqueBlocks.isEmpty();
     }
@@ -450,6 +538,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private boolean isTerraformingMode() {
         // slider value of 4 indicates terraforming mode
         return this.handler.getSliderMode() == 4;
+    }
+
+    private boolean isTreeMode() {
+        // slider value of 5 indicates tree mode
+        return this.handler.getSliderMode() == 5;
     }
 
     private int indexOfBlockId(String id) {
@@ -897,6 +990,50 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 btn2.setAlpha(0f);
                 this.addDrawableChild(btn2);
             }
+        } else if (isTreeMode()) {
+            // Tree Mode UI: create per-row sliders, scroll buttons, and tiling preset button
+            treeRowSliders.clear();
+            int gridTop = this.y + 26;
+            int rowSpacing = 18 + 6;
+            int gridX = this.x + 8;
+            int treeWx2 = gridX + 9 * 18 + 12;
+            int treeW2 = 90;
+            int treeH2 = 10;
+            for (int r = 0; r < 6; r++) {
+                int sy = gridTop + r * rowSpacing + 3;
+                WindowSlider s = new WindowSlider(treeWx2, sy, treeW2, treeH2, 0.0, 0) {
+                    @Override
+                    protected void applyValue() {
+                        int sliderIdx = treeRowSliders.indexOf(this);
+                        if (sliderIdx < 0 || sliderIdx >= 6) return;
+                        int group = treeSliderToGroup[sliderIdx];
+                        if (group < 0) return;
+                        int G = effectiveTreeGroupG(group);
+                        int w = (G <= 0) ? 0 : (int) Math.round(this.value * G);
+                        w = Math.max(0, Math.min(G, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeGroupWindowC2SPayload(getEntityId(), group, w));
+                    }
+                };
+                treeRowSliders.add(s);
+                this.addDrawableChild(s);
+            }
+            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> { scrollTree(-1); }).dimensions(treeWx2 + treeW2 + 4, gridTop, 14, 12).build();
+            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollTree(1); }).dimensions(treeWx2 + treeW2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
+            this.addDrawableChild(upBtn);
+            this.addDrawableChild(dnBtn);
+
+            // Tiling preset button (right side)
+            String presetText = treeTilingPresetOrdinal == 0 ? "3x3" : "5x5";
+            var presetBtn = ButtonWidget.builder(Text.literal("Preset: " + presetText), b -> {
+                // Toggle preset: 0 <-> 1
+                int newPreset = (treeTilingPresetOrdinal == 0) ? 1 : 0;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeTilingPresetC2SPayload(getEntityId(), newPreset));
+                treeTilingPresetOrdinal = newPreset;
+                b.setMessage(Text.literal("Preset: " + (newPreset == 0 ? "3x3" : "5x5")));
+            }).dimensions(this.x + this.backgroundWidth - 8 - 70, gridTop, 70, 20).build();
+            this.addDrawableChild(presetBtn);
+
+            syncTreeSliders();
         }
     }
 
@@ -921,6 +1058,70 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             }
             return super.mouseClicked(click, traced);
         }
+
+        // Tree Mode: click/drag icons to assign groups; click slots to set/clear
+        if (isTreeMode() && click.button() == 0 && !treeIconHits.isEmpty()) {
+            for (IconHit ih : treeIconHits) {
+                if (ih.contains(mx, my)) {
+                    treePendingAssignBlockId = ih.blockId;
+                    treeDraggingBlockId = ih.blockId;
+                    draggingFromIcon = true;
+                    draggingStartX = mx;
+                    draggingStartY = my;
+                    return true;
+                }
+            }
+        }
+        if (isTreeMode()) {
+            int startY = this.y + 26;
+            int rowSpacing = 18 + 6;
+            int gridX = this.x + 8;
+            java.util.List<Integer> vis = getTreeVisibleGroups();
+            int rows = vis.size();
+            int rLocal = (my - startY) / rowSpacing;
+            int rIdx = rLocal + treeScroll;
+            if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
+                int c = (mx - gridX) / 18;
+                if (c >= 0 && c < 9) {
+                    if (treePendingAssignBlockId != null) {
+                        int groupIdx = vis.get(rIdx);
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treePendingAssignBlockId, groupIdx));
+                        int bi = indexOfTreeBlockId(treePendingAssignBlockId);
+                        if (bi >= 0 && bi < treeBlockGroups.size()) { treeBlockGroups.set(bi, groupIdx); syncTreeSliders(); }
+                        treePendingAssignBlockId = null;
+                        return true;
+                    }
+                    if (click.button() == 1) {
+                        int groupIdx = vis.get(rIdx);
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeGroupSlotC2SPayload(getEntityId(), groupIdx, c, java.util.Optional.empty()));
+                        return true;
+                    } else {
+                        var mc = MinecraftClient.getInstance();
+                        var player = mc.player;
+                        if (player != null) {
+                            ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                            if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
+                                int groupIdx = vis.get(rIdx);
+                                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeGroupSlotC2SPayload(getEntityId(), groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            if (treePendingAssignBlockId != null) {
+                int bottomY = startY + Math.min(6, Math.max(0, rows - treeScroll)) * rowSpacing;
+                int iconAreaRight = this.x - 20 + 16;
+                int iconAreaLeft = 0;
+                if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treePendingAssignBlockId, -1));
+                    treePendingAssignBlockId = null;
+                    return true;
+                }
+            }
+            return super.mouseClicked(click, traced);
+        }
+
         // Wall Mode: click/drag icons to assign groups; click slots to set/clear
         int startY = this.y + 26;
         int rowSpacing = 18 + 6;
@@ -991,6 +1192,64 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         int mx = (int) click.x();
         int my = (int) click.y();
         boolean handled = false;
+
+        // Tree Mode drag and drop handling
+        if (isTreeMode() && draggingFromIcon && treeDraggingBlockId != null) {
+            int iconX = this.x - 20;
+            int startY = this.y + 26;
+            int rowSpacing = 18 + 6;
+            int gridX = this.x + 8;
+            java.util.List<Integer> vis = getTreeVisibleGroups();
+            int rows = vis.size();
+
+            int dx = Math.abs(mx - draggingStartX);
+            int dy = Math.abs(my - draggingStartY);
+            boolean moved = (dx + dy) > 4;
+
+            if (moved) {
+                // Prefer drop onto another label icon to combine groups
+                if (!treeIconHits.isEmpty()) {
+                    for (IconHit ih : treeIconHits) {
+                        if (ih.contains(mx, my)) {
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treeDraggingBlockId, ih.group));
+                            int bi = indexOfTreeBlockId(treeDraggingBlockId);
+                            if (bi >= 0 && bi < treeBlockGroups.size()) { treeBlockGroups.set(bi, ih.group); syncTreeSliders(); }
+                            handled = true;
+                            treePendingAssignBlockId = null;
+                            break;
+                        }
+                    }
+                }
+                if (!handled) {
+                    int rLocal = (my - startY) / rowSpacing;
+                    int rIdx = rLocal + treeScroll;
+                    if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
+                        // Dropped over a visible group row -> assign to that group
+                        int groupIdx = vis.get(rIdx);
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treeDraggingBlockId, groupIdx));
+                        int bi = indexOfTreeBlockId(treeDraggingBlockId);
+                        if (bi >= 0 && bi < treeBlockGroups.size()) { treeBlockGroups.set(bi, groupIdx); syncTreeSliders(); }
+                        handled = true;
+                        treePendingAssignBlockId = null;
+                    } else {
+                        // If dropped below the last visible row within the icon area on the left, create a new group
+                        int bottomY = startY + Math.min(6, Math.max(0, rows - treeScroll)) * rowSpacing;
+                        int iconAreaRight = this.x - 20 + 16;
+                        int iconAreaLeft = 0;
+                        if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treeDraggingBlockId, -1));
+                            handled = true;
+                            treePendingAssignBlockId = null;
+                        }
+                    }
+                }
+            }
+            // Clear drag state regardless of handled
+            draggingFromIcon = false;
+            treeDraggingBlockId = null;
+            return handled || super.mouseReleased(click);
+        }
+
         if (!this.handler.isSliderEnabled() && draggingFromIcon && draggingBlockId != null) {
             int iconX = this.x - 20;
             int startY = this.y + 26;
@@ -1252,9 +1511,80 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             }
         }
 
+        // Tree Mode UI: label icons aligned to group rows + group rows
+        if (isTreeMode()) {
+            int iconX = -20; // relative to GUI left
+            int startY = 26; // relative to GUI top
+            int rowSpacing = 18 + 6;
+            // Draw icons per visible group row; stack multiple icons leftward
+            treeIconHits.clear();
+            java.util.List<Integer> vis = getTreeVisibleGroups();
+            int rows = vis.size();
+            int drawRows = Math.min(Math.max(0, rows - treeScroll), 6);
+            if (treeUniqueBlocks != null && treeBlockGroups != null && !treeUniqueBlocks.isEmpty() && !treeBlockGroups.isEmpty()) {
+                java.util.Map<Integer, java.util.List<String>> groupToBlocks = new java.util.HashMap<>();
+                int n = Math.min(treeUniqueBlocks.size(), treeBlockGroups.size());
+                for (int i = 0; i < n; i++) {
+                    int g = treeBlockGroups.get(i);
+                    groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(treeUniqueBlocks.get(i));
+                }
+                for (int r = 0; r < drawRows; r++) {
+                    int groupIdx = vis.get(r + treeScroll);
+                    java.util.List<String> list = groupToBlocks.getOrDefault(groupIdx, java.util.Collections.emptyList());
+                    int y = startY + r * rowSpacing;
+                    for (int i = 0; i < list.size(); i++) {
+                        String id = list.get(i);
+                        var ident = Identifier.tryParse(id);
+                        if (ident == null) continue;
+                        var block = Registries.BLOCK.get(ident);
+                        if (block == null) continue;
+                        ItemStack icon = new ItemStack(block.asItem());
+                        int ix = iconX - i * 18; // stack leftward
+                        context.drawItem(icon, ix, y);
+                        treeIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));
+                    }
+                }
+            }
+            // Group rows (ghost slots + items)
+            vis = getTreeVisibleGroups();
+            rows = vis.size();
+            drawRows = Math.min(Math.max(0, rows - treeScroll), 6);
+            int gridX = 8; // relative to GUI left
+            for (int r = 0; r < drawRows; r++) {
+                int groupIdx = vis.get(r + treeScroll);
+                int y = startY + r * rowSpacing;
+                for (int c = 0; c < 9; c++) {
+                    int x = gridX + c * 18;
+                    int col = 0xFF404040;
+                    int ix1 = x, iy1 = y, ix2 = x + 16, iy2 = y + 16;
+                    context.fill(ix1, iy1, ix2, iy2, 0x80000000);
+                    // border 1px
+                    context.fill(ix1 - 1, iy1 - 1, ix2 + 1, iy1, col); // top
+                    context.fill(ix1 - 1, iy2, ix2 + 1, iy2 + 1, col); // bottom
+                    context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
+                    context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
+                    int flatIndex = groupIdx * 9 + c;
+                    if (flatIndex >= 0 && flatIndex < treeGroupFlatSlots.size()) {
+                        String bid = treeGroupFlatSlots.get(flatIndex);
+                        if (bid != null && !bid.isEmpty()) {
+                            var ident = Identifier.tryParse(bid);
+                            if (ident != null) {
+                                var block = Registries.BLOCK.get(ident);
+                                if (block != null) {
+                                    ItemStack st = new ItemStack(block.asItem());
+                                    context.drawItem(st, x, y);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Cursor-following visual when dragging a label icon
-        if ((isWallMode() || isTowerMode()) && draggingFromIcon && draggingBlockId != null) {
-            var ident = Identifier.tryParse(draggingBlockId);
+        if ((isWallMode() || isTowerMode() || isTreeMode()) && (draggingFromIcon || (treeDraggingBlockId != null)) && (draggingBlockId != null || treeDraggingBlockId != null)) {
+            String dragId = draggingBlockId != null ? draggingBlockId : treeDraggingBlockId;
+            var ident = Identifier.tryParse(dragId);
             if (ident != null) {
                 var block = Registries.BLOCK.get(ident);
                 if (block != null) {
