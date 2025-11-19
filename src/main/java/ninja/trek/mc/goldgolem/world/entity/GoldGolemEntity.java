@@ -2991,6 +2991,57 @@ public class GoldGolemEntity extends PathAwareEntity {
         } else {
             view.putInt("TFormSkelTypesCount", 0);
         }
+
+        // Tree-mode persisted bits
+        if (this.treeOrigin != null) {
+            view.putInt("TreeOX", this.treeOrigin.getX());
+            view.putInt("TreeOY", this.treeOrigin.getY());
+            view.putInt("TreeOZ", this.treeOrigin.getZ());
+        }
+        if (this.treeJsonFile != null) view.putString("TreeJson", this.treeJsonFile);
+        view.putInt("TreeTilingPreset", this.treeTilingPreset.ordinal());
+        view.putBoolean("TreeWaitingForInventory", this.treeWaitingForInventory);
+
+        // Tree unique block IDs
+        if (this.treeUniqueBlockIds != null && !this.treeUniqueBlockIds.isEmpty()) {
+            view.putInt("TreeUniqCount", this.treeUniqueBlockIds.size());
+            for (int i = 0; i < this.treeUniqueBlockIds.size(); i++) {
+                view.putString("TreeU" + i, this.treeUniqueBlockIds.get(i));
+            }
+        } else {
+            view.putInt("TreeUniqCount", 0);
+        }
+
+        // Tree modules (store voxel positions)
+        view.putInt("TreeModuleCount", this.treeModules.size());
+        for (int m = 0; m < this.treeModules.size(); m++) {
+            ninja.trek.mc.goldgolem.tree.TreeModule module = this.treeModules.get(m);
+            view.putInt("TreeMod" + m + "Size", module.voxels.size());
+            int vIdx = 0;
+            for (net.minecraft.util.math.BlockPos pos : module.voxels) {
+                view.putInt("TreeMod" + m + "V" + vIdx + "X", pos.getX());
+                view.putInt("TreeMod" + m + "V" + vIdx + "Y", pos.getY());
+                view.putInt("TreeMod" + m + "V" + vIdx + "Z", pos.getZ());
+                vIdx++;
+            }
+        }
+
+        // Tree groups persistence
+        view.putInt("TreeGroupCount", treeGroupSlots.size());
+        for (int g = 0; g < treeGroupSlots.size(); g++) {
+            view.putInt("TreeGW" + g, (g < treeGroupWindows.size()) ? treeGroupWindows.get(g) : 1);
+            String[] arr = treeGroupSlots.get(g);
+            for (int i = 0; i < 9; i++) {
+                String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
+                view.putString("TreeGS" + g + "_" + i, v);
+            }
+        }
+        // Mapping for unique ids → group index
+        for (int i = 0; i < treeUniqueBlockIds.size(); i++) {
+            String id = treeUniqueBlockIds.get(i);
+            int grp = treeBlockGroup.getOrDefault(id, 0);
+            view.putInt("TreeGM" + i, grp);
+        }
     }
 
     @Override
@@ -3258,6 +3309,76 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
         }
+
+        // Tree-mode persisted bits
+        if (view.contains("TreeOX")) {
+            int x = view.getInt("TreeOX", 0);
+            int y = view.getInt("TreeOY", 0);
+            int z = view.getInt("TreeOZ", 0);
+            this.treeOrigin = new net.minecraft.util.math.BlockPos(x, y, z);
+        }
+        this.treeJsonFile = view.getOptionalString("TreeJson").orElse(null);
+        int presetOrdinal = view.getInt("TreeTilingPreset", 0);
+        this.treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(presetOrdinal);
+        this.treeWaitingForInventory = view.getBoolean("TreeWaitingForInventory", false);
+
+        // Tree unique block IDs
+        int treeUniqCount = view.getInt("TreeUniqCount", 0);
+        if (treeUniqCount > 0) {
+            this.treeUniqueBlockIds = new java.util.ArrayList<>();
+            for (int i = 0; i < treeUniqCount; i++) {
+                String id = view.getString("TreeU" + i, "");
+                if (!id.isEmpty()) {
+                    this.treeUniqueBlockIds.add(id);
+                }
+            }
+        } else {
+            this.treeUniqueBlockIds = java.util.Collections.emptyList();
+        }
+
+        // Tree modules
+        int treeModCount = view.getInt("TreeModuleCount", 0);
+        if (treeModCount > 0) {
+            this.treeModules = new java.util.ArrayList<>();
+            for (int m = 0; m < treeModCount; m++) {
+                int voxelSize = view.getInt("TreeMod" + m + "Size", 0);
+                java.util.Set<net.minecraft.util.math.BlockPos> voxels = new java.util.HashSet<>();
+                for (int v = 0; v < voxelSize; v++) {
+                    int vx = view.getInt("TreeMod" + m + "V" + v + "X", 0);
+                    int vy = view.getInt("TreeMod" + m + "V" + v + "Y", 0);
+                    int vz = view.getInt("TreeMod" + m + "V" + v + "Z", 0);
+                    voxels.add(new net.minecraft.util.math.BlockPos(vx, vy, vz));
+                }
+                if (!voxels.isEmpty()) {
+                    this.treeModules.add(new ninja.trek.mc.goldgolem.tree.TreeModule(voxels));
+                }
+            }
+        } else {
+            this.treeModules = java.util.Collections.emptyList();
+        }
+
+        // Tree groups persistence
+        int treeGroupCount = view.getInt("TreeGroupCount", 0);
+        this.treeGroupSlots.clear();
+        this.treeGroupWindows.clear();
+        this.treeBlockGroup.clear();
+        for (int g = 0; g < treeGroupCount; g++) {
+            int window = view.getInt("TreeGW" + g, 1);
+            this.treeGroupWindows.add(window);
+            String[] arr = new String[9];
+            for (int i = 0; i < 9; i++) {
+                arr[i] = view.getString("TreeGS" + g + "_" + i, "");
+            }
+            this.treeGroupSlots.add(arr);
+        }
+        // Restore group mappings
+        for (int i = 0; i < treeUniqueBlockIds.size(); i++) {
+            String id = treeUniqueBlockIds.get(i);
+            int grp = view.getInt("TreeGM" + i, 0);
+            this.treeBlockGroup.put(id, grp);
+        }
+
+        // Note: treeTileCache and treeWFCBuilder are NOT persisted - they will be regenerated when building resumes
     }
 
     public Inventory getInventory() { return inventory; }
