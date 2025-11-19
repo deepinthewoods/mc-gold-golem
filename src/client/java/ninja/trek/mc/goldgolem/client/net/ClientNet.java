@@ -12,6 +12,7 @@ import ninja.trek.mc.goldgolem.net.TowerBlockCountsS2CPayload;
 import ninja.trek.mc.goldgolem.net.TowerBlockGroupsS2CPayload;
 import ninja.trek.mc.goldgolem.net.TowerGroupsStateS2CPayload;
 import ninja.trek.mc.goldgolem.net.SyncExcavationS2CPayload;
+import ninja.trek.mc.goldgolem.net.SyncTerraformingS2CPayload;
 
 public final class ClientNet {
     private ClientNet() {}
@@ -92,6 +93,24 @@ public final class ClientNet {
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.setExcavationValues(payload.height(), payload.depth());
+                }
+            });
+        });
+
+        // Terraforming mode receiver
+        ClientPlayNetworking.registerGlobalReceiver(SyncTerraformingS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setTerraformingValues(
+                            payload.scanRadius(),
+                            payload.verticalWindow(),
+                            payload.horizontalWindow(),
+                            payload.slopedWindow(),
+                            payload.verticalGradient(),
+                            payload.horizontalGradient(),
+                            payload.slopedGradient()
+                    );
                 }
             });
         });
