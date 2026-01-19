@@ -17,6 +17,8 @@ import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.screen.GolemInventoryScreenHandler;
 import ninja.trek.mc.goldgolem.BuildMode;
 
+import java.util.Map;
+
 public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandler> {
     private static final Identifier GENERIC_CONTAINER_TEXTURE = Identifier.of("minecraft", "textures/gui/container/generic_54.png");
     private float gradientWindowMain = 1.0f; // 0..9 (server synced)
@@ -292,7 +294,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setWallGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
         this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
-        syncWallSliders();
+        // Invalidate strategy cache to force re-initialization with new data
+        groupModeStrategy = null;
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null) {
+            syncGroupSliders(strategy);
+        }
     }
 
     // Tower mode network sync methods
@@ -315,7 +322,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setTowerGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
         this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
-        syncTowerSliders();
+        // Invalidate strategy cache to force re-initialization with new data
+        groupModeStrategy = null;
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null) {
+            syncGroupSliders(strategy);
+        }
     }
 
     // Excavation mode network sync method
@@ -390,7 +402,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         this.treeTilingPresetOrdinal = presetOrdinal;
         this.treeGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.treeGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
-        syncTreeSliders();
+        // Invalidate strategy cache to force re-initialization with new data
+        groupModeStrategy = null;
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null) {
+            syncGroupSliders(strategy);
+        }
     }
 
     private void scrollWall(int delta) {
@@ -417,22 +434,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     private void syncWallSliders() {
-        if (this.handler.isSliderEnabled()) return;
-        java.util.List<Integer> vis = getVisibleGroups();
-        int rows = vis.size();
-        for (int i = 0; i < 6; i++) {
-            int idx = i + wallScroll;
-            int group = (idx < rows) ? vis.get(idx) : -1;
-            wallSliderToGroup[i] = group;
-            WindowSlider s = i < wallRowSliders.size() ? wallRowSliders.get(i) : null;
-            if (s == null) continue;
-            boolean visible = idx < rows;
-            s.visible = visible;
-            if (visible) {
-                int G = effectiveGroupG(group);
-                float w = (group >= 0 && group < wallGroupWindows.size()) ? wallGroupWindows.get(group) : 0.0f;
-                s.syncTo(0, G, w);
-            }
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null && strategy.getMode() == BuildMode.WALL) {
+            syncGroupSliders(strategy);
         }
     }
 
@@ -461,22 +465,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     private void syncTowerSliders() {
-        if (this.handler.isSliderEnabled()) return;
-        java.util.List<Integer> vis = getTowerVisibleGroups();
-        int rows = vis.size();
-        for (int i = 0; i < 6; i++) {
-            int idx = i + towerScroll;
-            int group = (idx < rows) ? vis.get(idx) : -1;
-            towerSliderToGroup[i] = group;
-            WindowSlider s = i < towerRowSliders.size() ? towerRowSliders.get(i) : null;
-            if (s == null) continue;
-            boolean visible = idx < rows;
-            s.visible = visible;
-            if (visible) {
-                int G = effectiveTowerGroupG(group);
-                float w = (group >= 0 && group < towerGroupWindows.size()) ? towerGroupWindows.get(group) : 0.0f;
-                s.syncTo(0, G, w);
-            }
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null && strategy.getMode() == BuildMode.TOWER) {
+            syncGroupSliders(strategy);
         }
     }
 
@@ -526,22 +517,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     private void syncTreeSliders() {
-        if (this.handler.isSliderEnabled()) return;
-        java.util.List<Integer> vis = getTreeVisibleGroups();
-        int rows = vis.size();
-        for (int i = 0; i < 6; i++) {
-            int idx = i + treeScroll;
-            int group = (idx < rows) ? vis.get(idx) : -1;
-            treeSliderToGroup[i] = group;
-            WindowSlider s = i < treeRowSliders.size() ? treeRowSliders.get(i) : null;
-            if (s == null) continue;
-            boolean visible = idx < rows;
-            s.visible = visible;
-            if (visible) {
-                int G = effectiveTreeGroupG(group);
-                float w = (group >= 0 && group < treeGroupWindows.size()) ? treeGroupWindows.get(group) : 0.0f;
-                s.syncTo(0, G, w);
-            }
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null && strategy.getMode() == BuildMode.TREE) {
+            syncGroupSliders(strategy);
         }
     }
 
@@ -649,30 +627,13 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private void syncGroupSliders(GroupModeStrategy mode) {
         if (mode == null || this.handler.isSliderEnabled()) return;
 
-        // Use the appropriate slider list based on the mode
-        java.util.List<WindowSlider> sliders;
-        int[] sliderToGroup;
-        if (mode.getMode() == BuildMode.WALL) {
-            sliders = wallRowSliders;
-            sliderToGroup = wallSliderToGroup;
-        } else if (mode.getMode() == BuildMode.TOWER) {
-            sliders = towerRowSliders;
-            sliderToGroup = towerSliderToGroup;
-        } else if (mode.getMode() == BuildMode.TREE) {
-            sliders = treeRowSliders;
-            sliderToGroup = treeSliderToGroup;
-        } else {
-            sliders = groupRowSliders;
-            sliderToGroup = groupSliderToGroup;
-        }
-
         java.util.List<Integer> vis = mode.getVisibleGroups();
         int rows = vis.size();
         for (int i = 0; i < 6; i++) {
             int idx = i + mode.getScroll();
             int group = (idx < rows) ? vis.get(idx) : -1;
-            sliderToGroup[i] = group;
-            WindowSlider s = i < sliders.size() ? sliders.get(i) : null;
+            groupSliderToGroup[i] = group;
+            WindowSlider s = i < groupRowSliders.size() ? groupRowSliders.get(i) : null;
             if (s == null) continue;
             boolean visible = idx < rows;
             s.visible = visible;
@@ -962,79 +923,82 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
             widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
             this.addDrawableChild(widthSlider);
-        } else if (isWallMode()) {
-            // Wall Mode UI: create per-row sliders and scroll buttons
-            wallRowSliders.clear();
+        } else if (!this.handler.isSliderEnabled() && (this.handler.getSliderMode() <= 1 || this.handler.getSliderMode() == 5)) {
+            // Group Mode UI (Wall, Tower, Tree): create per-row sliders and scroll buttons using strategy pattern
+            // Check sliderMode: 0 or 1 indicates Wall or Tower mode, 5 indicates Tree mode
+            // Mode-specific data arrives later via network, but we create sliders now
+            groupModeStrategy = null; // Reset to force re-initialization
+            GroupModeStrategy strategy = getGroupModeStrategy();
+
+            // Create sliders regardless of whether data has arrived yet
+            // They will be synced when network data arrives
+            groupRowSliders.clear();
             int gridTop = this.y + 26;
             int rowSpacing = 18 + 6;
             int gridX = this.x + 8;
-            int wallWx2 = gridX + 9 * 18 + 12;
-            int wallW2 = 90;
-            int wallH2 = 10;
+            int wx2 = gridX + 9 * 18 + 12;
+            int w2 = 90;
+            int h2 = 10;
+            BuildMode mode = strategy != null ? strategy.getMode() : BuildMode.WALL; // Default to WALL, will be corrected when data arrives
+
             for (int r = 0; r < 6; r++) {
+                int finalR = r;
                 int sy = gridTop + r * rowSpacing + 3;
-                WindowSlider s = new WindowSlider(wallWx2, sy, wallW2, wallH2, 0.0, 0) {
+                WindowSlider s = new WindowSlider(wx2, sy, w2, h2, 0.0, 0) {
                     @Override
                     protected void applyValue() {
-                        int sliderIdx = wallRowSliders.indexOf(this);
+                        int sliderIdx = finalR;
                         if (sliderIdx < 0 || sliderIdx >= 6) return;
-                        int group = wallSliderToGroup[sliderIdx];
+                        int group = groupSliderToGroup[sliderIdx];
                         if (group < 0) return;
-                        int G = effectiveGroupG(group);
+                        GroupModeStrategy strat = getGroupModeStrategy();
+                        if (strat == null) return;
+                        int G = strat.effectiveGroupG(group);
                         float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
                         w = Math.max(0.0f, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), BuildMode.WALL, group, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), strat.getMode(), group, w));
                     }
                 };
-                wallRowSliders.add(s);
+                groupRowSliders.add(s);
                 this.addDrawableChild(s);
             }
-            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> { scrollWall(-1); }).dimensions(wallWx2 + wallW2 + 4, gridTop, 14, 12).build();
-            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollWall(1); }).dimensions(wallWx2 + wallW2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
-            this.addDrawableChild(upBtn);
-            this.addDrawableChild(dnBtn);
-            syncWallSliders();
-        } else if (isTowerMode()) {
-            // Tower Mode UI: create per-row sliders and scroll buttons
-            towerRowSliders.clear();
-            int gridTop = this.y + 26;
-            int rowSpacing = 18 + 6;
-            int gridX = this.x + 8;
-            int towerWx2 = gridX + 9 * 18 + 12;
-            int towerW2 = 90;
-            int towerH2 = 10;
-            for (int r = 0; r < 6; r++) {
-                int sy = gridTop + r * rowSpacing + 3;
-                WindowSlider s = new WindowSlider(towerWx2, sy, towerW2, towerH2, 0.0, 0) {
-                    @Override
-                    protected void applyValue() {
-                        int sliderIdx = towerRowSliders.indexOf(this);
-                        if (sliderIdx < 0 || sliderIdx >= 6) return;
-                        int group = towerSliderToGroup[sliderIdx];
-                        if (group < 0) return;
-                        int G = effectiveTowerGroupG(group);
-                        float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
-                        w = Math.max(0.0f, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), BuildMode.TOWER, group, w));
-                    }
-                };
-                towerRowSliders.add(s);
-                this.addDrawableChild(s);
-            }
-            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> { scrollTower(-1); }).dimensions(towerWx2 + towerW2 + 4, gridTop, 14, 12).build();
-            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollTower(1); }).dimensions(towerWx2 + towerW2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
+            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> {
+                GroupModeStrategy strat = getGroupModeStrategy();
+                if (strat != null) scrollGroup(strat, -1);
+            }).dimensions(wx2 + w2 + 4, gridTop, 14, 12).build();
+            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> {
+                GroupModeStrategy strat = getGroupModeStrategy();
+                if (strat != null) scrollGroup(strat, 1);
+            }).dimensions(wx2 + w2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
             this.addDrawableChild(upBtn);
             this.addDrawableChild(dnBtn);
 
-            // Layers slider on the right side
-            int layersSliderW = 90;
-            int layersSliderH = 12;
-            int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
-            int layersSliderY = this.y + 26;
-            towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
-            this.addDrawableChild(towerLayersSlider);
+            // Tower mode: add layers slider on the right side
+            if (mode == BuildMode.TOWER) {
+                int layersSliderW = 90;
+                int layersSliderH = 12;
+                int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
+                int layersSliderY = this.y + 26;
+                towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
+                this.addDrawableChild(towerLayersSlider);
+            }
 
-            syncTowerSliders();
+            // Tree mode: add tiling preset button
+            if (mode == BuildMode.TREE) {
+                String presetText = treeTilingPresetOrdinal == 0 ? "3x3" : "5x5";
+                var presetBtn = ButtonWidget.builder(Text.literal("Preset: " + presetText), b -> {
+                    int newPreset = (treeTilingPresetOrdinal == 0) ? 1 : 0;
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeTilingPresetC2SPayload(getEntityId(), newPreset));
+                    treeTilingPresetOrdinal = newPreset;
+                    b.setMessage(Text.literal("Preset: " + (newPreset == 0 ? "3x3" : "5x5")));
+                }).dimensions(this.x + this.backgroundWidth - 8 - 70, gridTop, 70, 20).build();
+                this.addDrawableChild(presetBtn);
+            }
+
+            // Sync sliders if strategy is available, otherwise they'll be synced when data arrives
+            if (strategy != null) {
+                syncGroupSliders(strategy);
+            }
         } else if (isExcavationMode()) {
             // Excavation Mode UI: simple sliders for height and depth
             int sliderW = 120;
@@ -1138,50 +1102,6 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 btn2.setAlpha(0f);
                 this.addDrawableChild(btn2);
             }
-        } else if (isTreeMode()) {
-            // Tree Mode UI: create per-row sliders, scroll buttons, and tiling preset button
-            treeRowSliders.clear();
-            int gridTop = this.y + 26;
-            int rowSpacing = 18 + 6;
-            int gridX = this.x + 8;
-            int treeWx2 = gridX + 9 * 18 + 12;
-            int treeW2 = 90;
-            int treeH2 = 10;
-            for (int r = 0; r < 6; r++) {
-                int sy = gridTop + r * rowSpacing + 3;
-                WindowSlider s = new WindowSlider(treeWx2, sy, treeW2, treeH2, 0.0, 0) {
-                    @Override
-                    protected void applyValue() {
-                        int sliderIdx = treeRowSliders.indexOf(this);
-                        if (sliderIdx < 0 || sliderIdx >= 6) return;
-                        int group = treeSliderToGroup[sliderIdx];
-                        if (group < 0) return;
-                        int G = effectiveTreeGroupG(group);
-                        float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
-                        w = Math.max(0.0f, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), BuildMode.TREE, group, w));
-                    }
-                };
-                treeRowSliders.add(s);
-                this.addDrawableChild(s);
-            }
-            var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> { scrollTree(-1); }).dimensions(treeWx2 + treeW2 + 4, gridTop, 14, 12).build();
-            var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollTree(1); }).dimensions(treeWx2 + treeW2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
-            this.addDrawableChild(upBtn);
-            this.addDrawableChild(dnBtn);
-
-            // Tiling preset button (right side)
-            String presetText = treeTilingPresetOrdinal == 0 ? "3x3" : "5x5";
-            var presetBtn = ButtonWidget.builder(Text.literal("Preset: " + presetText), b -> {
-                // Toggle preset: 0 <-> 1
-                int newPreset = (treeTilingPresetOrdinal == 0) ? 1 : 0;
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeTilingPresetC2SPayload(getEntityId(), newPreset));
-                treeTilingPresetOrdinal = newPreset;
-                b.setMessage(Text.literal("Preset: " + (newPreset == 0 ? "3x3" : "5x5")));
-            }).dimensions(this.x + this.backgroundWidth - 8 - 70, gridTop, 70, 20).build();
-            this.addDrawableChild(presetBtn);
-
-            syncTreeSliders();
         }
     }
 
@@ -1641,169 +1561,30 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             context.drawText(this.textRenderer, Text.literal("Excavation Settings"), 8, 18, 0xA0A0A0, false);
         }
 
-        // Wall Mode and Tower Mode UI: label icons aligned to group rows + group rows (foreground coords are relative to GUI origin)
-        if (isWallMode()) {
-            int iconX = -20; // relative to GUI left (first icon for a row). Additional icons for same row draw to the left.
+        // Group Mode UI (Wall, Tower, Tree): label icons aligned to group rows + group rows
+        if (strategy != null) {
+            int iconX = strategy.getIconXOffset(); // relative to GUI left
             int startY = 26; // relative to GUI top
             int rowSpacing = 18 + 6;
-            // Draw icons per visible group row; stack multiple icons leftward
-            wallIconHits.clear();
-            java.util.List<Integer> vis = getVisibleGroups();
-            int rows = vis.size();
-            int drawRows = Math.min(Math.max(0, rows - wallScroll), 6);
-            if (wallUniqueBlocks != null && wallBlockGroups != null && !wallUniqueBlocks.isEmpty() && !wallBlockGroups.isEmpty()) {
-                java.util.Map<Integer, java.util.List<String>> groupToBlocks = new java.util.HashMap<>();
-                int n = Math.min(wallUniqueBlocks.size(), wallBlockGroups.size());
-                for (int i = 0; i < n; i++) {
-                    int g = wallBlockGroups.get(i);
-                    groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(wallUniqueBlocks.get(i));
-                }
-                for (int r = 0; r < drawRows; r++) {
-                    int groupIdx = vis.get(r + wallScroll);
-                    java.util.List<String> list = groupToBlocks.getOrDefault(groupIdx, java.util.Collections.emptyList());
-                    int y = startY + r * rowSpacing;
-                    for (int i = 0; i < list.size(); i++) {
-                        String id = list.get(i);
-                        var ident = Identifier.tryParse(id);
-                        if (ident == null) continue;
-                        var block = Registries.BLOCK.get(ident);
-                        if (block == null) continue;
-                        ItemStack icon = new ItemStack(block.asItem());
-                        int ix = iconX - i * 18; // stack leftward
-                        context.drawItem(icon, ix, y);
-                        wallIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));
-                    }
-                }
-            }
-            // Group rows (ghost slots + items)
-            vis = getVisibleGroups();
-            rows = vis.size();
-            drawRows = Math.min(Math.max(0, rows - wallScroll), 6);
-            int gridX = 8; // relative to GUI left, align with path mode
-            for (int r = 0; r < drawRows; r++) {
-                int groupIdx = vis.get(r + wallScroll);
-                int y = startY + r * rowSpacing;
-                for (int c = 0; c < 9; c++) {
-                    int x = gridX + c * 18;
-                    int col = 0xFF404040;
-                    int ix1 = x, iy1 = y, ix2 = x + 16, iy2 = y + 16;
-                    context.fill(ix1, iy1, ix2, iy2, 0x80000000);
-                    // border 1px
-                    context.fill(ix1 - 1, iy1 - 1, ix2 + 1, iy1, col); // top
-                    context.fill(ix1 - 1, iy2, ix2 + 1, iy2 + 1, col); // bottom
-                    context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
-                    context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
-                    int flatIndex = groupIdx * 9 + c;
-                    if (flatIndex >= 0 && flatIndex < wallGroupFlatSlots.size()) {
-                        String bid = wallGroupFlatSlots.get(flatIndex);
-                        if (bid != null && !bid.isEmpty()) {
-                            var ident = Identifier.tryParse(bid);
-                            if (ident != null) {
-                                var block = Registries.BLOCK.get(ident);
-                                if (block != null) {
-                                    ItemStack st = new ItemStack(block.asItem());
-                                    context.drawItem(st, x, y);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (isTowerMode()) {
-            // Tower Mode UI: similar to wall mode but with block counts displayed
-            int iconX = -50; // relative to GUI left, shifted to make room for count text
-            int startY = 26; // relative to GUI top
-            int rowSpacing = 18 + 6;
-            // Draw icons per visible group row; stack multiple icons leftward
-            towerIconHits.clear();
-            java.util.List<Integer> vis = getTowerVisibleGroups();
-            int rows = vis.size();
-            int drawRows = Math.min(Math.max(0, rows - towerScroll), 6);
-            if (towerUniqueBlocks != null && towerBlockGroups != null && !towerUniqueBlocks.isEmpty() && !towerBlockGroups.isEmpty()) {
-                java.util.Map<Integer, java.util.List<String>> groupToBlocks = new java.util.HashMap<>();
-                int n = Math.min(towerUniqueBlocks.size(), towerBlockGroups.size());
-                for (int i = 0; i < n; i++) {
-                    int g = towerBlockGroups.get(i);
-                    groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(towerUniqueBlocks.get(i));
-                }
-                for (int r = 0; r < drawRows; r++) {
-                    int groupIdx = vis.get(r + towerScroll);
-                    java.util.List<String> list = groupToBlocks.getOrDefault(groupIdx, java.util.Collections.emptyList());
-                    int y = startY + r * rowSpacing;
-                    for (int i = 0; i < list.size(); i++) {
-                        String id = list.get(i);
-                        var ident = Identifier.tryParse(id);
-                        if (ident == null) continue;
-                        var block = Registries.BLOCK.get(ident);
-                        if (block == null) continue;
-                        ItemStack icon = new ItemStack(block.asItem());
-                        int ix = iconX - i * 18; // stack leftward
-                        context.drawItem(icon, ix, y);
-                        // Draw block count next to icon
-                        int count = towerBlockCounts.getOrDefault(id, 0);
-                        String countText = "x" + count;
-                        int textX = ix + 18;
-                        int textY = y + 4;
-                        context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
-                        towerIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));
-                    }
-                }
-            }
-            // Group rows (ghost slots + items)
-            vis = getTowerVisibleGroups();
-            rows = vis.size();
-            drawRows = Math.min(Math.max(0, rows - towerScroll), 6);
-            int gridX = 8; // relative to GUI left, align with path mode
-            for (int r = 0; r < drawRows; r++) {
-                int groupIdx = vis.get(r + towerScroll);
-                int y = startY + r * rowSpacing;
-                for (int c = 0; c < 9; c++) {
-                    int x = gridX + c * 18;
-                    int col = 0xFF404040;
-                    int ix1 = x, iy1 = y, ix2 = x + 16, iy2 = y + 16;
-                    context.fill(ix1, iy1, ix2, iy2, 0x80000000);
-                    // border 1px
-                    context.fill(ix1 - 1, iy1 - 1, ix2 + 1, iy1, col); // top
-                    context.fill(ix1 - 1, iy2, ix2 + 1, iy2 + 1, col); // bottom
-                    context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
-                    context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
-                    int flatIndex = groupIdx * 9 + c;
-                    if (flatIndex >= 0 && flatIndex < towerGroupFlatSlots.size()) {
-                        String bid = towerGroupFlatSlots.get(flatIndex);
-                        if (bid != null && !bid.isEmpty()) {
-                            var ident = Identifier.tryParse(bid);
-                            if (ident != null) {
-                                var block = Registries.BLOCK.get(ident);
-                                if (block != null) {
-                                    ItemStack st = new ItemStack(block.asItem());
-                                    context.drawItem(st, x, y);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+            boolean showBlockCounts = strategy.shouldShowBlockCounts();
 
-        // Tree Mode UI: label icons aligned to group rows + group rows
-        if (isTreeMode()) {
-            int iconX = -20; // relative to GUI left
-            int startY = 26; // relative to GUI top
-            int rowSpacing = 18 + 6;
             // Draw icons per visible group row; stack multiple icons leftward
-            treeIconHits.clear();
-            java.util.List<Integer> vis = getTreeVisibleGroups();
+            groupIconHits.clear();
+            java.util.List<Integer> vis = strategy.getVisibleGroups();
             int rows = vis.size();
-            int drawRows = Math.min(Math.max(0, rows - treeScroll), 6);
-            if (treeUniqueBlocks != null && treeBlockGroups != null && !treeUniqueBlocks.isEmpty() && !treeBlockGroups.isEmpty()) {
+            int drawRows = Math.min(Math.max(0, rows - strategy.getScroll()), 6);
+            java.util.List<String> uniqueBlocks = strategy.getUniqueBlocks();
+            java.util.List<Integer> blockGroups = strategy.getBlockGroups();
+
+            if (uniqueBlocks != null && blockGroups != null && !uniqueBlocks.isEmpty() && !blockGroups.isEmpty()) {
                 java.util.Map<Integer, java.util.List<String>> groupToBlocks = new java.util.HashMap<>();
-                int n = Math.min(treeUniqueBlocks.size(), treeBlockGroups.size());
+                int n = Math.min(uniqueBlocks.size(), blockGroups.size());
                 for (int i = 0; i < n; i++) {
-                    int g = treeBlockGroups.get(i);
-                    groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(treeUniqueBlocks.get(i));
+                    int g = blockGroups.get(i);
+                    groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(uniqueBlocks.get(i));
                 }
                 for (int r = 0; r < drawRows; r++) {
-                    int groupIdx = vis.get(r + treeScroll);
+                    int groupIdx = vis.get(r + strategy.getScroll());
                     java.util.List<String> list = groupToBlocks.getOrDefault(groupIdx, java.util.Collections.emptyList());
                     int y = startY + r * rowSpacing;
                     for (int i = 0; i < list.size(); i++) {
@@ -1815,17 +1596,31 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         ItemStack icon = new ItemStack(block.asItem());
                         int ix = iconX - i * 18; // stack leftward
                         context.drawItem(icon, ix, y);
-                        treeIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));
+
+                        // Draw block count next to icon if enabled (Tower mode)
+                        if (showBlockCounts) {
+                            Map<String, Integer> blockCounts = strategy.getBlockCounts();
+                            int count = blockCounts.getOrDefault(id, 0);
+                            String countText = "x" + count;
+                            int textX = ix + 18;
+                            int textY = y + 4;
+                            context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+                        }
+
+                        groupIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));
                     }
                 }
             }
+
             // Group rows (ghost slots + items)
-            vis = getTreeVisibleGroups();
+            vis = strategy.getVisibleGroups();
             rows = vis.size();
-            drawRows = Math.min(Math.max(0, rows - treeScroll), 6);
-            int gridX = 8; // relative to GUI left
+            drawRows = Math.min(Math.max(0, rows - strategy.getScroll()), 6);
+            int gridX = 8; // relative to GUI left, align with path mode
+            java.util.List<String> groupFlatSlots = strategy.getGroupFlatSlots();
+
             for (int r = 0; r < drawRows; r++) {
-                int groupIdx = vis.get(r + treeScroll);
+                int groupIdx = vis.get(r + strategy.getScroll());
                 int y = startY + r * rowSpacing;
                 for (int c = 0; c < 9; c++) {
                     int x = gridX + c * 18;
@@ -1838,8 +1633,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
                     context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
                     int flatIndex = groupIdx * 9 + c;
-                    if (flatIndex >= 0 && flatIndex < treeGroupFlatSlots.size()) {
-                        String bid = treeGroupFlatSlots.get(flatIndex);
+                    if (flatIndex >= 0 && flatIndex < groupFlatSlots.size()) {
+                        String bid = groupFlatSlots.get(flatIndex);
                         if (bid != null && !bid.isEmpty()) {
                             var ident = Identifier.tryParse(bid);
                             if (ident != null) {
@@ -1947,28 +1742,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
      * Draw slider markers for group mode sliders.
      */
     private void drawGroupSliderMarkers(DrawContext context, GroupModeStrategy strategy) {
-        // Use the appropriate slider list based on the mode
-        java.util.List<WindowSlider> sliders;
-        if (strategy.getMode() == BuildMode.WALL) {
-            sliders = wallRowSliders;
-        } else if (strategy.getMode() == BuildMode.TOWER) {
-            sliders = towerRowSliders;
-        } else if (strategy.getMode() == BuildMode.TREE) {
-            sliders = treeRowSliders;
-        } else {
-            sliders = groupRowSliders;
-        }
-
-        if (sliders == null || sliders.isEmpty()) return;
+        if (strategy == null || groupRowSliders == null || groupRowSliders.isEmpty()) return;
 
         java.util.List<Integer> vis = strategy.getVisibleGroups();
         int rows = vis.size();
 
-        for (int i = 0; i < Math.min(6, sliders.size()); i++) {
+        for (int i = 0; i < Math.min(6, groupRowSliders.size()); i++) {
             int idx = i + strategy.getScroll();
             if (idx >= rows) continue;
 
-            WindowSlider slider = sliders.get(i);
+            WindowSlider slider = groupRowSliders.get(i);
             if (slider == null || !slider.visible) continue;
 
             int group = vis.get(idx);
