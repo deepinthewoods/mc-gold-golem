@@ -212,7 +212,7 @@ public class NetworkInit {
      * Send group mode state using the generic payload.
      */
     private static void sendGroupModeState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem, BuildMode mode) {
-        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), getUniqueBlocks(golem, mode)));
+        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), mode, getUniqueBlocks(golem, mode)));
 
         java.util.List<Integer> groups;
         java.util.List<Float> windows;

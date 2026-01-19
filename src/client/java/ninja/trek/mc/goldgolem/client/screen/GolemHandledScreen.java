@@ -648,13 +648,31 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
      */
     private void syncGroupSliders(GroupModeStrategy mode) {
         if (mode == null || this.handler.isSliderEnabled()) return;
+
+        // Use the appropriate slider list based on the mode
+        java.util.List<WindowSlider> sliders;
+        int[] sliderToGroup;
+        if (mode.getMode() == BuildMode.WALL) {
+            sliders = wallRowSliders;
+            sliderToGroup = wallSliderToGroup;
+        } else if (mode.getMode() == BuildMode.TOWER) {
+            sliders = towerRowSliders;
+            sliderToGroup = towerSliderToGroup;
+        } else if (mode.getMode() == BuildMode.TREE) {
+            sliders = treeRowSliders;
+            sliderToGroup = treeSliderToGroup;
+        } else {
+            sliders = groupRowSliders;
+            sliderToGroup = groupSliderToGroup;
+        }
+
         java.util.List<Integer> vis = mode.getVisibleGroups();
         int rows = vis.size();
         for (int i = 0; i < 6; i++) {
             int idx = i + mode.getScroll();
             int group = (idx < rows) ? vis.get(idx) : -1;
-            groupSliderToGroup[i] = group;
-            WindowSlider s = i < groupRowSliders.size() ? groupRowSliders.get(i) : null;
+            sliderToGroup[i] = group;
+            WindowSlider s = i < sliders.size() ? sliders.get(i) : null;
             if (s == null) continue;
             boolean visible = idx < rows;
             s.visible = visible;
@@ -1929,16 +1947,28 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
      * Draw slider markers for group mode sliders.
      */
     private void drawGroupSliderMarkers(DrawContext context, GroupModeStrategy strategy) {
-        if (groupRowSliders == null || groupRowSliders.isEmpty()) return;
+        // Use the appropriate slider list based on the mode
+        java.util.List<WindowSlider> sliders;
+        if (strategy.getMode() == BuildMode.WALL) {
+            sliders = wallRowSliders;
+        } else if (strategy.getMode() == BuildMode.TOWER) {
+            sliders = towerRowSliders;
+        } else if (strategy.getMode() == BuildMode.TREE) {
+            sliders = treeRowSliders;
+        } else {
+            sliders = groupRowSliders;
+        }
+
+        if (sliders == null || sliders.isEmpty()) return;
 
         java.util.List<Integer> vis = strategy.getVisibleGroups();
         int rows = vis.size();
 
-        for (int i = 0; i < Math.min(6, groupRowSliders.size()); i++) {
+        for (int i = 0; i < Math.min(6, sliders.size()); i++) {
             int idx = i + strategy.getScroll();
             if (idx >= rows) continue;
 
-            WindowSlider slider = groupRowSliders.get(i);
+            WindowSlider slider = sliders.get(i);
             if (slider == null || !slider.visible) continue;
 
             int group = vis.get(idx);

@@ -34,10 +34,13 @@ public final class ClientNet {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    // Store for all group modes - the screen will use the appropriate one
-                    screen.setWallUniqueBlocks(payload.blockIds());
-                    screen.setTowerUniqueBlocks(payload.blockIds());
-                    screen.setTreeUniqueBlocks(payload.blockIds());
+                    // Only set the unique blocks for the specific mode
+                    switch (payload.mode()) {
+                        case WALL -> screen.setWallUniqueBlocks(payload.blockIds());
+                        case TOWER -> screen.setTowerUniqueBlocks(payload.blockIds());
+                        case TREE -> screen.setTreeUniqueBlocks(payload.blockIds());
+                        default -> { }
+                    }
                 }
             });
         });

@@ -57,8 +57,16 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     public void updateRenderState(GoldGolemEntity entity, GoldGolemRenderState state, float tickDelta) {
         super.updateRenderState(entity, state, tickDelta);
         state.wheelRotation = entity.getWheelRotation();
-        // Map BuildMode to wheel set: PATH -> 0, WALL -> 1
-        state.activeWheelSet = (entity.getBuildMode() == BuildMode.WALL) ? 1 : 0;
+        // Map BuildMode to wheel set (6 sets available: 0-5)
+        state.activeWheelSet = switch (entity.getBuildMode()) {
+            case PATH, GRADIENT -> 0;  // 4-wheel config for general path building
+            case WALL -> 1;             // 2-wheel config for wall building
+            case TOWER -> 2;            // 4-wheel config for stable tower building
+            case MINING -> 3;           // 2-wheel config for mining
+            case EXCAVATION -> 4;       // 2-wheel config for excavation
+            case TERRAFORMING -> 5;     // 1-wheel config (right side) for terraforming
+            case TREE -> 0;             // Shares with PATH (4-wheel config for tree building)
+        };
         state.bodyYaw = entity.getBodyYaw();
         state.pitch = entity.getPitch();
         state.yaw = entity.getYaw();

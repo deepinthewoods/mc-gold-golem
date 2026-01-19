@@ -128,7 +128,7 @@ public final class GolemScreens {
                     }
                     var ids = golem.getWallUniqueBlockIds();
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new UniqueBlocksS2CPayload(entityId, ids));
+                            new UniqueBlocksS2CPayload(entityId, mode, ids));
                     var groups = golem.getWallBlockGroupMap(ids);
                     var extraData = GroupModeStateS2CPayload.createWallExtraData();
                     // Use generic payloads
@@ -146,7 +146,7 @@ public final class GolemScreens {
                     var ids = golem.getTowerUniqueBlockIds();
                     var counts = golem.getTowerBlockCounts();
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new UniqueBlocksS2CPayload(entityId, ids));
+                            new UniqueBlocksS2CPayload(entityId, mode, ids));
                     var groups = golem.getTowerBlockGroupMap(ids);
                     var extraData = GroupModeStateS2CPayload.createTowerExtraData(counts, golem.getTowerHeight());
                     // Use generic payloads
@@ -163,7 +163,7 @@ public final class GolemScreens {
                     }
                     var ids = golem.getTreeUniqueBlockIds();
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new UniqueBlocksS2CPayload(entityId, ids));
+                            new UniqueBlocksS2CPayload(entityId, mode, ids));
                     var groups = golem.getTreeBlockGroupMap(ids);
                     var extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
                     // Use generic payloads
