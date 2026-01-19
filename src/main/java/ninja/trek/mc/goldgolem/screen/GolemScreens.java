@@ -8,13 +8,15 @@ import net.minecraft.network.PacketByteBuf;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.net.*;
 
 /** Utilities to open Gold Golem screens from the server side. */
 public final class GolemScreens {
     private GolemScreens() {}
 
     public static void open(ServerPlayerEntity player, int entityId, Inventory golemInventory) {
-        // Inspect entity to decide UI flags (e.g., hide width slider in Wall Mode and Tower Mode)
+        // Inspect entity to decide UI flags
         var world0 = player.getEntityWorld();
         var ent0 = world0.getEntityById(entityId);
         boolean sliderEnabled = true;
@@ -23,19 +25,19 @@ public final class GolemScreens {
         boolean terraformingMode = false;
         boolean treeMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
-            if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.WALL ||
-                g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TOWER) {
+            BuildMode mode = g0.getBuildMode();
+            if (mode == BuildMode.WALL || mode == BuildMode.TOWER) {
                 sliderEnabled = false;
-            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.EXCAVATION) {
+            } else if (mode == BuildMode.EXCAVATION) {
                 excavationMode = true;
                 sliderEnabled = false;
-            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.MINING) {
+            } else if (mode == BuildMode.MINING) {
                 miningMode = true;
                 sliderEnabled = false;
-            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TERRAFORMING) {
+            } else if (mode == BuildMode.TERRAFORMING) {
                 terraformingMode = true;
                 sliderEnabled = false;
-            } else if (g0.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TREE) {
+            } else if (mode == BuildMode.TREE) {
                 treeMode = true;
                 sliderEnabled = false;
             }
@@ -63,67 +65,41 @@ public final class GolemScreens {
                 return new GolemInventoryScreenHandler(syncId, playerInventory, golemInventory, openData);
             }
         });
-        // Send initial sync of width/gradient/window to the opener
+
+        // Send initial sync to the opener
         var world = player.getEntityWorld();
         var e = world.getEntityById(entityId);
         if (e instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
-            net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                    new ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload(
-                            entityId,
-                            golem.getPathWidth(),
-                            golem.getGradientWindow(),
-                            golem.getStepGradientWindow(),
-                            java.util.Arrays.asList(golem.getGradientCopy()),
-                            java.util.Arrays.asList(golem.getStepGradientCopy())
-                    ));
-            if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.WALL) {
-                // Initialize groups on first open if empty
-                if (golem.getWallUniqueBlockIds() != null && !golem.getWallUniqueBlockIds().isEmpty()) {
-                    if (golem.getWallGroupWindows().isEmpty()) {
-                        golem.initWallGroups(golem.getWallUniqueBlockIds());
-                    }
-                    var ids = golem.getWallUniqueBlockIds();
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.UniqueBlocksS2CPayload(entityId, ids));
-                    var groups = golem.getWallBlockGroupMap(ids);
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.WallBlockGroupsS2CPayload(entityId, groups));
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.WallGroupsStateS2CPayload(entityId, golem.getWallGroupWindows(), golem.getWallGroupFlatSlots()));
-                }
-            } else if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TOWER) {
-                // Initialize tower groups on first open if empty
-                if (golem.getTowerUniqueBlockIds() != null && !golem.getTowerUniqueBlockIds().isEmpty()) {
-                    if (golem.getTowerGroupWindows().isEmpty()) {
-                        golem.initTowerGroups(golem.getTowerUniqueBlockIds());
-                    }
-                    var ids = golem.getTowerUniqueBlockIds();
-                    var counts = golem.getTowerBlockCounts();
-                    // Convert counts map to parallel lists
-                    java.util.List<String> countIds = new java.util.ArrayList<>();
-                    java.util.List<Integer> countVals = new java.util.ArrayList<>();
-                    for (String id : ids) {
-                        countIds.add(id);
-                        countVals.add(counts.getOrDefault(id, 0));
-                    }
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.UniqueBlocksS2CPayload(entityId, ids));
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.TowerBlockCountsS2CPayload(entityId, countIds, countVals));
-                    var groups = golem.getTowerBlockGroupMap(ids);
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.TowerBlockGroupsS2CPayload(entityId, groups));
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.TowerGroupsStateS2CPayload(entityId, golem.getTowerGroupWindows(), golem.getTowerGroupFlatSlots()));
-                }
-            } else if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.EXCAVATION) {
-                // Send excavation sync
+            BuildMode mode = golem.getBuildMode();
+
+            // Send gradient sync for PATH mode
+            if (mode == BuildMode.PATH || mode == BuildMode.GRADIENT) {
                 net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                        new ninja.trek.mc.goldgolem.net.SyncExcavationS2CPayload(entityId, golem.getExcavationHeight(), golem.getExcavationDepth()));
-            } else if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TERRAFORMING) {
-                // Send terraforming sync
+                        new SyncGradientS2CPayload(
+                                entityId,
+                                golem.getPathWidth(),
+                                golem.getGradientWindow(),
+                                golem.getStepGradientWindow(),
+                                java.util.Arrays.asList(golem.getGradientCopy()),
+                                java.util.Arrays.asList(golem.getStepGradientCopy())
+                        ));
+            }
+
+            // Send group mode sync for WALL, TOWER, TREE
+            if (mode.isGroupMode()) {
+                sendGroupModeSync(player, golem, mode);
+            }
+
+            // Send excavation sync
+            if (mode == BuildMode.EXCAVATION) {
                 net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                        new ninja.trek.mc.goldgolem.net.SyncTerraformingS2CPayload(
+                        new SyncExcavationS2CPayload(entityId, golem.getExcavationHeight(), golem.getExcavationDepth()));
+            }
+
+            // Send terraforming sync
+            if (mode == BuildMode.TERRAFORMING) {
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                        new SyncTerraformingS2CPayload(
                                 entityId,
                                 golem.getTerraformingScanRadius(),
                                 golem.getTerraformingGradientVerticalWindow(),
@@ -133,23 +109,71 @@ public final class GolemScreens {
                                 java.util.Arrays.asList(golem.getTerraformingGradientHorizontalCopy()),
                                 java.util.Arrays.asList(golem.getTerraformingGradientSlopedCopy())
                         ));
-            } else if (golem.getBuildMode() == ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity.BuildMode.TREE) {
-                // Initialize tree groups on first open if empty
+            }
+        }
+    }
+
+    /**
+     * Send group mode state using the generic payload.
+     */
+    private static void sendGroupModeSync(ServerPlayerEntity player, ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem, BuildMode mode) {
+        int entityId = golem.getId();
+
+        // Initialize groups on first open if empty
+        switch (mode) {
+            case WALL -> {
+                if (golem.getWallUniqueBlockIds() != null && !golem.getWallUniqueBlockIds().isEmpty()) {
+                    if (golem.getWallGroupWindows().isEmpty()) {
+                        golem.initWallGroups(golem.getWallUniqueBlockIds());
+                    }
+                    var ids = golem.getWallUniqueBlockIds();
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new UniqueBlocksS2CPayload(entityId, ids));
+                    var groups = golem.getWallBlockGroupMap(ids);
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new WallBlockGroupsS2CPayload(entityId, groups));
+                    // Use generic group mode state payload
+                    var extraData = GroupModeStateS2CPayload.createWallExtraData();
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeStateS2CPayload(entityId, mode, golem.getWallGroupWindows(), golem.getWallGroupFlatSlots(), extraData));
+                }
+            }
+            case TOWER -> {
+                if (golem.getTowerUniqueBlockIds() != null && !golem.getTowerUniqueBlockIds().isEmpty()) {
+                    if (golem.getTowerGroupWindows().isEmpty()) {
+                        golem.initTowerGroups(golem.getTowerUniqueBlockIds());
+                    }
+                    var ids = golem.getTowerUniqueBlockIds();
+                    var counts = golem.getTowerBlockCounts();
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new UniqueBlocksS2CPayload(entityId, ids));
+                    var groups = golem.getTowerBlockGroupMap(ids);
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new TowerBlockGroupsS2CPayload(entityId, groups));
+                    // Use generic group mode state payload with block counts and height
+                    var extraData = GroupModeStateS2CPayload.createTowerExtraData(counts, golem.getTowerHeight());
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeStateS2CPayload(entityId, mode, golem.getTowerGroupWindows(), golem.getTowerGroupFlatSlots(), extraData));
+                }
+            }
+            case TREE -> {
                 if (golem.getTreeUniqueBlockIds() != null && !golem.getTreeUniqueBlockIds().isEmpty()) {
                     if (golem.getTreeGroupWindows().isEmpty()) {
                         golem.initTreeGroups(golem.getTreeUniqueBlockIds());
                     }
                     var ids = golem.getTreeUniqueBlockIds();
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.UniqueBlocksS2CPayload(entityId, ids));
+                            new UniqueBlocksS2CPayload(entityId, ids));
                     var groups = golem.getTreeBlockGroupMap(ids);
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.TreeBlockGroupsS2CPayload(entityId, groups));
-                    int presetOrdinal = golem.getTreeTilingPreset().ordinal();
+                            new TreeBlockGroupsS2CPayload(entityId, groups));
+                    // Use generic group mode state payload with tiling preset
+                    var extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new ninja.trek.mc.goldgolem.net.TreeGroupsStateS2CPayload(entityId, presetOrdinal, golem.getTreeGroupWindows(), golem.getTreeGroupFlatSlots()));
+                            new GroupModeStateS2CPayload(entityId, mode, golem.getTreeGroupWindows(), golem.getTreeGroupFlatSlots(), extraData));
                 }
             }
+            default -> { }
         }
     }
 }

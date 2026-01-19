@@ -15,11 +15,12 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 
 import ninja.trek.mc.goldgolem.screen.GolemInventoryScreenHandler;
+import ninja.trek.mc.goldgolem.BuildMode;
 
 public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandler> {
     private static final Identifier GENERIC_CONTAINER_TEXTURE = Identifier.of("minecraft", "textures/gui/container/generic_54.png");
-    private int gradientWindowMain = 1; // 0..9 (server synced)
-    private int gradientWindowStep = 1; // 0..9 (server synced)
+    private float gradientWindowMain = 1.0f; // 0..9 (server synced)
+    private float gradientWindowStep = 1.0f; // 0..9 (server synced)
     private int pathWidth = 3;      // server synced
     private String[] gradientMainBlocks = new String[9];
     private String[] gradientStepBlocks = new String[9];
@@ -32,7 +33,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private java.util.Set<Integer> dragVisited = new java.util.HashSet<>();
     private java.util.List<String> wallUniqueBlocks = java.util.Collections.emptyList();
     private java.util.List<Integer> wallBlockGroups = java.util.Collections.emptyList();
-    private java.util.List<Integer> wallGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Float> wallGroupWindows = java.util.Collections.emptyList();
     private java.util.List<String> wallGroupFlatSlots = java.util.Collections.emptyList();
     private String pendingAssignBlockId = null; // click icon then click row to assign
     private int wallScroll = 0; // simple integer rows scrolled
@@ -49,7 +50,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private java.util.List<String> towerUniqueBlocks = java.util.Collections.emptyList();
     private java.util.Map<String, Integer> towerBlockCounts = new java.util.HashMap<>();
     private java.util.List<Integer> towerBlockGroups = java.util.Collections.emptyList();
-    private java.util.List<Integer> towerGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Float> towerGroupWindows = java.util.Collections.emptyList();
     private java.util.List<String> towerGroupFlatSlots = java.util.Collections.emptyList();
     private int towerScroll = 0;
     private final java.util.List<WindowSlider> towerRowSliders = new java.util.ArrayList<>();
@@ -57,6 +58,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private final java.util.List<IconHit> towerIconHits = new java.util.ArrayList<>();
     private String towerDraggingBlockId = null;
     private String towerPendingAssignBlockId = null;
+    private int towerLayers = 1; // 1-256 layers (synced from server)
+    private TowerLayersSlider towerLayersSlider;
 
     // Excavation mode state
     private int excavationHeight = 3; // 1-5
@@ -80,7 +83,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     // Tree mode state
     private java.util.List<String> treeUniqueBlocks = java.util.Collections.emptyList();
     private java.util.List<Integer> treeBlockGroups = java.util.Collections.emptyList();
-    private java.util.List<Integer> treeGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Float> treeGroupWindows = java.util.Collections.emptyList();
     private java.util.List<String> treeGroupFlatSlots = java.util.Collections.emptyList();
     private int treeScroll = 0;
     private final java.util.List<WindowSlider> treeRowSliders = new java.util.ArrayList<>();
@@ -89,6 +92,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private String treeDraggingBlockId = null;
     private String treePendingAssignBlockId = null;
     private int treeTilingPresetOrdinal = 0; // 0 = 3x3, 1 = 5x5
+
+    // Strategy pattern for group-based modes (Wall, Tower, Tree)
+    private GroupModeStrategy groupModeStrategy;
+    private final java.util.List<WindowSlider> groupRowSliders = new java.util.ArrayList<>();
+    private final int[] groupSliderToGroup = new int[6];
+    private final java.util.List<IconHit> groupIconHits = new java.util.ArrayList<>();
 
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
@@ -108,22 +117,22 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         @Override
         protected void updateMessage() {
             int g = effectiveG(row);
-            int w = (g <= 0) ? 0 : (int) Math.round(this.value * g);
-            w = Math.max(0, Math.min(g, w));
+            float w = (g <= 0) ? 0.0f : Math.round(this.value * g * 10.0f) / 10.0f;
+            w = Math.max(0.0f, Math.min(g, w));
             this.setMessage(Text.literal("Window: " + w));
         }
         @Override
         protected void applyValue() {
             int g = effectiveG(row);
-            int w = (g <= 0) ? 0 : (int) Math.round(this.value * g);
-            w = Math.max(0, Math.min(g, w));
-            int current = (row == 0) ? gradientWindowMain : gradientWindowStep;
-            if (w != current) {
+            float w = (g <= 0) ? 0.0f : Math.round(this.value * g * 10.0f) / 10.0f;
+            w = Math.max(0.0f, Math.min(g, w));
+            float current = (row == 0) ? gradientWindowMain : gradientWindowStep;
+            if (Math.abs(w - current) > 0.001f) {
                 if (row == 0) gradientWindowMain = w; else gradientWindowStep = w;
                 ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(getEntityId(), row, w));
             }
         }
-        public void syncTo(int row, int g, int window) {
+        public void syncTo(int row, int g, float window) {
             double norm = g <= 0 ? 0.0 : (double) Math.min(window, g) / (double) g;
             this.value = norm;
             this.updateMessage();
@@ -237,6 +246,31 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
+    private class TowerLayersSlider extends SliderWidget {
+        public TowerLayersSlider(int x, int y, int width, int height, int initialLayers) {
+            super(x, y, width, height, Text.literal("Layers"), toValueInit(initialLayers));
+        }
+        private static double toValueInit(int l) { return (l - 1) / 255.0; } // 1-256 range
+        private static int toLayers(double v) { return Math.max(1, Math.min(256, 1 + (int)Math.round(v * 255.0))); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Layers: " + toLayers(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int l = toLayers(this.value);
+            if (l != towerLayers) {
+                towerLayers = l;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTowerHeightC2SPayload(getEntityId(), towerLayers));
+                updateMessage();
+            }
+        }
+        public void syncTo(int l) {
+            this.value = toValueInit(l);
+            updateMessage();
+        }
+    }
+
     public GolemHandledScreen(GolemInventoryScreenHandler handler, PlayerInventory inventory, Text title) {
         super(handler, inventory, title);
         this.backgroundWidth = 176; // vanilla chest width
@@ -252,14 +286,17 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setTreeUniqueBlocks(java.util.List<String> ids) {
         this.treeUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
     }
-    public void setWallGroupsState(java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+    public void setTowerUniqueBlocks(java.util.List<String> ids) {
+        this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+    }
+    public void setWallGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
         this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
         syncWallSliders();
     }
 
     // Tower mode network sync methods
-    public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts) {
+    public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height) {
         this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
         this.towerBlockCounts.clear();
         if (ids != null && counts != null) {
@@ -267,11 +304,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 this.towerBlockCounts.put(ids.get(i), counts.get(i));
             }
         }
+        this.towerLayers = Math.max(1, height);
+        if (this.towerLayersSlider != null) {
+            this.towerLayersSlider.syncTo(this.towerLayers);
+        }
     }
     public void setTowerBlockGroups(java.util.List<Integer> groups) {
         this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
     }
-    public void setTowerGroupsState(java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+    public void setTowerGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
         this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
         syncTowerSliders();
@@ -345,7 +386,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setTreeBlockGroups(java.util.List<Integer> groups) {
         this.treeBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
     }
-    public void setTreeGroupsState(int presetOrdinal, java.util.List<Integer> windows, java.util.List<String> flatSlots) {
+    public void setTreeGroupsState(int presetOrdinal, java.util.List<Float> windows, java.util.List<String> flatSlots) {
         this.treeTilingPresetOrdinal = presetOrdinal;
         this.treeGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
         this.treeGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
@@ -389,7 +430,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             s.visible = visible;
             if (visible) {
                 int G = effectiveGroupG(group);
-                int w = (group >= 0 && group < wallGroupWindows.size()) ? wallGroupWindows.get(group) : 0;
+                float w = (group >= 0 && group < wallGroupWindows.size()) ? wallGroupWindows.get(group) : 0.0f;
                 s.syncTo(0, G, w);
             }
         }
@@ -433,7 +474,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             s.visible = visible;
             if (visible) {
                 int G = effectiveTowerGroupG(group);
-                int w = (group >= 0 && group < towerGroupWindows.size()) ? towerGroupWindows.get(group) : 0;
+                float w = (group >= 0 && group < towerGroupWindows.size()) ? towerGroupWindows.get(group) : 0.0f;
                 s.syncTo(0, G, w);
             }
         }
@@ -498,7 +539,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             s.visible = visible;
             if (visible) {
                 int G = effectiveTreeGroupG(group);
-                int w = (group >= 0 && group < treeGroupWindows.size()) ? treeGroupWindows.get(group) : 0;
+                float w = (group >= 0 && group < treeGroupWindows.size()) ? treeGroupWindows.get(group) : 0.0f;
                 s.syncTo(0, G, w);
             }
         }
@@ -543,6 +584,86 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private boolean isTreeMode() {
         // slider value of 5 indicates tree mode
         return this.handler.getSliderMode() == 5;
+    }
+
+    /**
+     * Get the current group mode strategy, or null if not in a group mode.
+     */
+    private GroupModeStrategy getGroupModeStrategy() {
+        if (groupModeStrategy != null) {
+            return groupModeStrategy;
+        }
+        // Initialize strategy based on current mode
+        if (isWallMode()) {
+            groupModeStrategy = new WallModeStrategy();
+        } else if (isTowerMode()) {
+            groupModeStrategy = new TowerModeStrategy();
+        } else if (isTreeMode()) {
+            groupModeStrategy = new TreeModeStrategy();
+        } else {
+            return null;
+        }
+        // Initialize with existing data
+        initializeStrategyFromLegacyData();
+        return groupModeStrategy;
+    }
+
+    /**
+     * Initialize the strategy with existing legacy data (for backward compatibility during refactor).
+     */
+    private void initializeStrategyFromLegacyData() {
+        if (groupModeStrategy == null) return;
+        if (groupModeStrategy.getMode() == BuildMode.WALL) {
+            groupModeStrategy.updateBlocksAndGroups(wallUniqueBlocks, wallBlockGroups);
+            groupModeStrategy.updateGroupState(wallGroupWindows, wallGroupFlatSlots, java.util.Map.of());
+        } else if (groupModeStrategy.getMode() == BuildMode.TOWER) {
+            groupModeStrategy.updateBlocksAndGroups(towerUniqueBlocks, towerBlockGroups);
+            var extraData = new java.util.HashMap<String, Object>();
+            extraData.put("blockCounts", towerBlockCounts);
+            extraData.put("height", towerLayers);
+            groupModeStrategy.updateGroupState(towerGroupWindows, towerGroupFlatSlots, extraData);
+        } else if (groupModeStrategy.getMode() == BuildMode.TREE) {
+            groupModeStrategy.updateBlocksAndGroups(treeUniqueBlocks, treeBlockGroups);
+            var extraData = new java.util.HashMap<String, Object>();
+            extraData.put("tilingPresetOrdinal", treeTilingPresetOrdinal);
+            groupModeStrategy.updateGroupState(treeGroupWindows, treeGroupFlatSlots, extraData);
+        }
+    }
+
+    /**
+     * Generic scroll method for group modes.
+     */
+    private void scrollGroup(GroupModeStrategy mode, int delta) {
+        int rows = mode.getVisibleGroups().size();
+        int maxScroll = Math.max(0, rows - 6);
+        int ns = Math.max(0, Math.min(maxScroll, mode.getScroll() + delta));
+        if (ns != mode.getScroll()) {
+            mode.setScroll(ns);
+            syncGroupSliders(mode);
+        }
+    }
+
+    /**
+     * Generic slider sync method for group modes.
+     */
+    private void syncGroupSliders(GroupModeStrategy mode) {
+        if (mode == null || this.handler.isSliderEnabled()) return;
+        java.util.List<Integer> vis = mode.getVisibleGroups();
+        int rows = vis.size();
+        for (int i = 0; i < 6; i++) {
+            int idx = i + mode.getScroll();
+            int group = (idx < rows) ? vis.get(idx) : -1;
+            groupSliderToGroup[i] = group;
+            WindowSlider s = i < groupRowSliders.size() ? groupRowSliders.get(i) : null;
+            if (s == null) continue;
+            boolean visible = idx < rows;
+            s.visible = visible;
+            if (visible) {
+                int G = mode.effectiveGroupG(group);
+                float w = (group >= 0 && group < mode.getGroupWindows().size()) ? mode.getGroupWindows().get(group) : 0.0f;
+                s.syncTo(0, G, w);
+            }
+        }
     }
 
     private int indexOfBlockId(String id) {
@@ -842,9 +963,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         int group = wallSliderToGroup[sliderIdx];
                         if (group < 0) return;
                         int G = effectiveGroupG(group);
-                        int w = (G <= 0) ? 0 : (int) Math.round(this.value * G);
-                        w = Math.max(0, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallGroupWindowC2SPayload(getEntityId(), group, w));
+                        float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
+                        w = Math.max(0.0f, Math.min(G, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), BuildMode.WALL, group, w));
                     }
                 };
                 wallRowSliders.add(s);
@@ -874,9 +995,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         int group = towerSliderToGroup[sliderIdx];
                         if (group < 0) return;
                         int G = effectiveTowerGroupG(group);
-                        int w = (G <= 0) ? 0 : (int) Math.round(this.value * G);
-                        w = Math.max(0, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTowerGroupWindowC2SPayload(getEntityId(), group, w));
+                        float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
+                        w = Math.max(0.0f, Math.min(G, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), BuildMode.TOWER, group, w));
                     }
                 };
                 towerRowSliders.add(s);
@@ -886,6 +1007,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> { scrollTower(1); }).dimensions(towerWx2 + towerW2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
             this.addDrawableChild(upBtn);
             this.addDrawableChild(dnBtn);
+
+            // Layers slider on the right side
+            int layersSliderW = 90;
+            int layersSliderH = 12;
+            int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
+            int layersSliderY = this.y + 26;
+            towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
+            this.addDrawableChild(towerLayersSlider);
+
             syncTowerSliders();
         } else if (isExcavationMode()) {
             // Excavation Mode UI: simple sliders for height and depth
@@ -1009,9 +1139,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         int group = treeSliderToGroup[sliderIdx];
                         if (group < 0) return;
                         int G = effectiveTreeGroupG(group);
-                        int w = (G <= 0) ? 0 : (int) Math.round(this.value * G);
-                        w = Math.max(0, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeGroupWindowC2SPayload(getEntityId(), group, w));
+                        float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
+                        w = Math.max(0.0f, Math.min(G, w));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), BuildMode.TREE, group, w));
                     }
                 };
                 treeRowSliders.add(s);
@@ -1085,7 +1215,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 if (c >= 0 && c < 9) {
                     if (treePendingAssignBlockId != null) {
                         int groupIdx = vis.get(rIdx);
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treePendingAssignBlockId, groupIdx));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TREE, treePendingAssignBlockId, groupIdx));
                         int bi = indexOfTreeBlockId(treePendingAssignBlockId);
                         if (bi >= 0 && bi < treeBlockGroups.size()) { treeBlockGroups.set(bi, groupIdx); syncTreeSliders(); }
                         treePendingAssignBlockId = null;
@@ -1093,7 +1223,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     }
                     if (click.button() == 1) {
                         int groupIdx = vis.get(rIdx);
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeGroupSlotC2SPayload(getEntityId(), groupIdx, c, java.util.Optional.empty()));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TREE, groupIdx, c, java.util.Optional.empty()));
                         return true;
                     } else {
                         var mc = MinecraftClient.getInstance();
@@ -1102,7 +1232,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                             ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
                             if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
                                 int groupIdx = vis.get(rIdx);
-                                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeGroupSlotC2SPayload(getEntityId(), groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TREE, groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
                                 return true;
                             }
                         }
@@ -1114,8 +1244,71 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 int iconAreaRight = this.x - 20 + 16;
                 int iconAreaLeft = 0;
                 if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treePendingAssignBlockId, -1));
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TREE, treePendingAssignBlockId, -1));
                     treePendingAssignBlockId = null;
+                    return true;
+                }
+            }
+            return super.mouseClicked(click, traced);
+        }
+
+        // Tower Mode: click/drag icons to assign groups; click slots to set/clear
+        if (isTowerMode() && click.button() == 0 && !towerIconHits.isEmpty()) {
+            for (IconHit ih : towerIconHits) {
+                if (ih.contains(mx, my)) {
+                    towerPendingAssignBlockId = ih.blockId;
+                    towerDraggingBlockId = ih.blockId;
+                    draggingFromIcon = true;
+                    draggingStartX = mx;
+                    draggingStartY = my;
+                    return true;
+                }
+            }
+        }
+        if (isTowerMode()) {
+            int startY = this.y + 26;
+            int rowSpacing = 18 + 6;
+            int gridX = this.x + 8;
+            java.util.List<Integer> vis = getTowerVisibleGroups();
+            int rows = vis.size();
+            int rLocal = (my - startY) / rowSpacing;
+            int rIdx = rLocal + towerScroll;
+            if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
+                int c = (mx - gridX) / 18;
+                if (c >= 0 && c < 9) {
+                    if (towerPendingAssignBlockId != null) {
+                        int groupIdx = vis.get(rIdx);
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TOWER, towerPendingAssignBlockId, groupIdx));
+                        int bi = indexOfTowerBlockId(towerPendingAssignBlockId);
+                        if (bi >= 0 && bi < towerBlockGroups.size()) { towerBlockGroups.set(bi, groupIdx); syncTowerSliders(); }
+                        towerPendingAssignBlockId = null;
+                        return true;
+                    }
+                    if (click.button() == 1) {
+                        int groupIdx = vis.get(rIdx);
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TOWER, groupIdx, c, java.util.Optional.empty()));
+                        return true;
+                    } else {
+                        var mc = MinecraftClient.getInstance();
+                        var player = mc.player;
+                        if (player != null) {
+                            ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
+                            if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
+                                int groupIdx = vis.get(rIdx);
+                                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TOWER, groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            if (towerPendingAssignBlockId != null) {
+                int bottomY = startY + Math.min(6, Math.max(0, rows - towerScroll)) * rowSpacing;
+                int iconAreaRight = this.x - 50 + 16;
+                int iconAreaLeft = 0;
+                if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TOWER, towerPendingAssignBlockId, -1));
+                    towerPendingAssignBlockId = null;
                     return true;
                 }
             }
@@ -1148,7 +1341,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             if (c >= 0 && c < 9) {
                 if (pendingAssignBlockId != null) {
                     int groupIdx = vis.get(rIdx);
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), pendingAssignBlockId, groupIdx));
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.WALL, pendingAssignBlockId, groupIdx));
                     int bi = indexOfBlockId(pendingAssignBlockId);
                     if (bi >= 0 && bi < wallBlockGroups.size()) { wallBlockGroups.set(bi, groupIdx); syncWallSliders(); }
                     pendingAssignBlockId = null;
@@ -1156,7 +1349,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 }
                 if (click.button() == 1) {
                     int groupIdx = vis.get(rIdx);
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallGroupSlotC2SPayload(getEntityId(), groupIdx, c, java.util.Optional.empty()));
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.WALL, groupIdx, c, java.util.Optional.empty()));
                     return true;
                 } else {
                     var mc = MinecraftClient.getInstance();
@@ -1165,7 +1358,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
                         if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
                             int groupIdx = vis.get(rIdx);
-                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallGroupSlotC2SPayload(getEntityId(), groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.WALL, groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
                             return true;
                         }
                     }
@@ -1179,7 +1372,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int iconAreaRight = this.x - 20 + 16; // first icon right edge
             int iconAreaLeft = 0; // extend to the left edge of the screen
             if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), pendingAssignBlockId, -1));
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.WALL, pendingAssignBlockId, -1));
                 pendingAssignBlockId = null;
                 return true;
             }
@@ -1211,7 +1404,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 if (!treeIconHits.isEmpty()) {
                     for (IconHit ih : treeIconHits) {
                         if (ih.contains(mx, my)) {
-                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treeDraggingBlockId, ih.group));
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TREE, treeDraggingBlockId, ih.group));
                             int bi = indexOfTreeBlockId(treeDraggingBlockId);
                             if (bi >= 0 && bi < treeBlockGroups.size()) { treeBlockGroups.set(bi, ih.group); syncTreeSliders(); }
                             handled = true;
@@ -1226,7 +1419,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
                         // Dropped over a visible group row -> assign to that group
                         int groupIdx = vis.get(rIdx);
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treeDraggingBlockId, groupIdx));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TREE, treeDraggingBlockId, groupIdx));
                         int bi = indexOfTreeBlockId(treeDraggingBlockId);
                         if (bi >= 0 && bi < treeBlockGroups.size()) { treeBlockGroups.set(bi, groupIdx); syncTreeSliders(); }
                         handled = true;
@@ -1237,7 +1430,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         int iconAreaRight = this.x - 20 + 16;
                         int iconAreaLeft = 0;
                         if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
-                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTreeBlockGroupC2SPayload(getEntityId(), treeDraggingBlockId, -1));
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TREE, treeDraggingBlockId, -1));
                             handled = true;
                             treePendingAssignBlockId = null;
                         }
@@ -1247,6 +1440,63 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             // Clear drag state regardless of handled
             draggingFromIcon = false;
             treeDraggingBlockId = null;
+            return handled || super.mouseReleased(click);
+        }
+
+        // Tower Mode drag and drop handling
+        if (isTowerMode() && draggingFromIcon && towerDraggingBlockId != null) {
+            int iconX = this.x - 50;
+            int startY = this.y + 26;
+            int rowSpacing = 18 + 6;
+            int gridX = this.x + 8;
+            java.util.List<Integer> vis = getTowerVisibleGroups();
+            int rows = vis.size();
+
+            int dx = Math.abs(mx - draggingStartX);
+            int dy = Math.abs(my - draggingStartY);
+            boolean moved = (dx + dy) > 4;
+
+            if (moved) {
+                // Prefer drop onto another label icon to combine groups
+                if (!towerIconHits.isEmpty()) {
+                    for (IconHit ih : towerIconHits) {
+                        if (ih.contains(mx, my)) {
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TOWER, towerDraggingBlockId, ih.group));
+                            int bi = indexOfTowerBlockId(towerDraggingBlockId);
+                            if (bi >= 0 && bi < towerBlockGroups.size()) { towerBlockGroups.set(bi, ih.group); syncTowerSliders(); }
+                            handled = true;
+                            towerPendingAssignBlockId = null;
+                            break;
+                        }
+                    }
+                }
+                if (!handled) {
+                    int rLocal = (my - startY) / rowSpacing;
+                    int rIdx = rLocal + towerScroll;
+                    if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
+                        // Dropped over a visible group row -> assign to that group
+                        int groupIdx = vis.get(rIdx);
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TOWER, towerDraggingBlockId, groupIdx));
+                        int bi = indexOfTowerBlockId(towerDraggingBlockId);
+                        if (bi >= 0 && bi < towerBlockGroups.size()) { towerBlockGroups.set(bi, groupIdx); syncTowerSliders(); }
+                        handled = true;
+                        towerPendingAssignBlockId = null;
+                    } else {
+                        // If dropped below the last visible row within the icon area on the left, create a new group
+                        int bottomY = startY + Math.min(6, Math.max(0, rows - towerScroll)) * rowSpacing;
+                        int iconAreaRight = this.x - 50 + 16;
+                        int iconAreaLeft = 0;
+                        if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.TOWER, towerDraggingBlockId, -1));
+                            handled = true;
+                            towerPendingAssignBlockId = null;
+                        }
+                    }
+                }
+            }
+            // Clear drag state regardless of handled
+            draggingFromIcon = false;
+            towerDraggingBlockId = null;
             return handled || super.mouseReleased(click);
         }
 
@@ -1268,7 +1518,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 if (!wallIconHits.isEmpty()) {
                     for (IconHit ih : wallIconHits) {
                         if (ih.contains(mx, my)) {
-                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), draggingBlockId, ih.group));
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.WALL, draggingBlockId, ih.group));
                             int bi = indexOfBlockId(draggingBlockId);
                             if (bi >= 0 && bi < wallBlockGroups.size()) { wallBlockGroups.set(bi, ih.group); syncWallSliders(); }
                             handled = true;
@@ -1283,7 +1533,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     if (rLocal >= 0 && rLocal < 6 && rIdx >= 0 && rIdx < rows) {
                         // Dropped over a visible group row -> assign to that group
                         int groupIdx = vis.get(rIdx);
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), draggingBlockId, groupIdx));
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.WALL, draggingBlockId, groupIdx));
                         int bi = indexOfBlockId(draggingBlockId);
                         if (bi >= 0 && bi < wallBlockGroups.size()) { wallBlockGroups.set(bi, groupIdx); syncWallSliders(); }
                         handled = true;
@@ -1294,7 +1544,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         int iconAreaRight = this.x - 20 + 16;
                         int iconAreaLeft = 0; // extend to left screen edge
                         if (my >= bottomY && mx >= iconAreaLeft && mx < iconAreaRight) {
-                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetWallBlockGroupC2SPayload(getEntityId(), draggingBlockId, -1));
+                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeBlockGroupC2SPayload(getEntityId(), BuildMode.WALL, draggingBlockId, -1));
                             handled = true;
                             pendingAssignBlockId = null;
                         }
@@ -1356,10 +1606,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFF, false);
         }
 
-        // Marker dots above each window slider (path mode only)
+        // Marker dots above each window slider (path mode)
         if (this.handler.isSliderEnabled()) {
             drawSliderMarkers(context, windowSliderMain, effectiveG(0));
             drawSliderMarkers(context, windowSliderStep, effectiveG(1));
+        }
+
+        // Marker dots above group mode sliders (Wall, Tower, Tree)
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null) {
+            drawGroupSliderMarkers(context, strategy);
         }
 
         // Excavation Mode UI: labels for sliders
@@ -1582,8 +1838,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
 
         // Cursor-following visual when dragging a label icon
-        if ((isWallMode() || isTowerMode() || isTreeMode()) && (draggingFromIcon || (treeDraggingBlockId != null)) && (draggingBlockId != null || treeDraggingBlockId != null)) {
-            String dragId = draggingBlockId != null ? draggingBlockId : treeDraggingBlockId;
+        if ((isWallMode() || isTowerMode() || isTreeMode()) && draggingFromIcon && (draggingBlockId != null || towerDraggingBlockId != null || treeDraggingBlockId != null)) {
+            String dragId = draggingBlockId != null ? draggingBlockId : (towerDraggingBlockId != null ? towerDraggingBlockId : treeDraggingBlockId);
             var ident = Identifier.tryParse(dragId);
             if (ident != null) {
                 var block = Registries.BLOCK.get(ident);
@@ -1601,7 +1857,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return this.handler.getEntityId();
     }
 
-    public void applyServerSync(int width, int windowMain, int windowStep, String[] blocksMain, String[] blocksStep) {
+    public void applyServerSync(int width, float windowMain, float windowStep, String[] blocksMain, String[] blocksStep) {
         this.pathWidth = width;
         this.gradientWindowMain = windowMain;
         this.gradientWindowStep = windowStep;
@@ -1664,6 +1920,42 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     double t = w / (double) g;
                     int dx = (int) Math.round(sx + t * sw);
                     fillDot(context, dx, dotY - 4, cyan);
+                }
+            }
+        }
+    }
+
+    /**
+     * Draw slider markers for group mode sliders.
+     */
+    private void drawGroupSliderMarkers(DrawContext context, GroupModeStrategy strategy) {
+        if (groupRowSliders == null || groupRowSliders.isEmpty()) return;
+
+        java.util.List<Integer> vis = strategy.getVisibleGroups();
+        int rows = vis.size();
+
+        for (int i = 0; i < Math.min(6, groupRowSliders.size()); i++) {
+            int idx = i + strategy.getScroll();
+            if (idx >= rows) continue;
+
+            WindowSlider slider = groupRowSliders.get(i);
+            if (slider == null || !slider.visible) continue;
+
+            int group = vis.get(idx);
+            int g = strategy.effectiveGroupG(group);
+
+            if (g > 0) {
+                int sx = slider.getX() - this.x;
+                int sy = slider.getY() - this.y;
+                int sw = slider.getWidth();
+                int dotY = sy - 2;
+
+                // Gold dots for gradient positions
+                int gold = 0xFFFFCC00;
+                for (int k = 0; k <= g; k++) {
+                    double t = (double) k / (double) g;
+                    int dx = (int) Math.round(sx + t * sw);
+                    fillDot(context, dx, dotY, gold);
                 }
             }
         }

@@ -3,49 +3,100 @@ package ninja.trek.mc.goldgolem.net;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.util.Identifier;
+import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 public class NetworkInit {
     public static void register() {
+        // === GENERIC GROUP MODE PAYLOADS ===
+        // Generic payloads for group-based modes (Wall, Tower, Tree)
+        PayloadTypeRegistry.playC2S().register(SetGroupModeWindowC2SPayload.ID, SetGroupModeWindowC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupModeStateS2CPayload.ID, GroupModeStateS2CPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetGroupModeSlotC2SPayload.ID, SetGroupModeSlotC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
+
+        // === PATH/GRADIENT MODE PAYLOADS ===
         PayloadTypeRegistry.playC2S().register(SetGradientSlotC2SPayload.ID, SetGradientSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetPathWidthC2SPayload.ID, SetPathWidthC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetGradientWindowC2SPayload.ID, SetGradientWindowC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncGradientS2CPayload.ID, SyncGradientS2CPayload.CODEC);
+
+        // === SHARED PAYLOADS ===
         PayloadTypeRegistry.playS2C().register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(UniqueBlocksS2CPayload.ID, UniqueBlocksS2CPayload.CODEC);
+
+        // === BLOCK GROUPS PAYLOADS (still needed for now) ===
         PayloadTypeRegistry.playS2C().register(WallBlockGroupsS2CPayload.ID, WallBlockGroupsS2CPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(WallGroupsStateS2CPayload.ID, WallGroupsStateS2CPayload.CODEC);
-
-        PayloadTypeRegistry.playC2S().register(SetWallBlockGroupC2SPayload.ID, SetWallBlockGroupC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetWallGroupSlotC2SPayload.ID, SetWallGroupSlotC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetWallGroupWindowC2SPayload.ID, SetWallGroupWindowC2SPayload.CODEC);
-
-        // Tower Mode payloads
-        PayloadTypeRegistry.playS2C().register(TowerBlockCountsS2CPayload.ID, TowerBlockCountsS2CPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(TowerBlockGroupsS2CPayload.ID, TowerBlockGroupsS2CPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(TowerGroupsStateS2CPayload.ID, TowerGroupsStateS2CPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTowerBlockGroupC2SPayload.ID, SetTowerBlockGroupC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTowerGroupSlotC2SPayload.ID, SetTowerGroupSlotC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTowerGroupWindowC2SPayload.ID, SetTowerGroupWindowC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(TreeBlockGroupsS2CPayload.ID, TreeBlockGroupsS2CPayload.CODEC);
 
-        // Excavation Mode payloads
+        // === EXCAVATION MODE PAYLOADS ===
         PayloadTypeRegistry.playC2S().register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncExcavationS2CPayload.ID, SyncExcavationS2CPayload.CODEC);
 
-        // Terraforming Mode payloads
+        // === TERRAFORMING MODE PAYLOADS ===
         PayloadTypeRegistry.playC2S().register(SetTerraformingGradientSlotC2SPayload.ID, SetTerraformingGradientSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetTerraformingScanRadiusC2SPayload.ID, SetTerraformingScanRadiusC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetTerraformingGradientWindowC2SPayload.ID, SetTerraformingGradientWindowC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncTerraformingS2CPayload.ID, SyncTerraformingS2CPayload.CODEC);
 
-        // Tree Mode payloads
-        PayloadTypeRegistry.playS2C().register(TreeBlockGroupsS2CPayload.ID, TreeBlockGroupsS2CPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(TreeGroupsStateS2CPayload.ID, TreeGroupsStateS2CPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTreeBlockGroupC2SPayload.ID, SetTreeBlockGroupC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTreeGroupSlotC2SPayload.ID, SetTreeGroupSlotC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTreeGroupWindowC2SPayload.ID, SetTreeGroupWindowC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTreeTilingPresetC2SPayload.ID, SetTreeTilingPresetC2SPayload.CODEC);
+        // === GENERIC GROUP MODE HANDLERS ===
+        // Single handler for all group-based modes (Wall, Tower, Tree)
+
+        ServerPlayNetworking.registerGlobalReceiver(SetGroupModeWindowC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    switch (payload.mode()) {
+                        case WALL -> golem.setWallGroupWindow(payload.group(), payload.window());
+                        case TOWER -> golem.setTowerGroupWindow(payload.group(), payload.window());
+                        case TREE -> golem.setTreeGroupWindow(payload.group(), payload.window());
+                        default -> { }
+                    }
+                    sendGroupModeState(player, golem, payload.mode());
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetGroupModeSlotC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    String id = payload.block().map(Identifier::toString).orElse("");
+                    switch (payload.mode()) {
+                        case WALL -> golem.setWallGroupSlot(payload.group(), payload.slot(), id);
+                        case TOWER -> golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
+                        case TREE -> golem.setTreeGroupSlot(payload.group(), payload.slot(), id);
+                        default -> { }
+                    }
+                    sendGroupModeState(player, golem, payload.mode());
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetGroupModeBlockGroupC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    switch (payload.mode()) {
+                        case WALL -> golem.setWallBlockGroup(payload.blockId(), payload.group());
+                        case TOWER -> golem.setTowerBlockGroup(payload.blockId(), payload.group());
+                        case TREE -> golem.setTreeBlockGroup(payload.blockId(), payload.group());
+                        default -> { }
+                    }
+                    sendGroupModeState(player, golem, payload.mode());
+                }
+            });
+        });
+
+        // === PATH/GRADIENT MODE HANDLERS ===
 
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
@@ -89,79 +140,8 @@ public class NetworkInit {
             });
         });
 
-        // Wall Mode UI receivers
-        ServerPlayNetworking.registerGlobalReceiver(SetWallBlockGroupC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setWallBlockGroup(payload.blockId(), payload.group());
-                    sendWallUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetWallGroupSlotC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    String id = payload.block().map(Identifier::toString).orElse("");
-                    golem.setWallGroupSlot(payload.group(), payload.slot(), id);
-                    sendWallUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetWallGroupWindowC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setWallGroupWindow(payload.group(), payload.window());
-                    sendWallUiState(player, golem);
-                }
-            });
-        });
+        // === EXCAVATION MODE HANDLERS ===
 
-        // Tower Mode UI receivers
-        ServerPlayNetworking.registerGlobalReceiver(SetTowerBlockGroupC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setTowerBlockGroup(payload.blockId(), payload.group());
-                    sendTowerUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetTowerGroupSlotC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    String id = payload.block().map(Identifier::toString).orElse("");
-                    golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
-                    sendTowerUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetTowerGroupWindowC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setTowerGroupWindow(payload.group(), payload.window());
-                    sendTowerUiState(player, golem);
-                }
-            });
-        });
-
-        // Excavation Mode UI receivers
         ServerPlayNetworking.registerGlobalReceiver(SetExcavationHeightC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -172,6 +152,7 @@ public class NetworkInit {
                 }
             });
         });
+
         ServerPlayNetworking.registerGlobalReceiver(SetExcavationDepthC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -183,7 +164,8 @@ public class NetworkInit {
             });
         });
 
-        // Terraforming Mode UI receivers
+        // === TERRAFORMING MODE HANDLERS ===
+
         ServerPlayNetworking.registerGlobalReceiver(SetTerraformingGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
@@ -228,106 +210,62 @@ public class NetworkInit {
                 }
             });
         });
-
-        // Tree Mode UI receivers
-        ServerPlayNetworking.registerGlobalReceiver(SetTreeBlockGroupC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setTreeBlockGroup(payload.blockId(), payload.group());
-                    sendTreeUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetTreeGroupSlotC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    String id = payload.block().map(Identifier::toString).orElse("");
-                    golem.setTreeGroupSlot(payload.group(), payload.slot(), id);
-                    sendTreeUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetTreeGroupWindowC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setTreeGroupWindow(payload.group(), payload.window());
-                    sendTreeUiState(player, golem);
-                }
-            });
-        });
-        ServerPlayNetworking.registerGlobalReceiver(SetTreeTilingPresetC2SPayload.ID, (payload, context) -> {
-            var player = context.player();
-            context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    ninja.trek.mc.goldgolem.tree.TilingPreset preset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(payload.presetOrdinal());
-                    golem.setTreeTilingPreset(preset);
-                    sendTreeUiState(player, golem);
-                }
-            });
-        });
     }
 
-    private static void sendWallUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
-        var ids = golem.getWallUniqueBlockIds();
-        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), ids));
-        var groups = golem.getWallBlockGroupMap(ids);
-        ServerPlayNetworking.send(player, new WallBlockGroupsS2CPayload(golem.getId(), groups));
-        var wins = golem.getWallGroupWindows();
-        var slots = golem.getWallGroupFlatSlots();
-        ServerPlayNetworking.send(player, new WallGroupsStateS2CPayload(golem.getId(), wins, slots));
-    }
+    /**
+     * Send group mode state using the generic payload.
+     */
+    private static void sendGroupModeState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem, BuildMode mode) {
+        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), getUniqueBlocks(golem, mode)));
 
-    private static void sendTowerUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
-        var ids = golem.getTowerUniqueBlockIds();
-        var counts = golem.getTowerBlockCounts();
-        // Convert counts map to parallel lists
-        java.util.List<String> countIds = new java.util.ArrayList<>();
-        java.util.List<Integer> countVals = new java.util.ArrayList<>();
-        for (String id : ids) {
-            countIds.add(id);
-            countVals.add(counts.getOrDefault(id, 0));
+        java.util.List<Integer> groups;
+        java.util.List<Float> windows;
+        java.util.List<String> slots;
+        java.util.Map<String, Object> extraData;
+
+        switch (mode) {
+            case WALL -> {
+                var ids = golem.getWallUniqueBlockIds();
+                groups = golem.getWallBlockGroupMap(ids);
+                windows = golem.getWallGroupWindows();
+                slots = golem.getWallGroupFlatSlots();
+                extraData = GroupModeStateS2CPayload.createWallExtraData();
+                ServerPlayNetworking.send(player, new WallBlockGroupsS2CPayload(golem.getId(), groups));
+            }
+            case TOWER -> {
+                var ids = golem.getTowerUniqueBlockIds();
+                groups = golem.getTowerBlockGroupMap(ids);
+                windows = golem.getTowerGroupWindows();
+                slots = golem.getTowerGroupFlatSlots();
+                extraData = GroupModeStateS2CPayload.createTowerExtraData(golem.getTowerBlockCounts(), golem.getTowerHeight());
+                ServerPlayNetworking.send(player, new TowerBlockGroupsS2CPayload(golem.getId(), groups));
+            }
+            case TREE -> {
+                var ids = golem.getTreeUniqueBlockIds();
+                groups = golem.getTreeBlockGroupMap(ids);
+                windows = golem.getTreeGroupWindows();
+                slots = golem.getTreeGroupFlatSlots();
+                extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
+                ServerPlayNetworking.send(player, new TreeBlockGroupsS2CPayload(golem.getId(), groups));
+            }
+            default -> {
+                return;
+            }
         }
-        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), ids));
-        ServerPlayNetworking.send(player, new TowerBlockCountsS2CPayload(golem.getId(), countIds, countVals));
-        var groups = golem.getTowerBlockGroupMap(ids);
-        ServerPlayNetworking.send(player, new TowerBlockGroupsS2CPayload(golem.getId(), groups));
-        var wins = golem.getTowerGroupWindows();
-        var slots = golem.getTowerGroupFlatSlots();
-        ServerPlayNetworking.send(player, new TowerGroupsStateS2CPayload(golem.getId(), wins, slots));
+
+        ServerPlayNetworking.send(player, new GroupModeStateS2CPayload(golem.getId(), mode, windows, slots, extraData));
     }
 
-    private static void sendTreeUiState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
-        var ids = golem.getTreeUniqueBlockIds();
-        ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), ids));
-        var groups = golem.getTreeBlockGroupMap(ids);
-        ServerPlayNetworking.send(player, new TreeBlockGroupsS2CPayload(golem.getId(), groups));
-        var wins = golem.getTreeGroupWindows();
-        var slots = golem.getTreeGroupFlatSlots();
-        int presetOrdinal = golem.getTreeTilingPreset().ordinal();
-        ServerPlayNetworking.send(player, new TreeGroupsStateS2CPayload(golem.getId(), presetOrdinal, wins, slots));
-    }
-
-    private static GoldGolemEntity findNearestOwnedGolem(net.minecraft.server.network.ServerPlayerEntity player, double radius) {
-        var world = player.getEntityWorld();
-        var box = player.getBoundingBox().expand(radius);
-        GoldGolemEntity nearest = null;
-        double best = Double.MAX_VALUE;
-        for (var e : world.getEntitiesByClass(GoldGolemEntity.class, box, g -> g.isOwner(player))) {
-            double d = e.squaredDistanceTo(player);
-            if (d < best) { best = d; nearest = e; }
-        }
-        return nearest;
+    /**
+     * Helper to get unique blocks for a mode.
+     */
+    private static java.util.List<String> getUniqueBlocks(GoldGolemEntity golem, BuildMode mode) {
+        return switch (mode) {
+            case WALL -> golem.getWallUniqueBlockIds();
+            case TOWER -> golem.getTowerUniqueBlockIds();
+            case TREE -> golem.getTreeUniqueBlockIds();
+            default -> java.util.List.of();
+        };
     }
 
     private static void sendSync(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {

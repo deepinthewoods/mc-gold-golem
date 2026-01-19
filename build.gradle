@@ -45,10 +45,11 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-	clientImplementation "org.lwjgl:lwjgl-assimp:${lwjglVersion}"
-	clientRuntimeOnly "org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-windows"
-	clientRuntimeOnly "org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-linux"
-	clientRuntimeOnly "org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-macos"
+	// Minecraft does not ship LWJGL Assimp; bundle it so production launches (e.g. ATLauncher) have it available.
+	clientImplementation(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}"))
+	clientRuntimeOnly(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-windows"))
+	clientRuntimeOnly(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-linux"))
+	clientRuntimeOnly(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-macos"))
 
 	testImplementation "org.junit.jupiter:junit-jupiter-api:5.10.2"
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.10.2"

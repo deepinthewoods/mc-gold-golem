@@ -16,6 +16,7 @@ import net.minecraft.client.render.state.CameraRenderState;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.RotationAxis;
+import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.client.model.GoldGolemModelLoader;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
@@ -57,7 +58,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         super.updateRenderState(entity, state, tickDelta);
         state.wheelRotation = entity.getWheelRotation();
         // Map BuildMode to wheel set: PATH -> 0, WALL -> 1
-        state.activeWheelSet = (entity.getBuildMode() == GoldGolemEntity.BuildMode.WALL) ? 1 : 0;
+        state.activeWheelSet = (entity.getBuildMode() == BuildMode.WALL) ? 1 : 0;
         state.bodyYaw = entity.getBodyYaw();
         state.pitch = entity.getPitch();
         state.yaw = entity.getYaw();

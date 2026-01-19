@@ -2,24 +2,15 @@ package ninja.trek.mc.goldgolem.client.net;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.MinecraftClient;
+import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.client.state.ClientState;
-import ninja.trek.mc.goldgolem.net.LinesS2CPayload;
-import ninja.trek.mc.goldgolem.net.SyncGradientS2CPayload;
-import ninja.trek.mc.goldgolem.net.UniqueBlocksS2CPayload;
-import ninja.trek.mc.goldgolem.net.WallBlockGroupsS2CPayload;
-import ninja.trek.mc.goldgolem.net.WallGroupsStateS2CPayload;
-import ninja.trek.mc.goldgolem.net.TowerBlockCountsS2CPayload;
-import ninja.trek.mc.goldgolem.net.TowerBlockGroupsS2CPayload;
-import ninja.trek.mc.goldgolem.net.TowerGroupsStateS2CPayload;
-import ninja.trek.mc.goldgolem.net.SyncExcavationS2CPayload;
-import ninja.trek.mc.goldgolem.net.SyncTerraformingS2CPayload;
-import ninja.trek.mc.goldgolem.net.TreeBlockGroupsS2CPayload;
-import ninja.trek.mc.goldgolem.net.TreeGroupsStateS2CPayload;
+import ninja.trek.mc.goldgolem.net.*;
 
 public final class ClientNet {
     private ClientNet() {}
 
     public static void init() {
+        // === PATH/GRADIENT MODE ===
         ClientPlayNetworking.registerGlobalReceiver(SyncGradientS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
@@ -31,6 +22,7 @@ public final class ClientNet {
             });
         });
 
+        // === SHARED ===
         ClientPlayNetworking.registerGlobalReceiver(LinesS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
@@ -42,12 +34,38 @@ public final class ClientNet {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    // Set for both wall and tree - the screen will use whichever is appropriate for the current mode
+                    // Store for all group modes - the screen will use the appropriate one
                     screen.setWallUniqueBlocks(payload.blockIds());
+                    screen.setTowerUniqueBlocks(payload.blockIds());
                     screen.setTreeUniqueBlocks(payload.blockIds());
                 }
             });
         });
+
+        // === GROUP MODES (Wall, Tower, Tree) ===
+        // Generic group mode state handler
+        ClientPlayNetworking.registerGlobalReceiver(GroupModeStateS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    switch (payload.mode()) {
+                        case WALL -> screen.setWallGroupsState(payload.windows(), payload.flatSlots());
+                        case TOWER -> {
+                            screen.setTowerBlockCounts(
+                                    payload.getBlockCounts().keySet().stream().toList(),
+                                    payload.getBlockCounts().values().stream().toList(),
+                                    payload.getTowerHeight()
+                            );
+                            screen.setTowerGroupsState(payload.windows(), payload.flatSlots());
+                        }
+                        case TREE -> screen.setTreeGroupsState(payload.getTilingPresetOrdinal(), payload.windows(), payload.flatSlots());
+                        default -> { }
+                    }
+                }
+            });
+        });
+
+        // Block groups (mode-specific, still needed for now)
         ClientPlayNetworking.registerGlobalReceiver(WallBlockGroupsS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
@@ -56,24 +74,7 @@ public final class ClientNet {
                 }
             });
         });
-        ClientPlayNetworking.registerGlobalReceiver(WallGroupsStateS2CPayload.ID, (payload, context) -> {
-            var mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setWallGroupsState(payload.windows(), payload.flatSlots());
-                }
-            });
-        });
 
-        // Tower mode receivers
-        ClientPlayNetworking.registerGlobalReceiver(TowerBlockCountsS2CPayload.ID, (payload, context) -> {
-            var mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setTowerBlockCounts(payload.blockIds(), payload.counts());
-                }
-            });
-        });
         ClientPlayNetworking.registerGlobalReceiver(TowerBlockGroupsS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
@@ -82,16 +83,17 @@ public final class ClientNet {
                 }
             });
         });
-        ClientPlayNetworking.registerGlobalReceiver(TowerGroupsStateS2CPayload.ID, (payload, context) -> {
+
+        ClientPlayNetworking.registerGlobalReceiver(TreeBlockGroupsS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setTowerGroupsState(payload.windows(), payload.flatSlots());
+                    screen.setTreeBlockGroups(payload.groups());
                 }
             });
         });
 
-        // Excavation mode receiver
+        // === EXCAVATION MODE ===
         ClientPlayNetworking.registerGlobalReceiver(SyncExcavationS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
@@ -101,7 +103,7 @@ public final class ClientNet {
             });
         });
 
-        // Terraforming mode receiver
+        // === TERRAFORMING MODE ===
         ClientPlayNetworking.registerGlobalReceiver(SyncTerraformingS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
@@ -115,24 +117,6 @@ public final class ClientNet {
                             payload.horizontalGradient(),
                             payload.slopedGradient()
                     );
-                }
-            });
-        });
-
-        // Tree mode receivers
-        ClientPlayNetworking.registerGlobalReceiver(TreeBlockGroupsS2CPayload.ID, (payload, context) -> {
-            var mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setTreeBlockGroups(payload.groups());
-                }
-            });
-        });
-        ClientPlayNetworking.registerGlobalReceiver(TreeGroupsStateS2CPayload.ID, (payload, context) -> {
-            var mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setTreeGroupsState(payload.presetOrdinal(), payload.windows(), payload.flatSlots());
                 }
             });
         });

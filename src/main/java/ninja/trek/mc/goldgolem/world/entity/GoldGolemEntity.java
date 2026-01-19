@@ -38,9 +38,9 @@ import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.ContainerComponent;
 
 import java.util.Optional;
+import ninja.trek.mc.goldgolem.BuildMode;
 
 public class GoldGolemEntity extends PathAwareEntity {
-    public enum BuildMode { PATH, WALL, TOWER, MINING, EXCAVATION, TERRAFORMING, TREE }
     public static final int INVENTORY_SIZE = 27;
 
     // Data trackers for client-server sync
@@ -57,8 +57,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
     private final String[] stepGradient = new String[9];
-    private int gradientWindow = 1; // window width in slot units (0..9)
-    private int stepGradientWindow = 1; // window width for step gradient
+    private float gradientWindow = 1.0f; // window width in slot units (0..9)
+    private float stepGradientWindow = 1.0f; // window width for step gradient
     private int pathWidth = 3;
     private boolean buildingPaths = false;
     private BuildMode buildMode = BuildMode.PATH;
@@ -84,7 +84,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
     // Wall UI state: dynamic gradient groups
     private final java.util.List<String[]> wallGroupSlots = new java.util.ArrayList<>(); // each String[9]
-    private final java.util.List<Integer> wallGroupWindows = new java.util.ArrayList<>();
+    private final java.util.List<Float> wallGroupWindows = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> wallBlockGroup = new java.util.HashMap<>();
 
     // Tower-mode captured data
@@ -96,7 +96,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate = null;
     // Tower UI state: dynamic gradient groups (same as wall mode)
     private final java.util.List<String[]> towerGroupSlots = new java.util.ArrayList<>(); // each String[9]
-    private final java.util.List<Integer> towerGroupWindows = new java.util.ArrayList<>();
+    private final java.util.List<Float> towerGroupWindows = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> towerBlockGroup = new java.util.HashMap<>();
     // Tower building state
     private int towerCurrentY = 0; // current Y layer being placed (0 = bottom)
@@ -168,7 +168,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private boolean treeWaitingForInventory = false; // true when out of blocks, waiting for restock
     // Tree UI state: dynamic gradient groups (same pattern as wall/tower)
     private final java.util.List<String[]> treeGroupSlots = new java.util.ArrayList<>(); // each String[9]
-    private final java.util.List<Integer> treeGroupWindows = new java.util.ArrayList<>();
+    private final java.util.List<Float> treeGroupWindows = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> treeBlockGroup = new java.util.HashMap<>();
 
     private Vec3d trackStart = null;
@@ -283,7 +283,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (String id : uniqueBlocks) {
             String[] arr = new String[9];
             wallGroupSlots.add(arr);
-            wallGroupWindows.add(1);
+            wallGroupWindows.add(1.0f);
             wallBlockGroup.put(id, idx);
             if (!"minecraft:gold_block".equals(id) && firstNonGold < 0) firstNonGold = idx;
             idx++;
@@ -299,7 +299,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (String id : uniqueBlocks) out.add(wallBlockGroup.getOrDefault(id, 0));
         return out;
     }
-    public java.util.List<Integer> getWallGroupWindows() { return new java.util.ArrayList<>(wallGroupWindows); }
+    public java.util.List<Float> getWallGroupWindows() { return new java.util.ArrayList<>(wallGroupWindows); }
     public java.util.List<String> getWallGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(wallGroupSlots.size() * 9);
         for (String[] arr : wallGroupSlots) {
@@ -310,16 +310,16 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setWallBlockGroup(String blockId, int group) {
         if (group < 0) { // create new
             wallGroupSlots.add(new String[9]);
-            wallGroupWindows.add(1);
+            wallGroupWindows.add(1.0f);
             group = wallGroupSlots.size() - 1;
         } else if (group >= wallGroupSlots.size()) {
             return;
         }
         wallBlockGroup.put(blockId, group);
     }
-    public void setWallGroupWindow(int group, int window) {
+    public void setWallGroupWindow(int group, float window) {
         if (group < 0 || group >= wallGroupWindows.size()) return;
-        wallGroupWindows.set(group, Math.max(0, Math.min(9, window)));
+        wallGroupWindows.set(group, Math.max(0.0f, Math.min(9.0f, window)));
     }
     public void setWallGroupSlot(int group, int slot, String id) {
         if (group < 0 || group >= wallGroupSlots.size()) return;
@@ -344,6 +344,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     public java.util.List<String> getTowerUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.towerUniqueBlockIds); }
     public java.util.Map<String, Integer> getTowerBlockCounts() { return java.util.Collections.unmodifiableMap(this.towerBlockCounts); }
     public int getTowerHeight() { return towerHeight; }
+    public void setTowerHeight(int height) { this.towerHeight = Math.max(1, height); }
     public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() { return towerTemplate; }
 
     public void initTowerGroups(java.util.List<String> uniqueBlocks) {
@@ -353,7 +354,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (String id : uniqueBlocks) {
             String[] arr = new String[9];
             towerGroupSlots.add(arr);
-            towerGroupWindows.add(1);
+            towerGroupWindows.add(1.0f);
             towerBlockGroup.put(id, idx);
             idx++;
         }
@@ -363,7 +364,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (String id : uniqueBlocks) out.add(towerBlockGroup.getOrDefault(id, 0));
         return out;
     }
-    public java.util.List<Integer> getTowerGroupWindows() { return new java.util.ArrayList<>(towerGroupWindows); }
+    public java.util.List<Float> getTowerGroupWindows() { return new java.util.ArrayList<>(towerGroupWindows); }
     public java.util.List<String> getTowerGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(towerGroupSlots.size() * 9);
         for (String[] arr : towerGroupSlots) {
@@ -374,16 +375,16 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setTowerBlockGroup(String blockId, int group) {
         if (group < 0) { // create new
             towerGroupSlots.add(new String[9]);
-            towerGroupWindows.add(1);
+            towerGroupWindows.add(1.0f);
             group = towerGroupSlots.size() - 1;
         } else if (group >= towerGroupSlots.size()) {
             return;
         }
         towerBlockGroup.put(blockId, group);
     }
-    public void setTowerGroupWindow(int group, int window) {
+    public void setTowerGroupWindow(int group, float window) {
         if (group < 0 || group >= towerGroupWindows.size()) return;
-        towerGroupWindows.set(group, Math.max(0, Math.min(9, window)));
+        towerGroupWindows.set(group, Math.max(0.0f, Math.min(9.0f, window)));
     }
     public void setTowerGroupSlot(int group, int slot, String id) {
         if (group < 0 || group >= towerGroupSlots.size()) return;
@@ -422,7 +423,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (String id : uniqueBlocks) {
             String[] arr = new String[9];
             treeGroupSlots.add(arr);
-            treeGroupWindows.add(1);
+            treeGroupWindows.add(1.0f);
             treeBlockGroup.put(id, idx);
             idx++;
         }
@@ -432,7 +433,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (String id : uniqueBlocks) out.add(treeBlockGroup.getOrDefault(id, 0));
         return out;
     }
-    public java.util.List<Integer> getTreeGroupWindows() { return new java.util.ArrayList<>(treeGroupWindows); }
+    public java.util.List<Float> getTreeGroupWindows() { return new java.util.ArrayList<>(treeGroupWindows); }
     public java.util.List<String> getTreeGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(treeGroupSlots.size() * 9);
         for (String[] arr : treeGroupSlots) {
@@ -443,16 +444,16 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setTreeBlockGroup(String blockId, int group) {
         if (group < 0) { // create new
             treeGroupSlots.add(new String[9]);
-            treeGroupWindows.add(1);
+            treeGroupWindows.add(1.0f);
             group = treeGroupSlots.size() - 1;
         } else if (group >= treeGroupSlots.size()) {
             return;
         }
         treeBlockGroup.put(blockId, group);
     }
-    public void setTreeGroupWindow(int group, int window) {
+    public void setTreeGroupWindow(int group, float window) {
         if (group < 0 || group >= treeGroupWindows.size()) return;
-        treeGroupWindows.set(group, Math.max(0, Math.min(9, window)));
+        treeGroupWindows.set(group, Math.max(0.0f, Math.min(9.0f, window)));
     }
     public void setTreeGroupSlot(int group, int slot, String id) {
         if (group < 0 || group >= treeGroupSlots.size()) return;
@@ -1261,7 +1262,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
         // Sample gradient based on Y position in total tower (not module)
         String[] slots = towerGroupSlots.get(groupIdx);
-        int window = (groupIdx < towerGroupWindows.size()) ? towerGroupWindows.get(groupIdx) : 1;
+        float window = (groupIdx < towerGroupWindows.size()) ? towerGroupWindows.get(groupIdx) : 1.0f;
         int sampledIndex = sampleTowerGradient(slots, window, towerCurrentY, pos);
 
         if (sampledIndex >= 0 && sampledIndex < 9) {
@@ -1303,7 +1304,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return null;
     }
 
-    private int sampleTowerGradient(String[] slots, int window, int currentY, BlockPos pos) {
+    private int sampleTowerGradient(String[] slots, float window, int currentY, BlockPos pos) {
         // Count non-empty gradient slots
         int G = 0;
         for (int i = 8; i >= 0; i--) {
@@ -1318,7 +1319,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double s = ((double) currentY / (double) towerHeight) * (G - 1);
 
         // Apply windowing
-        int W = Math.min(window, G);
+        float W = Math.min(window, G);
         if (W > 0) {
             // Deterministic random offset based on position
             double u = deterministic01(pos.getX(), pos.getZ(), currentY) * W - (W / 2.0);
@@ -1551,7 +1552,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         String[] gradientSlots = treeGroupSlots.get(groupIdx);
-        int window = treeGroupWindows.get(groupIdx);
+        float window = treeGroupWindows.get(groupIdx);
 
         // Sample from gradient using position hash
         int lastNonEmpty = -1;
@@ -1567,7 +1568,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             return originalState;
         }
 
-        int idx = Math.abs(pos.getX() + pos.getZ() + pos.getY()) % window;
+        int idx = Math.abs(pos.getX() + pos.getZ() + pos.getY()) % (int) Math.max(1, Math.round(window));
         if (idx > lastNonEmpty) idx = lastNonEmpty;
 
         String sampledBlockId = gradientSlots[idx];
@@ -2169,7 +2170,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (container == null) return false;
 
         // Convert stream to list for easier manipulation
-        java.util.List<ItemStack> contents = container.stream().toList();
+        java.util.List<ItemStack> contents = new java.util.ArrayList<>(container.stream().toList());
 
         // Search through the shulker box contents
         for (int i = 0; i < contents.size(); i++) {
@@ -2179,26 +2180,12 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
                 String stackId = net.minecraft.registry.Registries.BLOCK.getId(bi.getBlock()).toString();
                 if (stackId.equals(blockId)) {
-                    // Create a new container with the modified contents
-                    ContainerComponent.Builder builder = ContainerComponent.builder();
-                    for (int j = 0; j < contents.size(); j++) {
-                        if (j == i) {
-                            // Decrement this stack
-                            ItemStack modifiedStack = contents.get(j).copy();
-                            modifiedStack.decrement(1);
-                            if (!modifiedStack.isEmpty()) {
-                                builder.add(modifiedStack);
-                            }
-                        } else {
-                            ItemStack slotStack = contents.get(j);
-                            if (!slotStack.isEmpty()) {
-                                builder.add(slotStack);
-                            }
-                        }
-                    }
+                    // Decrement this stack and write back an updated immutable container component.
+                    ItemStack modifiedStack = stack.copy();
+                    modifiedStack.decrement(1);
+                    contents.set(i, modifiedStack);
 
-                    // Update the shulker box with the new container component
-                    shulkerBox.set(DataComponentTypes.CONTAINER, builder.build());
+                    shulkerBox.set(DataComponentTypes.CONTAINER, ContainerComponent.fromStacks(contents));
                     return true;
                 }
             }
@@ -2835,8 +2822,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     protected void writeCustomData(WriteView view) {
         view.putString("Mode", this.buildMode.name());
         view.putInt("PathWidth", this.pathWidth);
-        view.putInt("GradWindow", this.gradientWindow);
-        view.putInt("StepWindow", this.stepGradientWindow);
+        view.putFloat("GradWindow", this.gradientWindow);
+        view.putFloat("StepWindow", this.stepGradientWindow);
 
         for (int i = 0; i < 9; i++) {
             String val = gradient[i] == null ? "" : gradient[i];
@@ -2884,7 +2871,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Wall groups persistence
         view.putInt("WallGroupCount", wallGroupSlots.size());
         for (int g = 0; g < wallGroupSlots.size(); g++) {
-            view.putInt("WallGW" + g, (g < wallGroupWindows.size()) ? wallGroupWindows.get(g) : 1);
+            view.putFloat("WallGW" + g, (g < wallGroupWindows.size()) ? wallGroupWindows.get(g) : 1.0f);
             String[] arr = wallGroupSlots.get(g);
             for (int i = 0; i < 9; i++) {
                 String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
@@ -2931,7 +2918,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Tower groups persistence
         view.putInt("TowerGroupCount", towerGroupSlots.size());
         for (int g = 0; g < towerGroupSlots.size(); g++) {
-            view.putInt("TowerGW" + g, (g < towerGroupWindows.size()) ? towerGroupWindows.get(g) : 1);
+            view.putFloat("TowerGW" + g, (g < towerGroupWindows.size()) ? towerGroupWindows.get(g) : 1.0f);
             String[] arr = towerGroupSlots.get(g);
             for (int i = 0; i < 9; i++) {
                 String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
@@ -3092,7 +3079,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Tree groups persistence
         view.putInt("TreeGroupCount", treeGroupSlots.size());
         for (int g = 0; g < treeGroupSlots.size(); g++) {
-            view.putInt("TreeGW" + g, (g < treeGroupWindows.size()) ? treeGroupWindows.get(g) : 1);
+            view.putFloat("TreeGW" + g, (g < treeGroupWindows.size()) ? treeGroupWindows.get(g) : 1.0f);
             String[] arr = treeGroupSlots.get(g);
             for (int i = 0; i < 9; i++) {
                 String v = (arr != null && i < arr.length && arr[i] != null) ? arr[i] : "";
@@ -3116,8 +3103,8 @@ public class GoldGolemEntity extends PathAwareEntity {
             this.buildMode = BuildMode.PATH;
         }
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
-        this.gradientWindow = Math.max(0, Math.min(9, view.getInt("GradWindow", this.gradientWindow)));
-        this.stepGradientWindow = Math.max(0, Math.min(9, view.getInt("StepWindow", this.stepGradientWindow)));
+        this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("GradWindow", this.gradientWindow)));
+        this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("StepWindow", this.stepGradientWindow)));
 
         for (int i = 0; i < 9; i++) {
             gradient[i] = view.getString("G" + i, "");
@@ -3171,8 +3158,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         wallGroupSlots.clear(); wallGroupWindows.clear(); wallBlockGroup.clear();
         int gc = view.getInt("WallGroupCount", 0);
         for (int g = 0; g < gc; g++) {
-            int w = view.getInt("WallGW" + g, 1);
-            wallGroupWindows.add(Math.max(0, Math.min(9, w)));
+            float w = view.getFloat("WallGW" + g, 1.0f);
+            wallGroupWindows.add(Math.max(0.0f, Math.min(9.0f, w)));
             String[] arr = new String[9];
             for (int i = 0; i < 9; i++) arr[i] = view.getString("WallGS" + g + "_" + i, "");
             wallGroupSlots.add(arr);
@@ -3218,8 +3205,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         towerGroupSlots.clear(); towerGroupWindows.clear(); towerBlockGroup.clear();
         int tgc = view.getInt("TowerGroupCount", 0);
         for (int g = 0; g < tgc; g++) {
-            int w = view.getInt("TowerGW" + g, 1);
-            towerGroupWindows.add(Math.max(0, Math.min(9, w)));
+            float w = view.getFloat("TowerGW" + g, 1.0f);
+            towerGroupWindows.add(Math.max(0.0f, Math.min(9.0f, w)));
             String[] arr = new String[9];
             for (int i = 0; i < 9; i++) arr[i] = view.getString("TowerGS" + g + "_" + i, "");
             towerGroupSlots.add(arr);
@@ -3426,7 +3413,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.treeGroupWindows.clear();
         this.treeBlockGroup.clear();
         for (int g = 0; g < treeGroupCount; g++) {
-            int window = view.getInt("TreeGW" + g, 1);
+            float window = view.getFloat("TreeGW" + g, 1.0f);
             this.treeGroupWindows.add(window);
             String[] arr = new String[9];
             for (int i = 0; i < 9; i++) {
@@ -3455,10 +3442,10 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         this.pathWidth = w;
     }
-    public int getGradientWindow() { return gradientWindow; }
-    public void setGradientWindow(int w) { this.gradientWindow = Math.max(0, Math.min(9, w)); }
-    public int getStepGradientWindow() { return stepGradientWindow; }
-    public void setStepGradientWindow(int w) { this.stepGradientWindow = Math.max(0, Math.min(9, w)); }
+    public float getGradientWindow() { return gradientWindow; }
+    public void setGradientWindow(float w) { this.gradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
+    public float getStepGradientWindow() { return stepGradientWindow; }
+    public void setStepGradientWindow(float w) { this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
 
     public String[] getGradientCopy() {
         String[] copy = new String[9];
@@ -3916,7 +3903,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         int denom = Math.max(1, half);
         double s = (double) dist / (double) denom * (double) (G - 1);
 
-        int Wcap = Math.min(this.gradientWindow, G);
+        float Wcap = Math.min(this.gradientWindow, G);
         double W = (double) Wcap;
         if (W == 0.0) {
             int idx = (int) Math.round(s);
@@ -3952,7 +3939,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         int denom = Math.max(1, half);
         double s = (double) dist / (double) denom * (double) (G - 1);
 
-        int Wcap = Math.min(this.stepGradientWindow, G);
+        float Wcap = Math.min(this.stepGradientWindow, G);
         double W = (double) Wcap;
         if (W == 0.0) {
             int idx = (int) Math.round(s);
@@ -3973,6 +3960,44 @@ public class GoldGolemEntity extends PathAwareEntity {
 
         int idx = (int) Math.round(sref);
         return MathHelper.clamp(idx, 0, G - 1);
+    }
+
+    private int sampleWallGradient(String[] slots, float window, int moduleHeight, int relY, BlockPos pos) {
+        // Count non-empty gradient slots
+        int G = 0;
+        for (int i = 8; i >= 0; i--) {
+            if (slots[i] != null && !slots[i].isEmpty()) {
+                G = i + 1;
+                break;
+            }
+        }
+        if (G == 0) return -1;
+
+        // Map Y position within module to gradient space [0, G-1]
+        // Use per-module height (similar to tower mode's currentY approach)
+        double s = (moduleHeight > 0) ? ((double) relY / (double) moduleHeight) * (G - 1) : 0.0;
+
+        // Apply windowing
+        float W = Math.min(window, G);
+        if (W > 0) {
+            // Deterministic random offset based on position
+            double u = deterministic01(pos.getX(), pos.getZ(), relY);
+            double uOffset = (u * W) - (W / 2.0);
+            s += uOffset;
+        }
+
+        // Edge reflection (triangle wave)
+        double a = -0.5;
+        double b = G - 0.5;
+        double L = b - a;
+        double y = (s - a) % (2 * L);
+        if (y < 0) y += 2 * L;
+        double r = (y <= L) ? y : (2 * L - y);
+        double s_ref = a + r;
+
+        // Clamp and round
+        int index = (int) Math.round(s_ref);
+        return Math.max(0, Math.min(G - 1, index));
     }
 
     private double deterministic01(int bx, int bz, int j) {
@@ -4111,6 +4136,11 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (!joinPlaced) { placeJoinSliceAtAnchor(); joinPlaced = true; }
             var tpl = wallTemplates.get(tplIndex);
             int ops = 0;
+            // Calculate module height for gradient sampling
+            int moduleMinY = tpl.minY;
+            int moduleMaxY = tpl.voxels.stream().mapToInt(v -> v.rel.getY()).max().orElse(moduleMinY);
+            int moduleHeight = Math.max(1, moduleMaxY - moduleMinY + 1);
+
             while (cursor < voxels.size() && ops < maxOps) {
                 var v = voxels.get(cursor++);
                 int rx = v.rel.getX();
@@ -4120,7 +4150,29 @@ public class GoldGolemEntity extends PathAwareEntity {
                 int wx = MathHelper.floor(anchor.x) + d[0];
                 int wy = MathHelper.floor(anchor.y) + d[1];
                 int wz = MathHelper.floor(anchor.z) + d[2];
-                placeBlockStateAt(wx, wy, wz, v.state, rot, mirror);
+
+                // Apply gradient sampling for wall mode
+                BlockState stateToPlace = v.state;
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(v.state.getBlock()).toString();
+                Integer groupIdx = wallBlockGroup.get(blockId);
+                if (groupIdx != null && groupIdx >= 0 && groupIdx < wallGroupSlots.size()) {
+                    String[] slots = wallGroupSlots.get(groupIdx);
+                    float window = (groupIdx < wallGroupWindows.size()) ? wallGroupWindows.get(groupIdx) : 1.0f;
+                    // Calculate relative Y position within module (0 at bottom)
+                    int relY = ry - moduleMinY;
+                    int sampledIndex = golem.sampleWallGradient(slots, window, moduleHeight, relY, new BlockPos(wx, wy, wz));
+                    if (sampledIndex >= 0 && sampledIndex < 9) {
+                        String sampledId = slots[sampledIndex];
+                        if (sampledId != null && !sampledId.isEmpty()) {
+                            BlockState sampledState = golem.getBlockStateFromId(sampledId);
+                            if (sampledState != null) {
+                                stateToPlace = sampledState;
+                            }
+                        }
+                    }
+                }
+
+                placeBlockStateAt(wx, wy, wz, stateToPlace, rot, mirror);
                 ops++;
             }
         }
@@ -4438,7 +4490,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public boolean canStart() {
         if (golem.isBuildingPaths()) return false;
-        if (golem.getBuildMode() == GoldGolemEntity.BuildMode.MINING) return false; // Never follow in mining mode
+        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
         // Only follow the owner; find the owner player in-world
         PlayerEntity owner = null;
         for (PlayerEntity player : golem.getEntityWorld().getPlayers()) {
@@ -4454,7 +4506,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
-        if (golem.getBuildMode() == GoldGolemEntity.BuildMode.MINING) return false; // Never follow in mining mode
+        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
         if (target == null || !target.isAlive()) return false;
         // Ensure target remains the owner
         if (!golem.isOwner(target)) return false;
@@ -4498,14 +4550,14 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
     @Override
     public boolean canStart() {
         if (golem.isBuildingPaths()) return false;
-        if (golem.getBuildMode() == GoldGolemEntity.BuildMode.MINING) return false; // Never wander in mining mode
+        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
         return super.canStart();
     }
 
     @Override
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
-        if (golem.getBuildMode() == GoldGolemEntity.BuildMode.MINING) return false; // Never wander in mining mode
+        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
         return super.shouldContinue();
     }
 

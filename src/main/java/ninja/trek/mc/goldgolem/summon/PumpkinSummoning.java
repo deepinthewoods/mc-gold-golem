@@ -13,6 +13,7 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.registry.GoldGolemEntities;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
@@ -127,7 +128,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.EXCAVATION);
+            golem.setBuildMode(BuildMode.EXCAVATION);
             golem.setExcavationConfig(chest1, chest2, chestDirection1, chestDirection2, below);
 
             world.breakBlock(below, false, player);
@@ -143,7 +144,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.MINING);
+            golem.setBuildMode(BuildMode.MINING);
             golem.setMiningConfig(chestPos, miningDir, below);
 
             world.breakBlock(below, false, player);
@@ -165,7 +166,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.TERRAFORMING);
+            golem.setBuildMode(BuildMode.TERRAFORMING);
             golem.setTerraformingConfig(def, below);
 
             // Remove the 3x3 gold platform
@@ -195,7 +196,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(secondGoldPos.getX() + 0.5, secondGoldPos.getY(), secondGoldPos.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.TREE);
+            golem.setBuildMode(BuildMode.TREE);
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -256,7 +257,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(bottomGold.getX() + 0.5, bottomGold.getY(), bottomGold.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.TOWER);
+            golem.setBuildMode(BuildMode.TOWER);
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -324,7 +325,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.WALL);
+            golem.setBuildMode(BuildMode.WALL);
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -413,7 +414,7 @@ public class PumpkinSummoning {
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
-            golem.setBuildMode(GoldGolemEntity.BuildMode.PATH);
+            golem.setBuildMode(BuildMode.PATH);
             world.breakBlock(below, false, player);
             ((ServerWorld) world).spawnEntity(golem);
             if (!player.isCreative()) stack.decrement(1);
