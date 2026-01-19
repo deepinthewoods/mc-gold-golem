@@ -14,6 +14,7 @@ public class NetworkInit {
         PayloadTypeRegistry.playS2C().register(GroupModeStateS2CPayload.ID, GroupModeStateS2CPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetGroupModeSlotC2SPayload.ID, SetGroupModeSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(GroupModeBlockGroupsS2CPayload.ID, GroupModeBlockGroupsS2CPayload.CODEC);
 
         // === PATH/GRADIENT MODE PAYLOADS ===
         PayloadTypeRegistry.playC2S().register(SetGradientSlotC2SPayload.ID, SetGradientSlotC2SPayload.CODEC);
@@ -24,11 +25,6 @@ public class NetworkInit {
         // === SHARED PAYLOADS ===
         PayloadTypeRegistry.playS2C().register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(UniqueBlocksS2CPayload.ID, UniqueBlocksS2CPayload.CODEC);
-
-        // === BLOCK GROUPS PAYLOADS (still needed for now) ===
-        PayloadTypeRegistry.playS2C().register(WallBlockGroupsS2CPayload.ID, WallBlockGroupsS2CPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(TowerBlockGroupsS2CPayload.ID, TowerBlockGroupsS2CPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(TreeBlockGroupsS2CPayload.ID, TreeBlockGroupsS2CPayload.CODEC);
 
         // === EXCAVATION MODE PAYLOADS ===
         PayloadTypeRegistry.playC2S().register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
@@ -230,7 +226,6 @@ public class NetworkInit {
                 windows = golem.getWallGroupWindows();
                 slots = golem.getWallGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createWallExtraData();
-                ServerPlayNetworking.send(player, new WallBlockGroupsS2CPayload(golem.getId(), groups));
             }
             case TOWER -> {
                 var ids = golem.getTowerUniqueBlockIds();
@@ -238,7 +233,6 @@ public class NetworkInit {
                 windows = golem.getTowerGroupWindows();
                 slots = golem.getTowerGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createTowerExtraData(golem.getTowerBlockCounts(), golem.getTowerHeight());
-                ServerPlayNetworking.send(player, new TowerBlockGroupsS2CPayload(golem.getId(), groups));
             }
             case TREE -> {
                 var ids = golem.getTreeUniqueBlockIds();
@@ -246,13 +240,15 @@ public class NetworkInit {
                 windows = golem.getTreeGroupWindows();
                 slots = golem.getTreeGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
-                ServerPlayNetworking.send(player, new TreeBlockGroupsS2CPayload(golem.getId(), groups));
             }
             default -> {
                 return;
             }
         }
 
+        // Send generic block groups payload
+        ServerPlayNetworking.send(player, new GroupModeBlockGroupsS2CPayload(golem.getId(), mode, groups));
+        // Send generic group mode state payload
         ServerPlayNetworking.send(player, new GroupModeStateS2CPayload(golem.getId(), mode, windows, slots, extraData));
     }
 

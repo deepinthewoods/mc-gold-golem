@@ -130,10 +130,10 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new UniqueBlocksS2CPayload(entityId, ids));
                     var groups = golem.getWallBlockGroupMap(ids);
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new WallBlockGroupsS2CPayload(entityId, groups));
-                    // Use generic group mode state payload
                     var extraData = GroupModeStateS2CPayload.createWallExtraData();
+                    // Use generic payloads
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeStateS2CPayload(entityId, mode, golem.getWallGroupWindows(), golem.getWallGroupFlatSlots(), extraData));
                 }
@@ -148,10 +148,10 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new UniqueBlocksS2CPayload(entityId, ids));
                     var groups = golem.getTowerBlockGroupMap(ids);
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new TowerBlockGroupsS2CPayload(entityId, groups));
-                    // Use generic group mode state payload with block counts and height
                     var extraData = GroupModeStateS2CPayload.createTowerExtraData(counts, golem.getTowerHeight());
+                    // Use generic payloads
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeStateS2CPayload(entityId, mode, golem.getTowerGroupWindows(), golem.getTowerGroupFlatSlots(), extraData));
                 }
@@ -165,10 +165,10 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new UniqueBlocksS2CPayload(entityId, ids));
                     var groups = golem.getTreeBlockGroupMap(ids);
-                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new TreeBlockGroupsS2CPayload(entityId, groups));
-                    // Use generic group mode state payload with tiling preset
                     var extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
+                    // Use generic payloads
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeStateS2CPayload(entityId, mode, golem.getTreeGroupWindows(), golem.getTreeGroupFlatSlots(), extraData));
                 }

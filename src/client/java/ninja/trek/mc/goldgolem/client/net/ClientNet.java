@@ -65,30 +65,17 @@ public final class ClientNet {
             });
         });
 
-        // Block groups (mode-specific, still needed for now)
-        ClientPlayNetworking.registerGlobalReceiver(WallBlockGroupsS2CPayload.ID, (payload, context) -> {
+        // Generic block groups handler
+        ClientPlayNetworking.registerGlobalReceiver(GroupModeBlockGroupsS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setWallBlockGroups(payload.groups());
-                }
-            });
-        });
-
-        ClientPlayNetworking.registerGlobalReceiver(TowerBlockGroupsS2CPayload.ID, (payload, context) -> {
-            var mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setTowerBlockGroups(payload.groups());
-                }
-            });
-        });
-
-        ClientPlayNetworking.registerGlobalReceiver(TreeBlockGroupsS2CPayload.ID, (payload, context) -> {
-            var mc = MinecraftClient.getInstance();
-            mc.execute(() -> {
-                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setTreeBlockGroups(payload.groups());
+                    switch (payload.mode()) {
+                        case WALL -> screen.setWallBlockGroups(payload.groups());
+                        case TOWER -> screen.setTowerBlockGroups(payload.groups());
+                        case TREE -> screen.setTreeBlockGroups(payload.groups());
+                        default -> { }
+                    }
                 }
             });
         });
