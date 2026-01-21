@@ -268,8 +268,16 @@ public class PumpkinSummoning {
                 return ActionResult.FAIL;
             }
 
-            // Scan the module structure from the bottom gold block
-            var res = ninja.trek.mc.goldgolem.tower.TowerScanner.scan(world, bottomGold, player);
+            // Collect all gold block positions for flood fill starting points
+            java.util.List<BlockPos> goldBlockPositions = new java.util.ArrayList<>();
+            BlockPos collectPos = bottomGold;
+            while (world.getBlockState(collectPos).isOf(Blocks.GOLD_BLOCK)) {
+                goldBlockPositions.add(collectPos);
+                collectPos = collectPos.up();
+            }
+
+            // Scan the module structure from all gold block positions
+            var res = ninja.trek.mc.goldgolem.tower.TowerScanner.scan(world, goldBlockPositions, bottomGold, player);
             if (!res.ok()) {
                 if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
                     sp.sendMessage(net.minecraft.text.Text.literal("[Gold Golem] Tower mode summon failed: " + res.error()), true);

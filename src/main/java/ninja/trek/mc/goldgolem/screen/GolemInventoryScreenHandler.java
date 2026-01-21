@@ -87,6 +87,18 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     public int getSliderMode() { return sliderMode; }
 
     @Override
+    public void onClosed(PlayerEntity player) {
+        super.onClosed(player);
+        // Clear GUI viewer tracking on the golem entity
+        if (!player.getEntityWorld().isClient()) {
+            var entity = player.getEntityWorld().getEntityById(this.entityId);
+            if (entity instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
+                golem.clearGuiViewer();
+            }
+        }
+    }
+
+    @Override
     public ItemStack quickMove(PlayerEntity player, int index) {
         // Basic shift-click behavior between golem inventory and player inventory
         ItemStack newStack = ItemStack.EMPTY;

@@ -33,13 +33,14 @@ public final class TowerScanner {
     }
 
     /**
-     * Scans the structure from the bottom gold block for tower mode.
+     * Scans the structure from the gold blocks for tower mode.
      * @param world The world
-     * @param bottomGoldPos The bottom gold block position (start of flood fill)
+     * @param goldBlockPositions List of gold block positions to start flood fill from
+     * @param origin The origin position for relative coordinates (typically bottom gold block)
      * @param summoner The player who summoned the golem
      * @return Result containing the tower definition or error message
      */
-    public static Result scan(World world, BlockPos bottomGoldPos, PlayerEntity summoner) {
+    public static Result scan(World world, List<BlockPos> goldBlockPositions, BlockPos origin, PlayerEntity summoner) {
         // Determine the block the player is standing on (one below feet)
         BlockPos playerGround = summoner == null ? null : summoner.getBlockPos().down();
 
@@ -54,14 +55,16 @@ public final class TowerScanner {
             }
         }
 
-        // Constrained flood fill
+        // Constrained flood fill - start from all gold block positions
         Set<BlockPos> visited = new HashSet<>();
         ArrayDeque<BlockPos> queue = new ArrayDeque<>();
-        queue.add(bottomGoldPos);
-        visited.add(bottomGoldPos);
+        for (BlockPos goldPos : goldBlockPositions) {
+            queue.add(goldPos);
+            visited.add(goldPos);
+        }
 
-        BlockPos min = new BlockPos(bottomGoldPos);
-        BlockPos max = new BlockPos(bottomGoldPos);
+        BlockPos min = new BlockPos(origin);
+        BlockPos max = new BlockPos(origin);
 
         while (!queue.isEmpty()) {
             BlockPos cur = queue.removeFirst();
@@ -127,14 +130,14 @@ public final class TowerScanner {
             if (uniqSet.add(id)) uniques.add(id);
             blockCounts.put(id, blockCounts.getOrDefault(id, 0) + 1);
 
-            BlockPos r = abs.subtract(bottomGoldPos);
+            BlockPos r = abs.subtract(origin);
             rel.add(r);
         }
 
         // Calculate module height (Y extent)
         int moduleHeight = max.getY() - min.getY() + 1;
 
-        TowerDefinition def = new TowerDefinition(bottomGoldPos.toImmutable(), rel, uniques, blockCounts, moduleHeight);
+        TowerDefinition def = new TowerDefinition(origin.toImmutable(), rel, uniques, blockCounts, moduleHeight);
         return new Result(def, null);
     }
 

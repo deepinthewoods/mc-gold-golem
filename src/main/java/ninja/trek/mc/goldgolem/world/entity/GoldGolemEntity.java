@@ -176,6 +176,13 @@ public class GoldGolemEntity extends PathAwareEntity {
     private boolean leftHandJustActivated = false;
     private boolean rightHandJustActivated = false;
 
+    // GUI viewer tracking - golem stays in place when a player has GUI open
+    private java.util.UUID guiViewerUuid = null;
+
+    public boolean hasGuiViewer() { return guiViewerUuid != null; }
+    public void setGuiViewer(java.util.UUID uuid) { this.guiViewerUuid = uuid; }
+    public void clearGuiViewer() { this.guiViewerUuid = null; }
+
     public boolean isBuildingPaths() { return this.dataTracker.get(BUILDING_PATHS); }
     public float getLeftEyeYaw() { return leftEyeYaw; }
     public float getLeftEyePitch() { return leftEyePitch; }
@@ -1930,6 +1937,9 @@ public class GoldGolemEntity extends PathAwareEntity {
                 return ActionResult.FAIL;
             }
         }
+        // Stop movement and track GUI viewer
+        this.setGuiViewer(player.getUuid());
+        this.getNavigation().stop();
         GolemScreens.open(sp, this.getId(), this.inventory);
         return ActionResult.CONSUME;
     }
@@ -2521,6 +2531,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public boolean canStart() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
         // Only follow the owner; find the owner player in-world
         PlayerEntity owner = null;
@@ -2537,6 +2548,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
         if (target == null || !target.isAlive()) return false;
         // Ensure target remains the owner
@@ -2581,6 +2593,7 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
     @Override
     public boolean canStart() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
         return super.canStart();
     }
@@ -2588,6 +2601,7 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
     @Override
     public boolean shouldContinue() {
         if (golem.isBuildingPaths()) return false;
+        if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
         return super.shouldContinue();
     }
