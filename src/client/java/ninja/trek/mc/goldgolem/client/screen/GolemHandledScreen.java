@@ -144,7 +144,6 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             double norm = g <= 0 ? 0.0 : (double) Math.min(window, g) / (double) g;
             this.value = norm;
             this.updateMessage();
-            this.applyValue();
         }
     }
 
@@ -906,45 +905,17 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
-    // ========== Shared Slot Button Infrastructure ==========
+    // ========== Shared Slot Click Infrastructure ==========
 
-    /**
-     * Functional interface for slot click handlers.
-     * @param slot The slot index (0-8)
-     * @param blockId The block identifier, or empty to clear the slot
-     */
-    @FunctionalInterface
-    private interface SlotClickHandler {
-        void onClick(int slot, java.util.Optional<Identifier> blockId);
-    }
-
-    /**
-     * Creates a row of 9 transparent buttons for gradient/group slot interaction.
-     * Each button handles left-click to set (with block) or clear (without block) a slot.
-     */
-    private void createSlotRowButtons(int rowY, SlotClickHandler handler) {
-        int slotsX = this.x + 8;
-        for (int i = 0; i < 9; i++) {
-            final int slot = i;
-            int gx = slotsX + i * 18;
-            var btn = ButtonWidget.builder(Text.empty(), b -> {
-                var mc = MinecraftClient.getInstance();
-                var player = mc.player;
-                if (player == null) return;
-                ItemStack cursor = player.currentScreenHandler != null
-                    ? player.currentScreenHandler.getCursorStack()
-                    : ItemStack.EMPTY;
-                java.util.Optional<Identifier> blockId;
-                if (cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem)) {
-                    blockId = java.util.Optional.empty();
-                } else {
-                    blockId = java.util.Optional.of(Registries.BLOCK.getId(((BlockItem) cursor.getItem()).getBlock()));
-                }
-                handler.onClick(slot, blockId);
-            }).dimensions(gx, rowY, 18, 18).build();
-            btn.setAlpha(0f);
-            this.addDrawableChild(btn);
+    private java.util.Optional<Identifier> getCursorBlockId() {
+        var mc = MinecraftClient.getInstance();
+        var player = mc.player;
+        if (player == null || player.currentScreenHandler == null) return java.util.Optional.empty();
+        ItemStack cursor = player.currentScreenHandler.getCursorStack();
+        if (cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem)) {
+            return java.util.Optional.empty();
         }
+        return java.util.Optional.of(Registries.BLOCK.getId(((BlockItem) cursor.getItem()).getBlock()));
     }
 
     /**
@@ -1004,13 +975,6 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             windowSliderStep = new WindowSlider(wx, wy1, sliderWidth, sliderHeight, norm1, 1);
             this.addDrawableChild(windowSliderStep);
 
-            // Transparent buttons over gradient slots for reliable clicks (both rows)
-            int slotY0 = this.y + 26;
-            int slotY1 = slotY0 + 18 + 6;
-            createSlotRowButtons(slotY0, (slot, blockId) ->
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 0, slot, blockId)));
-            createSlotRowButtons(slotY1, (slot, blockId) ->
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 1, slot, blockId)));
         }
 
         // Width slider under the gradient row (right-aligned)
@@ -1094,15 +1058,6 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 this.addDrawableChild(presetBtn);
             }
 
-            // Transparent buttons over group slots for reliable clicks (6 visible rows × 9 columns)
-            // These work for all group modes (Wall, Tower, Tree) - the handler determines the active mode at click time
-            int slotStartY = gridTop;
-            for (int r = 0; r < 6; r++) {
-                final int visualRow = r;
-                int rowY = slotStartY + r * rowSpacing;
-                createSlotRowButtons(rowY, (slot, blockId) -> handleGroupModeSlotClick(visualRow, slot, blockId));
-            }
-
             // Sync sliders if strategy is available, otherwise they'll be synced when data arrives
             if (strategy != null) {
                 syncGroupSliders(strategy);
@@ -1180,16 +1135,6 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             terraformingScanRadiusSlider = new TerraformingScanRadiusSlider(scanSliderX, scanSliderY, 90, 12, terraformingScanRadius);
             this.addDrawableChild(terraformingScanRadiusSlider);
 
-            // Transparent buttons over gradient slots for all three rows
-            int slotY0 = this.y + 26;
-            int slotY1 = slotY0 + 18 + 6;
-            int slotY2 = slotY1 + 18 + 6;
-            createSlotRowButtons(slotY0, (slot, blockId) ->
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 0, slot, blockId)));
-            createSlotRowButtons(slotY1, (slot, blockId) ->
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 1, slot, blockId)));
-            createSlotRowButtons(slotY2, (slot, blockId) ->
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 2, slot, blockId)));
         }
     }
 
@@ -1212,8 +1157,24 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public boolean mouseClicked(Click click, boolean traced) {
         int mx = (int) click.x();
         int my = (int) click.y();
+        if (click.button() == 0) {
+            if (this.handler.isSliderEnabled()) {
+                RowCol rc = gradientIndexAt(mx, my, 2);
+                if (rc != null) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(
+                        getEntityId(), rc.row, rc.col, getCursorBlockId()));
+                    return true;
+                }
+            } else if (isTerraformingMode()) {
+                RowCol rc = gradientIndexAt(mx, my, 3);
+                if (rc != null) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(
+                        getEntityId(), rc.row, rc.col, getCursorBlockId()));
+                    return true;
+                }
+            }
+        }
         if (this.handler.isSliderEnabled()) {
-            // Slot set/clear is handled by transparent ButtonWidgets created in init()
             return super.mouseClicked(click, traced);
         }
 
@@ -1249,7 +1210,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         treePendingAssignBlockId = null;
                         return true;
                     }
-                    // Slot set/clear is handled by transparent ButtonWidgets created in init()
+                    if (click.button() == 0) {
+                        handleGroupModeSlotClick(rLocal, c, getCursorBlockId());
+                        return true;
+                    }
                 }
             }
             if (treePendingAssignBlockId != null) {
@@ -1297,7 +1261,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         towerPendingAssignBlockId = null;
                         return true;
                     }
-                    // Slot set/clear is handled by transparent ButtonWidgets created in init()
+                    if (click.button() == 0) {
+                        handleGroupModeSlotClick(rLocal, c, getCursorBlockId());
+                        return true;
+                    }
                 }
             }
             if (towerPendingAssignBlockId != null) {
@@ -1345,7 +1312,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     pendingAssignBlockId = null;
                     return true;
                 }
-                // Slot set/clear is handled by transparent ButtonWidgets created in init()
+                if (click.button() == 0) {
+                    handleGroupModeSlotClick(rLocal, c, getCursorBlockId());
+                    return true;
+                }
             }
         }
         if (pendingAssignBlockId != null) {
@@ -1542,30 +1512,24 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     private static class RowCol { final int row; final int col; RowCol(int r, int c){row=r;col=c;} }
-    private RowCol gradientIndexAt(int mx, int my) {
+    private RowCol gradientIndexAt(int mx, int my, int rows) {
         int slotsX = this.x + 8;
         int slotY0 = this.y + 26; // first row
-        int slotY1 = slotY0 + 18 + 6; // second row
-        int w = 18, h = 18, pad = 18;
-        // First row
-        if (my >= slotY0 && my < slotY0 + h) {
-            int dx = mx - slotsX;
-            if (dx >= 0) {
-                int col = dx / pad;
-                if (col >= 0 && col < 9) {
-                    int colX = slotsX + col * pad;
-                    if (mx >= colX && mx < colX + w) return new RowCol(0, col);
-                }
-            }
-        }
-        // Second row
-        if (my >= slotY1 && my < slotY1 + h) {
-            int dx = mx - slotsX;
-            if (dx >= 0) {
-                int col = dx / pad;
-                if (col >= 0 && col < 9) {
-                    int colX = slotsX + col * pad;
-                    if (mx >= colX && mx < colX + w) return new RowCol(1, col);
+        int w = 18;
+        int h = 18;
+        int pad = 18;
+        int rowSpacing = 18 + 6;
+        int maxRows = Math.max(0, Math.min(3, rows));
+        for (int r = 0; r < maxRows; r++) {
+            int slotY = slotY0 + r * rowSpacing;
+            if (my >= slotY && my < slotY + h) {
+                int dx = mx - slotsX;
+                if (dx >= 0) {
+                    int col = dx / pad;
+                    if (col >= 0 && col < 9) {
+                        int colX = slotsX + col * pad;
+                        if (mx >= colX && mx < colX + w) return new RowCol(r, col);
+                    }
                 }
             }
         }

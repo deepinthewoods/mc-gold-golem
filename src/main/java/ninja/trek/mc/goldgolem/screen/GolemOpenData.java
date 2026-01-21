@@ -15,7 +15,7 @@ public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int 
             GolemOpenData::new
     );
 
-    public static int computeControlsMargin(int gradientRows, boolean slider, int titleLine) {
+    public static int computeControlsMargin(int gradientRows, int slider, int titleLine) {
         int headerH = 17;
         int titleGap = 6;
         int labelGap = 4;
@@ -24,7 +24,7 @@ public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int 
         int sliderH = 12;
         int gridGap = 6;
         int controls = headerH + titleGap + titleLine + labelGap + (gradientRows * ghostRowH);
-        if (slider) controls += (gradientRows * sliderH) + rowGap;
+        if (slider == 1) controls += (gradientRows * sliderH) + rowGap;
         controls += gridGap;
         return controls;
     }

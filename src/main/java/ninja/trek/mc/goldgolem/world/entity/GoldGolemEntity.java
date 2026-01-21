@@ -375,7 +375,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     public java.util.List<String> getTowerUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.towerUniqueBlockIds); }
     public java.util.Map<String, Integer> getTowerBlockCounts() { return java.util.Collections.unmodifiableMap(this.towerBlockCounts); }
     public int getTowerHeight() { return towerHeight; }
-    public void setTowerHeight(int height) { this.towerHeight = Math.max(1, height); }
+    public void setTowerHeight(int height) { this.towerHeight = Math.max(1, Math.min(256, height)); }
     public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() { return towerTemplate; }
 
     public void initTowerGroups(java.util.List<String> uniqueBlocks) {
@@ -758,11 +758,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             updateRandomEyeMovement();
         }
 
-        String side = this.getEntityWorld().isClient() ? "CLIENT" : "SERVER";
         buildingPaths = isBuildingPaths(); // Read from data tracker
-        if (buildingPaths && anyAnimating) {
-            System.out.println("[" + side + "] Building - Left anim: " + leftHandAnimationTick + ", Right anim: " + rightHandAnimationTick);
-        }
 
         if (this.getEntityWorld().isClient()) return;
         if (buildingPaths) {

@@ -25,7 +25,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.golemSlotCount = Math.max(0, data.golemSlots());
         this.golemRows = (this.golemSlotCount + 8) / 9;
         int titleLine = 10;
-        this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), titleLine);
+        this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.slider(), titleLine);
         this.sliderEnabled = data.sliderEnabled();
         this.sliderMode = data.slider();
         this.golemInventory = new SimpleInventory(this.golemSlotCount);
@@ -39,7 +39,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.entityId = data.entityId();
         this.golemSlotCount = Math.min(golemInventory.size(), Math.max(0, data.golemSlots()));
         this.golemRows = (this.golemSlotCount + 8) / 9;
-        this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.sliderEnabled(), 10);
+        this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.slider(), 10);
         this.sliderEnabled = data.sliderEnabled();
         this.sliderMode = data.slider();
         this.golemInventory = golemInventory;
