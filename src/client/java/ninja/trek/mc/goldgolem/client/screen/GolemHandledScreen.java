@@ -62,6 +62,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private String towerPendingAssignBlockId = null;
     private int towerLayers = 1; // 1-256 layers (synced from server)
     private TowerLayersSlider towerLayersSlider;
+    private boolean hasTowerModeData = false;
 
     // Excavation mode state
     private int excavationHeight = 3; // 1-5
@@ -300,6 +301,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
     public void setTowerUniqueBlocks(java.util.List<String> ids) {
         this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+        this.hasTowerModeData = true;
+        ensureTowerLayersSlider();
     }
     public void setWallGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
         this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
@@ -329,6 +332,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (this.towerLayersSlider != null) {
             this.towerLayersSlider.syncTo(this.towerLayers);
         }
+        this.hasTowerModeData = true;
+        ensureTowerLayersSlider();
     }
     public void setTowerBlockGroups(java.util.List<Integer> groups) {
         this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
@@ -342,6 +347,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (strategy != null) {
             syncGroupSliders(strategy);
         }
+        ensureTowerLayersSlider();
     }
 
     // Excavation mode network sync method
@@ -525,6 +531,43 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     private boolean isTowerMode() {
         return !this.handler.isSliderEnabled() && !towerUniqueBlocks.isEmpty();
+    }
+
+    private int getTowerLayersSliderY() {
+        int startY = this.y + 26;
+        int rowSpacing = 18 + 6;
+        int rows = 0;
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null && strategy.getMode() == BuildMode.TOWER) {
+            int total = strategy.getVisibleGroups().size();
+            rows = Math.min(Math.max(0, total - strategy.getScroll()), 6);
+        }
+        if (rows <= 0 && towerGroupWindows != null) {
+            int total = towerGroupWindows.size();
+            rows = Math.min(Math.max(0, total - towerScroll), 6);
+        }
+        if (rows <= 0) rows = 1;
+        return startY + rows * rowSpacing;
+    }
+
+    private void ensureTowerLayersSlider() {
+        if (this.handler.isSliderEnabled()) return;
+        int sliderMode = this.handler.getSliderMode();
+        if (sliderMode != 0 && sliderMode != 6) return;
+        if (!this.hasTowerModeData) return;
+        if (this.client == null || this.width <= 0) return;
+        int layersSliderW = 90;
+        int layersSliderH = 12;
+        int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
+        int layersSliderY = getTowerLayersSliderY();
+        if (towerLayersSlider == null) {
+            towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
+            this.addDrawableChild(towerLayersSlider);
+        } else {
+            towerLayersSlider.setDimensions(layersSliderW, layersSliderH);
+            towerLayersSlider.setX(layersSliderX);
+            towerLayersSlider.setY(layersSliderY);
+        }
     }
 
     // Tree mode helper methods
@@ -986,7 +1029,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
             widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
             this.addDrawableChild(widthSlider);
-        } else if (!this.handler.isSliderEnabled() && (this.handler.getSliderMode() <= 1 || this.handler.getSliderMode() == 5)) {
+        } else if (!this.handler.isSliderEnabled() && (this.handler.getSliderMode() <= 1 || this.handler.getSliderMode() == 5 || this.handler.getSliderMode() == 6)) {
             // Group Mode UI (Wall, Tower, Tree): create per-row sliders and scroll buttons using strategy pattern
             // Check sliderMode: 0 or 1 indicates Wall or Tower mode, 5 indicates Tree mode
             // Mode-specific data arrives later via network, but we create sliders now
@@ -1041,7 +1084,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 int layersSliderW = 90;
                 int layersSliderH = 12;
                 int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
-                int layersSliderY = this.y + 26;
+                int layersSliderY = getTowerLayersSliderY();
                 towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
                 this.addDrawableChild(towerLayersSlider);
             }
@@ -1061,6 +1104,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             // Sync sliders if strategy is available, otherwise they'll be synced when data arrives
             if (strategy != null) {
                 syncGroupSliders(strategy);
+            }
+            if (hasTowerModeData) {
+                ensureTowerLayersSlider();
             }
         } else if (isExcavationMode()) {
             // Excavation Mode UI: simple sliders for height and depth + ore mode button

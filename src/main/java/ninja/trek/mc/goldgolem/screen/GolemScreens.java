@@ -24,10 +24,12 @@ public final class GolemScreens {
         boolean miningMode = false;
         boolean terraformingMode = false;
         boolean treeMode = false;
+        boolean towerMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             BuildMode mode = g0.getBuildMode();
             if (mode == BuildMode.WALL || mode == BuildMode.TOWER) {
                 sliderEnabled = false;
+                towerMode = mode == BuildMode.TOWER;
             } else if (mode == BuildMode.EXCAVATION) {
                 excavationMode = true;
                 sliderEnabled = false;
@@ -46,7 +48,7 @@ public final class GolemScreens {
         // Build dynamic UI spec
         int gradientRows = terraformingMode ? 3 : 2; // 3 rows for terraforming (vertical, horizontal, sloped)
         int golemSlots = golemInventory.size();
-        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : 0))));
+        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : 0)))));
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider);
 
         player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {
