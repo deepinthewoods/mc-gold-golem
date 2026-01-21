@@ -304,7 +304,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     // Tower mode network sync methods
     public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height) {
-        this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+        // Note: towerUniqueBlocks is set by UniqueBlocksS2CPayload, not here.
+        // Only update if we don't already have unique blocks (backward compatibility).
+        if (this.towerUniqueBlocks.isEmpty() && ids != null && !ids.isEmpty()) {
+            this.towerUniqueBlocks = new java.util.ArrayList<>(ids);
+        }
         this.towerBlockCounts.clear();
         if (ids != null && counts != null) {
             for (int i = 0; i < Math.min(ids.size(), counts.size()); i++) {
@@ -562,6 +566,30 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private boolean isTreeMode() {
         // slider value of 5 indicates tree mode
         return this.handler.getSliderMode() == 5;
+    }
+
+    /**
+     * Get the current BuildMode based on the screen state.
+     */
+    private BuildMode getCurrentMode() {
+        if (isWallMode()) {
+            return BuildMode.WALL;
+        } else if (isTowerMode()) {
+            return BuildMode.TOWER;
+        } else if (isTreeMode()) {
+            return BuildMode.TREE;
+        } else if (isExcavationMode()) {
+            return BuildMode.EXCAVATION;
+        } else if (isTerraformingMode()) {
+            return BuildMode.TERRAFORMING;
+        } else if (isMiningMode()) {
+            return BuildMode.MINING;
+        } else if (this.handler.isSliderEnabled()) {
+            // Default slider mode is PATH/GRADIENT
+            return BuildMode.PATH;
+        }
+        // Fallback
+        return BuildMode.PATH;
     }
 
     /**
@@ -840,9 +868,83 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             }
 
             // Draw labels to the left of each row
-            context.drawText(this.textRenderer, Text.literal("Vertical"), this.x + 8, slotY0 - 10, 0xFFFFFF, false);
-            context.drawText(this.textRenderer, Text.literal("Horizontal"), this.x + 8, slotY1 - 10, 0xFFFFFF, false);
-            context.drawText(this.textRenderer, Text.literal("Sloped"), this.x + 8, slotY2 - 10, 0xFFFFFF, false);
+            context.drawText(this.textRenderer, Text.literal("Vertical"), this.x + 8, slotY0 - 10, 0xFFFFFFFF, false);
+            context.drawText(this.textRenderer, Text.literal("Horizontal"), this.x + 8, slotY1 - 10, 0xFFFFFFFF, false);
+            context.drawText(this.textRenderer, Text.literal("Sloped"), this.x + 8, slotY2 - 10, 0xFFFFFFFF, false);
+        }
+    }
+
+    // ========== Shared Slot Button Infrastructure ==========
+
+    /**
+     * Functional interface for slot click handlers.
+     * @param slot The slot index (0-8)
+     * @param blockId The block identifier, or empty to clear the slot
+     */
+    @FunctionalInterface
+    private interface SlotClickHandler {
+        void onClick(int slot, java.util.Optional<Identifier> blockId);
+    }
+
+    /**
+     * Creates a row of 9 transparent buttons for gradient/group slot interaction.
+     * Each button handles left-click to set (with block) or clear (without block) a slot.
+     */
+    private void createSlotRowButtons(int rowY, SlotClickHandler handler) {
+        int slotsX = this.x + 8;
+        for (int i = 0; i < 9; i++) {
+            final int slot = i;
+            int gx = slotsX + i * 18;
+            var btn = ButtonWidget.builder(Text.empty(), b -> {
+                var mc = MinecraftClient.getInstance();
+                var player = mc.player;
+                if (player == null) return;
+                ItemStack cursor = player.currentScreenHandler != null
+                    ? player.currentScreenHandler.getCursorStack()
+                    : ItemStack.EMPTY;
+                java.util.Optional<Identifier> blockId;
+                if (cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem)) {
+                    blockId = java.util.Optional.empty();
+                } else {
+                    blockId = java.util.Optional.of(Registries.BLOCK.getId(((BlockItem) cursor.getItem()).getBlock()));
+                }
+                handler.onClick(slot, blockId);
+            }).dimensions(gx, rowY, 18, 18).build();
+            btn.setAlpha(0f);
+            this.addDrawableChild(btn);
+        }
+    }
+
+    /**
+     * Handles slot clicks for group modes (Tower, Wall, Tree).
+     * Determines the actual group index based on visual row and scroll position.
+     */
+    private void handleGroupModeSlotClick(int visualRow, int slot, java.util.Optional<Identifier> blockId) {
+        BuildMode mode;
+        java.util.List<Integer> visibleGroups;
+        int scroll;
+
+        if (isTowerMode()) {
+            mode = BuildMode.TOWER;
+            visibleGroups = getTowerVisibleGroups();
+            scroll = towerScroll;
+        } else if (isWallMode()) {
+            mode = BuildMode.WALL;
+            visibleGroups = getVisibleGroups();
+            scroll = wallScroll;
+        } else if (isTreeMode()) {
+            mode = BuildMode.TREE;
+            visibleGroups = getTreeVisibleGroups();
+            scroll = treeScroll;
+        } else {
+            return; // Not in a recognized group mode
+        }
+
+        int actualRow = visualRow + scroll;
+        if (actualRow >= 0 && actualRow < visibleGroups.size()) {
+            int groupIdx = visibleGroups.get(actualRow);
+            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(
+                getEntityId(), mode, groupIdx, slot, blockId));
         }
     }
 
@@ -871,47 +973,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             this.addDrawableChild(windowSliderStep);
 
             // Transparent buttons over gradient slots for reliable clicks (both rows)
-            int slotsX = this.x + 8;
             int slotY0 = this.y + 26;
             int slotY1 = slotY0 + 18 + 6;
-            for (int i = 0; i < 9; i++) {
-                final int idx = i;
-                int gx = slotsX + i * 18;
-                var btn0 = ButtonWidget.builder(Text.empty(), b -> {
-                    var mc = MinecraftClient.getInstance();
-                    var player = mc.player;
-                    if (player == null) return;
-                    // Always use the item on the mouse cursor; never fall back to hotbar
-                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                    ItemStack held = cursor;
-                    boolean clear = held.isEmpty() || !(held.getItem() instanceof BlockItem);
-                    if (clear) {
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 0, idx, java.util.Optional.empty()));
-                    } else {
-                        BlockItem bi = (BlockItem) held.getItem();
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 0, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                    }
-                }).dimensions(gx, slotY0, 18, 18).build();
-                btn0.setAlpha(0f);
-                this.addDrawableChild(btn0);
-
-                var btn1 = ButtonWidget.builder(Text.empty(), b -> {
-                    var mc = MinecraftClient.getInstance();
-                    var player = mc.player;
-                    if (player == null) return;
-                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                    ItemStack held = cursor;
-                    boolean clear = held.isEmpty() || !(held.getItem() instanceof BlockItem);
-                    if (clear) {
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 1, idx, java.util.Optional.empty()));
-                    } else {
-                        BlockItem bi = (BlockItem) held.getItem();
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 1, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                    }
-                }).dimensions(gx, slotY1, 18, 18).build();
-                btn1.setAlpha(0f);
-                this.addDrawableChild(btn1);
-            }
+            createSlotRowButtons(slotY0, (slot, blockId) ->
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 0, slot, blockId)));
+            createSlotRowButtons(slotY1, (slot, blockId) ->
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), 1, slot, blockId)));
         }
 
         // Width slider under the gradient row (right-aligned)
@@ -995,6 +1062,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 this.addDrawableChild(presetBtn);
             }
 
+            // Transparent buttons over group slots for reliable clicks (6 visible rows × 9 columns)
+            // These work for all group modes (Wall, Tower, Tree) - the handler determines the active mode at click time
+            int slotStartY = gridTop;
+            for (int r = 0; r < 6; r++) {
+                final int visualRow = r;
+                int rowY = slotStartY + r * rowSpacing;
+                createSlotRowButtons(rowY, (slot, blockId) -> handleGroupModeSlotClick(visualRow, slot, blockId));
+            }
+
             // Sync sliders if strategy is available, otherwise they'll be synced when data arrives
             if (strategy != null) {
                 syncGroupSliders(strategy);
@@ -1043,65 +1119,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             this.addDrawableChild(terraformingScanRadiusSlider);
 
             // Transparent buttons over gradient slots for all three rows
-            int slotsX = this.x + 8;
             int slotY0 = this.y + 26;
             int slotY1 = slotY0 + 18 + 6;
             int slotY2 = slotY1 + 18 + 6;
-            for (int i = 0; i < 9; i++) {
-                final int idx = i;
-                int gx = slotsX + i * 18;
-
-                // Vertical gradient row
-                var btn0 = ButtonWidget.builder(Text.empty(), b -> {
-                    var mc = MinecraftClient.getInstance();
-                    var player = mc.player;
-                    if (player == null) return;
-                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                    boolean clear = cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem);
-                    if (clear) {
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 0, idx, java.util.Optional.empty()));
-                    } else {
-                        BlockItem bi = (BlockItem) cursor.getItem();
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 0, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                    }
-                }).dimensions(gx, slotY0, 18, 18).build();
-                btn0.setAlpha(0f);
-                this.addDrawableChild(btn0);
-
-                // Horizontal gradient row
-                var btn1 = ButtonWidget.builder(Text.empty(), b -> {
-                    var mc = MinecraftClient.getInstance();
-                    var player = mc.player;
-                    if (player == null) return;
-                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                    boolean clear = cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem);
-                    if (clear) {
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 1, idx, java.util.Optional.empty()));
-                    } else {
-                        BlockItem bi = (BlockItem) cursor.getItem();
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 1, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                    }
-                }).dimensions(gx, slotY1, 18, 18).build();
-                btn1.setAlpha(0f);
-                this.addDrawableChild(btn1);
-
-                // Sloped gradient row
-                var btn2 = ButtonWidget.builder(Text.empty(), b -> {
-                    var mc = MinecraftClient.getInstance();
-                    var player = mc.player;
-                    if (player == null) return;
-                    ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                    boolean clear = cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem);
-                    if (clear) {
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 2, idx, java.util.Optional.empty()));
-                    } else {
-                        BlockItem bi = (BlockItem) cursor.getItem();
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 2, idx, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                    }
-                }).dimensions(gx, slotY2, 18, 18).build();
-                btn2.setAlpha(0f);
-                this.addDrawableChild(btn2);
-            }
+            createSlotRowButtons(slotY0, (slot, blockId) ->
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 0, slot, blockId)));
+            createSlotRowButtons(slotY1, (slot, blockId) ->
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 1, slot, blockId)));
+            createSlotRowButtons(slotY2, (slot, blockId) ->
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(getEntityId(), 2, slot, blockId)));
         }
     }
 
@@ -1109,6 +1135,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         this.renderBackground(context, mouseX, mouseY, delta);
         super.render(context, mouseX, mouseY, delta);
+
+        // Draw mode name on top of everything to ensure visibility
+        BuildMode currentMode = getCurrentMode();
+        String modeName = currentMode.name().charAt(0) + currentMode.name().substring(1).toLowerCase();
+        // Clamp to screen so it stays visible even if the GUI is taller than the viewport
+        int labelWidth = this.textRenderer.getWidth(modeName);
+        int labelX = Math.max(2, Math.min(this.x + 8, this.width - labelWidth - 2));
+        int labelY = Math.max(2, this.y + 6);
+        context.drawText(this.textRenderer, Text.literal(modeName), labelX, labelY, 0xFF404040, false);
     }
 
     @Override
@@ -1116,14 +1151,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         int mx = (int) click.x();
         int my = (int) click.y();
         if (this.handler.isSliderEnabled()) {
-            // Pathing mode: right-click clears ghost slot
-            if (click.button() == 1) {
-                RowCol rc = gradientIndexAt(mx, my);
-                if (rc != null) {
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(getEntityId(), rc.row, rc.col, java.util.Optional.empty()));
-                    return true;
-                }
-            }
+            // Slot set/clear is handled by transparent ButtonWidgets created in init()
             return super.mouseClicked(click, traced);
         }
 
@@ -1159,22 +1187,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         treePendingAssignBlockId = null;
                         return true;
                     }
-                    if (click.button() == 1) {
-                        int groupIdx = vis.get(rIdx);
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TREE, groupIdx, c, java.util.Optional.empty()));
-                        return true;
-                    } else {
-                        var mc = MinecraftClient.getInstance();
-                        var player = mc.player;
-                        if (player != null) {
-                            ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                            if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
-                                int groupIdx = vis.get(rIdx);
-                                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TREE, groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                                return true;
-                            }
-                        }
-                    }
+                    // Slot set/clear is handled by transparent ButtonWidgets created in init()
                 }
             }
             if (treePendingAssignBlockId != null) {
@@ -1222,22 +1235,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         towerPendingAssignBlockId = null;
                         return true;
                     }
-                    if (click.button() == 1) {
-                        int groupIdx = vis.get(rIdx);
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TOWER, groupIdx, c, java.util.Optional.empty()));
-                        return true;
-                    } else {
-                        var mc = MinecraftClient.getInstance();
-                        var player = mc.player;
-                        if (player != null) {
-                            ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                            if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
-                                int groupIdx = vis.get(rIdx);
-                                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.TOWER, groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                                return true;
-                            }
-                        }
-                    }
+                    // Slot set/clear is handled by transparent ButtonWidgets created in init()
                 }
             }
             if (towerPendingAssignBlockId != null) {
@@ -1285,22 +1283,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     pendingAssignBlockId = null;
                     return true;
                 }
-                if (click.button() == 1) {
-                    int groupIdx = vis.get(rIdx);
-                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.WALL, groupIdx, c, java.util.Optional.empty()));
-                    return true;
-                } else {
-                    var mc = MinecraftClient.getInstance();
-                    var player = mc.player;
-                    if (player != null) {
-                        ItemStack cursor = player.currentScreenHandler != null ? player.currentScreenHandler.getCursorStack() : ItemStack.EMPTY;
-                        if (!cursor.isEmpty() && cursor.getItem() instanceof BlockItem bi) {
-                            int groupIdx = vis.get(rIdx);
-                            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeSlotC2SPayload(getEntityId(), BuildMode.WALL, groupIdx, c, java.util.Optional.of(Registries.BLOCK.getId(bi.getBlock()))));
-                            return true;
-                        }
-                    }
-                }
+                // Slot set/clear is handled by transparent ButtonWidgets created in init()
             }
         }
         if (pendingAssignBlockId != null) {
@@ -1529,19 +1512,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     @Override
     protected void drawForeground(DrawContext context, int mouseX, int mouseY) {
-        // Labels (foreground coordinates are relative to screen top-left)
-        context.drawText(this.textRenderer, this.title, 8, 6, 0xFFFFFF, false);
+        // Labels (foreground coordinates are relative to GUI top-left)
         // Player inventory label (match vanilla placement)
         int invY = this.backgroundHeight - 96 + 2;
-        context.drawText(this.textRenderer, this.playerInventoryTitle, 8, invY, 0x404040, false);
-        if (this.handler.isSliderEnabled()) {
-            context.drawText(this.textRenderer, Text.literal("Gradient"), 8, 18, 0xA0A0A0, false);
-        }
+        context.drawText(this.textRenderer, this.playerInventoryTitle, 8, invY, 0xFF404040, false);
         // Width label near the slider
         if (widthSlider != null && this.handler.isSliderEnabled()) {
             int lx = widthSlider.getX() - this.x;
             int ly = widthSlider.getY() - this.y - 10;
-            context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFF, false);
+            context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFFFF, false);
         }
 
         // Marker dots above each window slider (path mode)
@@ -1554,11 +1533,6 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         GroupModeStrategy strategy = getGroupModeStrategy();
         if (strategy != null) {
             drawGroupSliderMarkers(context, strategy);
-        }
-
-        // Excavation Mode UI: labels for sliders
-        if (isExcavationMode()) {
-            context.drawText(this.textRenderer, Text.literal("Excavation Settings"), 8, 18, 0xA0A0A0, false);
         }
 
         // Group Mode UI (Wall, Tower, Tree): label icons aligned to group rows + group rows
@@ -1604,7 +1578,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                             String countText = "x" + count;
                             int textX = ix + 18;
                             int textY = y + 4;
-                            context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFF, true);
+                            context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFFFF, true);
                         }
 
                         groupIconHits.add(new IconHit(id, groupIdx, this.x + ix, this.y + y, 16, 16));

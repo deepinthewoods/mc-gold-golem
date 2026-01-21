@@ -5,7 +5,7 @@ import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.codec.PacketCodecs;
 
 public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int slider) {
-    public boolean sliderEnabled() { return slider != 0; }
+    public boolean sliderEnabled() { return slider == 1; }
 
     public static final PacketCodec<RegistryByteBuf, GolemOpenData> CODEC = PacketCodec.tuple(
             PacketCodecs.VAR_INT, GolemOpenData::entityId,

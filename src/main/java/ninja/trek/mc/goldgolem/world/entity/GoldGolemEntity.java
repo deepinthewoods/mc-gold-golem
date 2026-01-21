@@ -39,6 +39,8 @@ import net.minecraft.component.type.ContainerComponent;
 
 import java.util.Optional;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategy;
+import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategyRegistry;
 
 public class GoldGolemEntity extends PathAwareEntity {
     public static final int INVENTORY_SIZE = 27;
@@ -53,6 +55,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final TrackedData<Optional<BlockPos>> LEFT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
     private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
     private static final TrackedData<Boolean> BUILDING_PATHS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+    private static final TrackedData<Integer> BUILD_MODE = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
@@ -61,7 +64,10 @@ public class GoldGolemEntity extends PathAwareEntity {
     private float stepGradientWindow = 1.0f; // window width for step gradient
     private int pathWidth = 3;
     private boolean buildingPaths = false;
-    private BuildMode buildMode = BuildMode.PATH;
+
+    // Strategy pattern for build modes
+    private BuildStrategy activeStrategy = null;
+
     // Wall-mode captured data (scaffold)
     private java.util.List<String> wallUniqueBlockIds = java.util.Collections.emptyList();
     private net.minecraft.util.math.BlockPos wallOrigin = null; // absolute origin of capture
@@ -102,51 +108,13 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int towerCurrentY = 0; // current Y layer being placed (0 = bottom)
     private int towerPlacementCursor = 0; // cursor within current Y layer
 
-    // Mining-mode state
-    private BlockPos miningChestPos = null; // chest location for deposit
-    private net.minecraft.util.math.Direction miningDirection = null; // primary tunnel direction (opposite to chest)
-    private BlockPos miningStartPos = null; // starting position (at chest)
-    private int miningBranchDepth = 16; // how far each branch extends (1-512)
-    private int miningBranchSpacing = 3; // spacing between branches (1-16)
-    private int miningTunnelHeight = 2; // tunnel height (2-6)
-    private int miningPrimaryProgress = 0; // blocks mined in primary tunnel
-    private int miningCurrentBranch = -1; // -1 = primary, 0+ = branch index
-    private boolean miningBranchLeft = true; // true = mining left branch, false = right
-    private int miningBranchProgress = 0; // blocks mined in current branch
-    private boolean miningReturningToChest = false; // returning to deposit
-    private boolean miningIdleAtChest = false; // waiting for chest space or nugget
-    private java.util.Set<BlockPos> miningPendingOres = new java.util.HashSet<>(); // ores detected but not yet mined
-    private String miningBuildingBlockType = null; // block ID to keep for placing under feet
-    private int miningBreakProgress = 0; // ticks spent breaking current block
-    private BlockPos miningCurrentTarget = null; // block currently being broken
+    // Mining-mode state is now managed by MiningBuildStrategy
 
-    // Excavation-mode state
-    private BlockPos excavationChestPos1 = null; // first chest location
-    private BlockPos excavationChestPos2 = null; // second chest location
-    private net.minecraft.util.math.Direction excavationDir1 = null; // direction of first chest
-    private net.minecraft.util.math.Direction excavationDir2 = null; // direction of second chest
-    private BlockPos excavationStartPos = null; // starting position (center/gold block)
-    private int excavationHeight = 3; // tunnel height (1-5) - mines upward
-    private int excavationDepth = 16; // radius from center (1-64)
-    private int excavationCurrentRing = 0; // current concentric square ring (0 = center)
-    private int excavationRingProgress = 0; // position within current ring (clockwise)
-    private boolean excavationReturningToChest = false; // returning to deposit
-    private boolean excavationIdleAtStart = false; // waiting for nugget
-    private String excavationBuildingBlockType = null; // block ID to keep for placing floor
-    private int excavationBreakProgress = 0; // ticks spent breaking current block
-    private BlockPos excavationCurrentTarget = null; // block currently being broken
+    // Excavation-mode state is now managed by ExcavationBuildStrategy
 
-    // Terraforming-mode state
-    private BlockPos terraformingOrigin = null; // center of 3x3 gold platform
-    private java.util.List<BlockPos> terraformingSkeletonBlocks = null; // skeleton block positions
-    private java.util.Set<net.minecraft.block.Block> terraformingSkeletonTypes = null; // skeleton block types
-    private java.util.Map<Integer, java.util.List<BlockPos>> terraformingShellByLayer = null; // Y -> shell positions
-    private int terraformingCurrentY = 0; // current Y layer being built
-    private int terraformingLayerProgress = 0; // progress within current layer
-    private BlockPos terraformingStartPos = null; // where golem was summoned
+    // Terraforming-mode state is now managed by TerraformingBuildStrategy
+    // UI settings remain here
     private int terraformingScanRadius = 2; // slope detection radius (1-5)
-    private int terraformingMinY = 0; // minimum Y bound
-    private int terraformingMaxY = 0; // maximum Y bound
     private int terraformingAlpha = 3; // alpha shape parameter (concavity control, 1-10)
     // Three gradients for terraforming mode
     private final String[] terraformingGradientVertical = new String[9]; // steep/cliff surfaces
@@ -156,29 +124,26 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int terraformingGradientHorizontalWindow = 1; // window for horizontal gradient (0..9)
     private int terraformingGradientSlopedWindow = 1; // window for sloped gradient (0..9)
 
-    // Tree-mode state
+    // Tree-mode captured data (UI fields stay in entity, state fields moved to TreeBuildStrategy)
     private java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> treeModules = java.util.Collections.emptyList();
     private java.util.List<String> treeUniqueBlockIds = java.util.Collections.emptyList();
     private net.minecraft.util.math.BlockPos treeOrigin = null; // second gold block position
     private String treeJsonFile = null; // saved snapshot path (relative to game dir)
     private ninja.trek.mc.goldgolem.tree.TilingPreset treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.SMALL_3x3;
-    private ninja.trek.mc.goldgolem.tree.TreeTileCache treeTileCache = null; // lazy-loaded when building starts
-    private ninja.trek.mc.goldgolem.tree.TreeWFCBuilder treeWFCBuilder = null; // active WFC state
-    private boolean treeTilesCached = false;
-    private boolean treeWaitingForInventory = false; // true when out of blocks, waiting for restock
     // Tree UI state: dynamic gradient groups (same pattern as wall/tower)
     private final java.util.List<String[]> treeGroupSlots = new java.util.ArrayList<>(); // each String[9]
     private final java.util.List<Float> treeGroupWindows = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> treeBlockGroup = new java.util.HashMap<>();
 
+    // Shared tracking fields (used by PATH and WALL modes)
     private Vec3d trackStart = null;
-    private java.util.ArrayDeque<LineSeg> pendingLines = new java.util.ArrayDeque<>();
-    private LineSeg currentLine = null;
-    private int placeCooldown = 0;
+    private java.util.ArrayDeque<ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg> pendingLines = new java.util.ArrayDeque<>();
+    private ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg currentLine = null;
     private final LongOpenHashSet recentPlaced = new LongOpenHashSet(8192);
     private final long[] placedRing = new long[8192];
     private int placedHead = 0;
     private int placedSize = 0;
+
     private int stuckTicks = 0;
     private double wheelRotation = 0.0;
     private double prevX = 0.0;
@@ -251,8 +216,72 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         return ItemStack.EMPTY;
     }
-    public BuildMode getBuildMode() { return buildMode; }
-    public void setBuildMode(BuildMode mode) { this.buildMode = mode == null ? BuildMode.PATH : mode; }
+    public BuildMode getBuildMode() {
+        int ordinal = this.dataTracker.get(BUILD_MODE);
+        BuildMode[] values = BuildMode.values();
+        return ordinal >= 0 && ordinal < values.length ? values[ordinal] : BuildMode.PATH;
+    }
+    public void setBuildMode(BuildMode mode) {
+        this.dataTracker.set(BUILD_MODE, (mode == null ? BuildMode.PATH : mode).ordinal());
+    }
+
+    // Strategy pattern methods
+    public BuildStrategy getActiveStrategy() {
+        return activeStrategy;
+    }
+
+    public void setActiveStrategy(BuildStrategy strategy) {
+        if (activeStrategy != null) {
+            activeStrategy.cleanup(this);
+        }
+        activeStrategy = strategy;
+        if (activeStrategy != null) {
+            activeStrategy.initialize(this);
+            setBuildMode(strategy.getMode());
+        }
+    }
+
+    /**
+     * Create and set a strategy for the current build mode.
+     * Called when loading from NBT or when the golem starts building.
+     */
+    public void initializeStrategyForCurrentMode() {
+        BuildMode mode = getBuildMode();
+        if (activeStrategy == null || activeStrategy.getMode() != mode) {
+            BuildStrategy newStrategy = BuildStrategyRegistry.create(mode);
+            setActiveStrategy(newStrategy);
+        }
+    }
+
+    /**
+     * Stop building and clean up the active strategy.
+     */
+    public void stopBuilding() {
+        this.buildingPaths = false;
+        this.dataTracker.set(BUILDING_PATHS, false);
+        if (activeStrategy != null) {
+            activeStrategy.stop(this);
+        }
+        this.getNavigation().stop();
+    }
+
+    /**
+     * Start building with the current strategy.
+     */
+    public void startBuilding() {
+        this.buildingPaths = true;
+        this.dataTracker.set(BUILDING_PATHS, true);
+        initializeStrategyForCurrentMode();
+    }
+
+    /**
+     * Set the building state (called by strategies).
+     */
+    public void setBuildingPaths(boolean building) {
+        this.buildingPaths = building;
+        this.dataTracker.set(BUILDING_PATHS, building);
+    }
+
     public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
         this.wallUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
         this.wallOrigin = origin;
@@ -300,6 +329,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         return out;
     }
     public java.util.List<Float> getWallGroupWindows() { return new java.util.ArrayList<>(wallGroupWindows); }
+    public java.util.List<String[]> getWallGroupSlots() { return wallGroupSlots; }
+    public java.util.Map<String, Integer> getWallBlockGroup() { return wallBlockGroup; }
     public java.util.List<String> getWallGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(wallGroupSlots.size() * 9);
         for (String[] arr : wallGroupSlots) {
@@ -365,6 +396,9 @@ public class GoldGolemEntity extends PathAwareEntity {
         return out;
     }
     public java.util.List<Float> getTowerGroupWindows() { return new java.util.ArrayList<>(towerGroupWindows); }
+    public java.util.List<String[]> getTowerGroupSlots() { return towerGroupSlots; }
+    public java.util.Map<String, Integer> getTowerBlockGroup() { return towerBlockGroup; }
+    public BlockPos getTowerOrigin() { return towerOrigin; }
     public java.util.List<String> getTowerGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(towerGroupSlots.size() * 9);
         for (String[] arr : towerGroupSlots) {
@@ -410,9 +444,9 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (preset != null && preset != this.treeTilingPreset) {
             this.treeTilingPreset = preset;
             // Invalidate tile cache so it will be regenerated with new size
-            this.treeTilesCached = false;
-            this.treeTileCache = null;
-            this.treeWFCBuilder = null;
+            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
+                treeStrategy.clearState();
+            }
         }
     }
 
@@ -461,67 +495,110 @@ public class GoldGolemEntity extends PathAwareEntity {
         String[] arr = treeGroupSlots.get(group);
         arr[slot] = (id == null) ? "" : id;
     }
+    public BlockPos getTreeOrigin() { return treeOrigin; }
+    public java.util.Map<String, Integer> getTreeBlockGroup() { return treeBlockGroup; }
+    public java.util.List<String[]> getTreeGroupSlots() { return treeGroupSlots; }
+
+    // Tree waiting state accessors (delegating to strategy)
+    public boolean isTreeWaitingForInventory() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
+            return treeStrategy.isWaitingForInventory();
+        }
+        return false;
+    }
+    public void setTreeWaitingForInventory(boolean waiting) {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
+            // Reset waiting state - strategy will rebuild cache when building resumes
+            if (!waiting) {
+                treeStrategy.clearState();
+            }
+        }
+    }
+
+    // Animation setters for strategy access
+    public void setLeftHandTargetPos(java.util.Optional<BlockPos> pos) {
+        this.dataTracker.set(LEFT_HAND_TARGET_POS, pos);
+    }
+    public void setLeftArmHasTarget(boolean hasTarget) {
+        this.dataTracker.set(LEFT_ARM_HAS_TARGET, hasTarget);
+    }
+    public void setLeftHandAnimationTick(int tick) {
+        this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, tick);
+    }
 
     // Mining mode configuration
     public void setMiningConfig(BlockPos chestPos, net.minecraft.util.math.Direction miningDir, BlockPos startPos) {
-        this.miningChestPos = chestPos;
-        this.miningDirection = miningDir;
-        this.miningStartPos = startPos;
-        this.miningIdleAtChest = true; // Start idle, waiting for gold nugget
+        // Ensure strategy is initialized for mining mode
+        if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy)) {
+            setBuildMode(BuildMode.MINING);
+            initializeStrategyForCurrentMode();
+        }
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            miningStrategy.setConfig(chestPos, miningDir, startPos);
+        }
     }
     public void setMiningSliders(int branchDepth, int branchSpacing, int tunnelHeight) {
-        this.miningBranchDepth = Math.max(1, Math.min(512, branchDepth));
-        this.miningBranchSpacing = Math.max(1, Math.min(16, branchSpacing));
-        this.miningTunnelHeight = Math.max(2, Math.min(6, tunnelHeight));
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            miningStrategy.setSliders(branchDepth, branchSpacing, tunnelHeight);
+        }
     }
-    public int getMiningBranchDepth() { return miningBranchDepth; }
-    public int getMiningBranchSpacing() { return miningBranchSpacing; }
-    public int getMiningTunnelHeight() { return miningTunnelHeight; }
+    public int getMiningBranchDepth() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            return miningStrategy.getBranchDepth();
+        }
+        return 16;
+    }
+    public int getMiningBranchSpacing() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            return miningStrategy.getBranchSpacing();
+        }
+        return 3;
+    }
+    public int getMiningTunnelHeight() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            return miningStrategy.getTunnelHeight();
+        }
+        return 2;
+    }
 
     // Excavation mode configuration
     public void setExcavationConfig(BlockPos chest1, BlockPos chest2, net.minecraft.util.math.Direction dir1, net.minecraft.util.math.Direction dir2, BlockPos startPos) {
-        this.excavationChestPos1 = chest1;
-        this.excavationChestPos2 = chest2;
-        this.excavationDir1 = dir1;
-        this.excavationDir2 = dir2;
-        this.excavationStartPos = startPos;
-        this.excavationIdleAtStart = true; // Start idle, waiting for gold nugget
+        // Ensure strategy is initialized for excavation mode
+        if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy)) {
+            setBuildMode(BuildMode.EXCAVATION);
+            initializeStrategyForCurrentMode();
+        }
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            excavationStrategy.setConfig(chest1, chest2, dir1, dir2, startPos);
+        }
     }
     public void setExcavationSliders(int height, int depth) {
-        this.excavationHeight = Math.max(1, Math.min(5, height));
-        this.excavationDepth = Math.max(1, Math.min(64, depth));
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            excavationStrategy.setSliders(height, depth);
+        }
     }
-    public int getExcavationHeight() { return excavationHeight; }
-    public int getExcavationDepth() { return excavationDepth; }
+    public int getExcavationHeight() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            return excavationStrategy.getHeight();
+        }
+        return 3;
+    }
+    public int getExcavationDepth() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            return excavationStrategy.getDepth();
+        }
+        return 16;
+    }
 
     public void setTerraformingConfig(ninja.trek.mc.goldgolem.terraforming.TerraformingDefinition def, BlockPos startPos) {
-        this.terraformingOrigin = def.origin();
-        this.terraformingSkeletonBlocks = new java.util.ArrayList<>(def.skeletonBlocks());
-        this.terraformingSkeletonTypes = new java.util.HashSet<>(def.skeletonTypes());
-        this.terraformingStartPos = startPos;
-        this.terraformingMinY = def.minBound().getY();
-        this.terraformingMaxY = def.maxBound().getY();
-
-        // Generate shell using alpha shapes for each Y layer
-        this.terraformingShellByLayer = new java.util.HashMap<>();
-        for (int y = terraformingMinY; y <= terraformingMaxY; y++) {
-            java.util.List<BlockPos> skeletonAtY = new java.util.ArrayList<>();
-            for (BlockPos pos : terraformingSkeletonBlocks) {
-                if (pos.getY() == y) {
-                    skeletonAtY.add(pos);
-                }
-            }
-
-            if (!skeletonAtY.isEmpty()) {
-                java.util.Set<BlockPos> shellSet = ninja.trek.mc.goldgolem.terraforming.AlphaShape.generateShell(
-                        skeletonAtY, terraformingAlpha, y);
-                terraformingShellByLayer.put(y, new java.util.ArrayList<>(shellSet));
-            }
+        // Ensure we're in TERRAFORMING mode with an active strategy
+        if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy)) {
+            setBuildMode(BuildMode.TERRAFORMING);
+            initializeStrategyForCurrentMode();
         }
-
-        // Start from minimum Y
-        this.terraformingCurrentY = terraformingMinY;
-        this.terraformingLayerProgress = 0;
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy terraformingStrategy) {
+            terraformingStrategy.setConfig(def, startPos);
+        }
     }
 
     public void setTerraformingScanRadius(int radius) {
@@ -534,23 +611,9 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public void setTerraformingAlpha(int alpha) {
         this.terraformingAlpha = Math.max(1, Math.min(10, alpha));
-        // Regenerate shell if already initialized
-        if (terraformingSkeletonBlocks != null && !terraformingSkeletonBlocks.isEmpty()) {
-            terraformingShellByLayer = new java.util.HashMap<>();
-            for (int y = terraformingMinY; y <= terraformingMaxY; y++) {
-                java.util.List<BlockPos> skeletonAtY = new java.util.ArrayList<>();
-                for (BlockPos pos : terraformingSkeletonBlocks) {
-                    if (pos.getY() == y) {
-                        skeletonAtY.add(pos);
-                    }
-                }
-
-                if (!skeletonAtY.isEmpty()) {
-                    java.util.Set<BlockPos> shellSet = ninja.trek.mc.goldgolem.terraforming.AlphaShape.generateShell(
-                            skeletonAtY, terraformingAlpha, y);
-                    terraformingShellByLayer.put(y, new java.util.ArrayList<>(shellSet));
-                }
-            }
+        // Regenerate shell in strategy if already initialized
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy terraformingStrategy) {
+            terraformingStrategy.rebuildShell();
         }
     }
 
@@ -574,6 +637,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         builder.add(LEFT_HAND_NEXT_POS, Optional.empty());
         builder.add(RIGHT_HAND_NEXT_POS, Optional.empty());
         builder.add(BUILDING_PATHS, false);
+        builder.add(BUILD_MODE, BuildMode.PATH.ordinal());
     }
 
     // UUID conversion helpers for NBT (still used by mining mode)
@@ -699,148 +763,25 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
 
-            // Mining, Excavation, and Terraforming modes have different behavior - doesn't track owner
-            if (this.buildMode == BuildMode.MINING) { tickMiningMode(); return; }
-            if (this.buildMode == BuildMode.EXCAVATION) { tickExcavationMode(); return; }
-            if (this.buildMode == BuildMode.TERRAFORMING) { tickTerraformingMode(); return; }
-
-            // Look at owner while building (Path/Wall/Tower modes)
-            PlayerEntity owner = getOwnerPlayer();
-            if (owner != null) {
-                this.getLookControl().lookAt(owner, 30.0f, 30.0f);
+            // Initialize strategy if needed
+            if (activeStrategy == null || activeStrategy.getMode() != getBuildMode()) {
+                initializeStrategyForCurrentMode();
             }
-            if (this.buildMode == BuildMode.WALL) { tickWallMode(owner); return; }
-            if (this.buildMode == BuildMode.TOWER) { tickTowerMode(owner); return; }
-            if (this.buildMode == BuildMode.TREE) { tickTreeMode(owner); return; }
-            // Lines are now rendered client-side using RenderLayer lines via networking; no server particles.
-            // Track lines while owner moves (require grounded for stability, no distance gate in pathing mode)
-            if (owner != null && owner.isOnGround()) {
-                // Capture slightly above the player's feet at creation time
-                Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
-                if (trackStart == null) {
-                    trackStart = p;
-                } else {
-                    // Only create a new 3m segment once the player is 4m away from the current anchor
-                    // If the player moved far, catch up by placing multiple 3m segments gated by 4m distance
-                    double dist = trackStart.distanceTo(p);
-                    while (dist >= 4.0) {
-                        Vec3d dir = p.subtract(trackStart);
-                        double len = dir.length();
-                        if (len < 1e-6) break;
-                        Vec3d unit = dir.multiply(1.0 / len);
-                        Vec3d end = trackStart.add(unit.multiply(3.0));
-                        enqueueLine(trackStart, end);
-                        trackStart = end;
-                        dist = trackStart.distanceTo(p);
+
+            // Use strategy for building logic
+            if (activeStrategy != null) {
+                PlayerEntity owner = null;
+                if (activeStrategy.usesPlayerTracking()) {
+                    owner = getOwnerPlayer();
+                    if (owner != null) {
+                        this.getLookControl().lookAt(owner, 30.0f, 30.0f);
                     }
                 }
-            }
-            // Process current line
-            if (currentLine == null) {
-                currentLine = pendingLines.pollFirst();
-                if (currentLine != null) {
-                    currentLine.begin(this);
-                    // Kick off movement toward the end of the line for steady progress
-                    int endIdx = Math.max(0, currentLine.cells.size() - 1);
-                    Vec3d tgt = currentLine.pointAtIndex(endIdx);
-                    double ty0 = computeGroundTargetY(tgt);
-                    this.getNavigation().startMovingTo(tgt.x, ty0, tgt.z, 1.1);
-                    // Notify client that the current line started (so it renders while queue may be empty)
-                    if (this.getEntityWorld() instanceof ServerWorld) {
-                        var owner2 = getOwnerPlayer();
-                        if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
-                            java.util.List<net.minecraft.util.math.Vec3d> list2 = new java.util.ArrayList<>();
-                            if (currentLine != null) {
-                                list2.add(currentLine.a);
-                                list2.add(currentLine.b);
-                            }
-                            for (LineSeg s2 : pendingLines) {
-                                list2.add(s2.a);
-                                list2.add(s2.b);
-                            }
-                            java.util.Optional<Vec3d> anchor2 = java.util.Optional.ofNullable(this.trackStart);
-                            ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list2, anchor2);
-                        }
-                    }
-                }
-            }
-            if (currentLine != null) {
-                // Placement paced by golem progress along the line
-                // Place 1 block every 2 ticks, alternating hands
-                if (placementTickCounter == 0) {
-                    int endIdxPl = Math.max(0, currentLine.cells.size() - 1);
-                    int progressCell = currentLine.progressCellIndex(this.getX(), this.getZ());
-                    Vec3d endPtPl = currentLine.pointAtIndex(endIdxPl);
-                    double exPl = this.getX() - endPtPl.x;
-                    double ezPl = this.getZ() - endPtPl.z;
-                    boolean nearEndPl = (exPl * exPl + ezPl * ezPl) <= (1.25 * 1.25);
-                    int boundCell = (nearEndPl || progressCell >= (endIdxPl - 1)) ? endIdxPl : progressCell;
+                activeStrategy.tick(this, owner);
 
-                    // Place exactly 1 block and get its position
-                    BlockPos placedBlock = currentLine.placeNextBlock(this, boundCell);
-
-                    if (placedBlock != null) {
-                        BlockPos previewBlock = currentLine.getNextUnplacedBlock(boundCell);
-                        if (leftHandActive) {
-                            System.out.println("[SERVER] Placing block with LEFT hand at " + placedBlock + ", starting animation");
-                            beginHandAnimation(true, placedBlock, previewBlock);
-                        } else {
-                            System.out.println("[SERVER] Placing block with RIGHT hand at " + placedBlock + ", starting animation");
-                            beginHandAnimation(false, placedBlock, previewBlock);
-                        }
-
-                        // Alternate hands
-                        leftHandActive = !leftHandActive;
-                    } else {
-                        System.out.println("[SERVER] Placement tick but no block placed (placedBlock is null)");
-                    }
-                }
-
-                // Always path toward the end of the current segment to ensure we reach it
-                int endIdx = Math.max(0, currentLine.cells.size() - 1);
-                Vec3d end = currentLine.pointAtIndex(endIdx);
-                double ty = computeGroundTargetY(end);
-                this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
-                // Detect stuck navigation and recover by teleporting closer to the end
-                double dx = this.getX() - end.x;
-                double dz = this.getZ() - end.z;
-                double distSq = dx * dx + dz * dz;
-                if (this.getNavigation().isIdle() && distSq > 1.0) {
-                    stuckTicks++;
-                    if (stuckTicks >= 20) {
-                        if (this.getEntityWorld() instanceof ServerWorld sw) {
-                            sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                            sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z, 40, 0.5, 0.5, 0.5, 0.2);
-                        }
-                        this.refreshPositionAndAngles(end.x, ty, end.z, this.getYaw(), this.getPitch());
-                        this.getNavigation().stop();
-                        stuckTicks = 0;
-                    }
-                } else {
-                    stuckTicks = 0;
-                }
-
-                // Complete the line only when all pending done AND we've effectively reached the end
-                if (currentLine.isFullyProcessed()) {
-                    if (distSq <= 0.75 * 0.75 || this.getNavigation().isIdle()) {
-                        LineSeg done = currentLine;
-                        LineSeg next = pendingLines.peekFirst();
-                        if (next != null) placeCornerFill(done, next);
-                        currentLine = null;
-                        // Update client after completing a line so it can drop the finished segment
-                        if (this.getEntityWorld() instanceof ServerWorld) {
-                            var owner2 = getOwnerPlayer();
-                            if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
-                                java.util.List<net.minecraft.util.math.Vec3d> list = new java.util.ArrayList<>();
-                                for (LineSeg s : pendingLines) {
-                                    list.add(s.a);
-                                    list.add(s.b);
-                                }
-                                java.util.Optional<Vec3d> anchor = java.util.Optional.ofNullable(this.trackStart);
-                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list, anchor);
-                            }
-                        }
-                    }
+                // Check if strategy has completed its work
+                if (activeStrategy.isComplete()) {
+                    stopBuilding();
                 }
             }
         }
@@ -978,7 +919,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private void beginHandAnimation(boolean isLeft, BlockPos placedBlock, BlockPos previewBlock) {
+    public void beginHandAnimation(boolean isLeft, BlockPos placedBlock, BlockPos previewBlock) {
         if (placedBlock == null) return;
         Vec3d center = blockCenter(placedBlock);
 
@@ -1052,7 +993,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private double computeGroundTargetY(Vec3d pos) {
+    public double computeGroundTargetY(Vec3d pos) {
         int bx = MathHelper.floor(pos.x);
         int bz = MathHelper.floor(pos.z);
         int y0 = MathHelper.floor(pos.y);
@@ -1149,646 +1090,11 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private void tickTowerMode(PlayerEntity owner) {
-        // Tower mode: build at fixed location (towerOrigin), no player tracking
-        if (!buildingPaths || towerTemplate == null || towerOrigin == null) return;
+    // Tower mode logic has been moved to TowerBuildStrategy
 
-        // Check if we've finished building the tower
-        if (towerCurrentY >= towerHeight) {
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-            return;
-        }
+    // Tree mode logic has been moved to TreeBuildStrategy
 
-        // Get all voxels for the current Y layer
-        java.util.List<BlockPos> currentLayerVoxels = getCurrentTowerLayerVoxels();
-
-        if (currentLayerVoxels.isEmpty()) {
-            // No voxels in this layer, move to next Y level
-            towerCurrentY++;
-            towerPlacementCursor = 0;
-            return;
-        }
-
-        // Place blocks at 2-tick intervals (same as other modes)
-        if (placementTickCounter == 0 && towerPlacementCursor < currentLayerVoxels.size()) {
-            BlockPos targetPos = currentLayerVoxels.get(towerPlacementCursor);
-
-            // Try to pathfind to the target position
-            double ty = computeGroundTargetY(new Vec3d(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5));
-            this.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
-
-            // Check if stuck and teleport if necessary
-            double dx = this.getX() - (targetPos.getX() + 0.5);
-            double dz = this.getZ() - (targetPos.getZ() + 0.5);
-            double distSq = dx * dx + dz * dz;
-            if (this.getNavigation().isIdle() && distSq > 1.0) {
-                stuckTicks++;
-                if (stuckTicks >= 20) {
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, targetPos.getX() + 0.5, ty + 0.5, targetPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    this.refreshPositionAndAngles(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, this.getYaw(), this.getPitch());
-                    this.getNavigation().stop();
-                    stuckTicks = 0;
-                }
-            } else {
-                stuckTicks = 0;
-            }
-
-            // Determine next block for animation preview
-            BlockPos nextPos = null;
-            if (towerPlacementCursor + 1 < currentLayerVoxels.size()) {
-                nextPos = currentLayerVoxels.get(towerPlacementCursor + 1);
-            }
-
-            // Place the block
-            placeTowerBlock(targetPos, nextPos);
-            towerPlacementCursor++;
-        }
-
-        // Check if we've finished this layer
-        if (towerPlacementCursor >= currentLayerVoxels.size()) {
-            towerCurrentY++;
-            towerPlacementCursor = 0;
-        }
-    }
-
-    private java.util.List<BlockPos> getCurrentTowerLayerVoxels() {
-        if (towerTemplate == null) return java.util.Collections.emptyList();
-
-        java.util.List<BlockPos> layerVoxels = new java.util.ArrayList<>();
-        int moduleHeight = towerTemplate.moduleHeight;
-        if (moduleHeight == 0) return layerVoxels;
-
-        // Determine which module repetition we're in and the Y offset within that module
-        int moduleIndex = towerCurrentY / moduleHeight;
-        int yWithinModule = towerCurrentY % moduleHeight;
-
-        // Collect all voxels at this Y level within the current module
-        for (var voxel : towerTemplate.voxels) {
-            int relY = voxel.rel.getY();
-            if (relY == yWithinModule) {
-                // Calculate absolute position: origin + module offset + voxel relative position
-                int absoluteY = towerOrigin.getY() + (moduleIndex * moduleHeight) + relY;
-                BlockPos absPos = new BlockPos(
-                    towerOrigin.getX() + voxel.rel.getX(),
-                    absoluteY,
-                    towerOrigin.getZ() + voxel.rel.getZ()
-                );
-                layerVoxels.add(absPos);
-            }
-        }
-
-        return layerVoxels;
-    }
-
-    private void placeTowerBlock(BlockPos pos, BlockPos nextPos) {
-        if (this.getEntityWorld().isClient()) return;
-
-        // Get the original block state from the template
-        BlockState targetState = getTowerBlockStateAt(pos);
-        if (targetState == null) return;
-
-        // Use gradient sampling to potentially replace with a different block
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
-        Integer groupIdx = towerBlockGroup.get(blockId);
-        if (groupIdx == null || groupIdx < 0 || groupIdx >= towerGroupSlots.size()) {
-            // No group mapping, place original block
-            placeBlockFromInventory(pos, targetState, nextPos);
-            return;
-        }
-
-        // Sample gradient based on Y position in total tower (not module)
-        String[] slots = towerGroupSlots.get(groupIdx);
-        float window = (groupIdx < towerGroupWindows.size()) ? towerGroupWindows.get(groupIdx) : 1.0f;
-        int sampledIndex = sampleTowerGradient(slots, window, towerCurrentY, pos);
-
-        if (sampledIndex >= 0 && sampledIndex < 9) {
-            String sampledId = slots[sampledIndex];
-            if (sampledId != null && !sampledId.isEmpty()) {
-                BlockState sampledState = getBlockStateFromId(sampledId);
-                if (sampledState != null) {
-                    placeBlockFromInventory(pos, sampledState, nextPos);
-                    return;
-                }
-            }
-        }
-
-        // Fallback: place original block
-        placeBlockFromInventory(pos, targetState, nextPos);
-    }
-
-    private BlockState getTowerBlockStateAt(BlockPos pos) {
-        if (towerTemplate == null || towerOrigin == null) return null;
-
-        int moduleHeight = towerTemplate.moduleHeight;
-        if (moduleHeight == 0) return null;
-
-        // Calculate relative position from tower origin
-        int relX = pos.getX() - towerOrigin.getX();
-        int relY = pos.getY() - towerOrigin.getY();
-        int relZ = pos.getZ() - towerOrigin.getZ();
-
-        // Determine Y within module
-        int yWithinModule = relY % moduleHeight;
-
-        // Find matching voxel in template
-        for (var voxel : towerTemplate.voxels) {
-            if (voxel.rel.getX() == relX && voxel.rel.getY() == yWithinModule && voxel.rel.getZ() == relZ) {
-                return voxel.state;
-            }
-        }
-
-        return null;
-    }
-
-    private int sampleTowerGradient(String[] slots, float window, int currentY, BlockPos pos) {
-        // Count non-empty gradient slots
-        int G = 0;
-        for (int i = 8; i >= 0; i--) {
-            if (slots[i] != null && !slots[i].isEmpty()) {
-                G = i + 1;
-                break;
-            }
-        }
-        if (G == 0) return -1;
-
-        // Map Y position in tower to gradient space [0, G-1]
-        double s = ((double) currentY / (double) towerHeight) * (G - 1);
-
-        // Apply windowing
-        float W = Math.min(window, G);
-        if (W > 0) {
-            // Deterministic random offset based on position
-            double u = deterministic01(pos.getX(), pos.getZ(), currentY) * W - (W / 2.0);
-            s += u;
-        }
-
-        // Edge reflection (triangle wave)
-        double a = -0.5;
-        double b = G - 0.5;
-        double L = b - a;
-        double y = (s - a) % (2 * L);
-        if (y < 0) y += 2 * L;
-        double r = (y <= L) ? y : (2 * L - y);
-        double s_ref = a + r;
-
-        // Clamp and round
-        int index = (int) Math.round(s_ref);
-        return Math.max(0, Math.min(G - 1, index));
-    }
-
-    private void tickTreeMode(PlayerEntity owner) {
-        // Tree mode: WFC-based building that follows player with nuggets
-        if (!buildingPaths || treeModules.isEmpty() || treeOrigin == null) return;
-
-        // If waiting for inventory, show angry particles and don't build
-        if (treeWaitingForInventory) {
-            // Show angry villager particles periodically
-            if (this.age % 20 == 0) {
-                if (this.getEntityWorld() instanceof ServerWorld sw) {
-                    sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
-                        this.getX(), this.getY() + 2.0, this.getZ(),
-                        1, 0.2, 0.2, 0.2, 0.0);
-                }
-            }
-            // Don't do any building work while waiting
-            return;
-        }
-
-        // Cache tiles if not already done
-        if (!treeTilesCached || treeTileCache == null) {
-            try {
-                // Build stop blocks set (air, gold, ground types)
-                java.util.Set<net.minecraft.block.Block> stopBlocks = new java.util.HashSet<>();
-                stopBlocks.add(net.minecraft.block.Blocks.GOLD_BLOCK);
-                if (owner != null) {
-                    BlockPos playerGround = owner.getBlockPos().down();
-                    BlockState gs = this.getEntityWorld().getBlockState(playerGround);
-                    net.minecraft.block.Block groundType = gs.getBlock();
-                    if (groundType == net.minecraft.block.Blocks.GRASS_BLOCK ||
-                        groundType == net.minecraft.block.Blocks.DIRT ||
-                        groundType == net.minecraft.block.Blocks.DIRT_PATH) {
-                        stopBlocks.add(net.minecraft.block.Blocks.GRASS_BLOCK);
-                        stopBlocks.add(net.minecraft.block.Blocks.DIRT);
-                        stopBlocks.add(net.minecraft.block.Blocks.DIRT_PATH);
-                    }
-                }
-
-                // Extract tiles using current preset
-                ninja.trek.mc.goldgolem.tree.TreeDefinition def =
-                    new ninja.trek.mc.goldgolem.tree.TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds);
-                treeTileCache = ninja.trek.mc.goldgolem.tree.TreeTileExtractor.extract(
-                    this.getEntityWorld(), def, treeTilingPreset, treeOrigin);
-                treeTilesCached = true;
-
-                if (treeTileCache.isEmpty()) {
-                    // No tiles extracted, stop building permanently
-                    buildingPaths = false;
-                    this.dataTracker.set(BUILDING_PATHS, false);
-                    return;
-                }
-
-                // Initialize WFC builder at golem's current position (only if new)
-                if (treeWFCBuilder == null) {
-                    java.util.Random random = new java.util.Random(this.getUuid().getMostSignificantBits());
-                    treeWFCBuilder = new ninja.trek.mc.goldgolem.tree.TreeWFCBuilder(
-                        treeTileCache, this.getEntityWorld(), this.getBlockPos(), stopBlocks, random);
-                }
-
-            } catch (Exception e) {
-                // Failed to cache tiles, stop building
-                buildingPaths = false;
-                this.dataTracker.set(BUILDING_PATHS, false);
-                return;
-            }
-        }
-
-        // Run WFC algorithm steps (run multiple steps per tick for faster generation)
-        if (treeWFCBuilder != null && !treeWFCBuilder.isFinished()) {
-            // Run a few WFC steps per tick
-            for (int i = 0; i < 5 && !treeWFCBuilder.isFinished(); i++) {
-                treeWFCBuilder.step();
-            }
-        }
-
-        // Place blocks from WFC output at 2-tick intervals
-        if (placementTickCounter == 0 && treeWFCBuilder != null && treeWFCBuilder.hasPendingBlocks()) {
-            BlockPos buildPos = treeWFCBuilder.getNextBuildPosition();
-            if (buildPos != null) {
-                // Try to pathfind to the build position
-                double ty = computeGroundTargetY(new Vec3d(buildPos.getX() + 0.5, buildPos.getY(), buildPos.getZ() + 0.5));
-                this.getNavigation().startMovingTo(buildPos.getX() + 0.5, ty, buildPos.getZ() + 0.5, 1.1);
-
-                // Check if stuck and teleport if necessary (same as tower mode)
-                double dx = this.getX() - (buildPos.getX() + 0.5);
-                double dz = this.getZ() - (buildPos.getZ() + 0.5);
-                double distSq = dx * dx + dz * dz;
-                if (this.getNavigation().isIdle() && distSq > 1.0) {
-                    stuckTicks++;
-                    if (stuckTicks >= 20) {
-                        if (this.getEntityWorld() instanceof ServerWorld sw) {
-                            sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                            sw.spawnParticles(ParticleTypes.PORTAL, buildPos.getX() + 0.5, ty + 0.5, buildPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                        }
-                        this.refreshPositionAndAngles(buildPos.getX() + 0.5, ty, buildPos.getZ() + 0.5, this.getYaw(), this.getPitch());
-                        this.getNavigation().stop();
-                        stuckTicks = 0;
-                    }
-                } else {
-                    stuckTicks = 0;
-                }
-
-                // Place the blocks from the tile - returns false if inventory depleted
-                boolean success = placeTreeTile(buildPos);
-                if (!success) {
-                    // Out of inventory - stop building and wait for restock
-                    buildingPaths = false;
-                    this.dataTracker.set(BUILDING_PATHS, false);
-                    treeWaitingForInventory = true;
-
-                    // Show angry villager particles
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
-                            this.getX(), this.getY() + 2.0, this.getZ(),
-                            5, 0.3, 0.3, 0.3, 0.0);
-                    }
-
-                    // Put the build position back in the queue so we resume from here
-                    // Note: TreeWFCBuilder's getNextBuildPosition already removed it, so we need to re-queue
-                    // For now, we'll just leave it - the next tile will be attempted when resumed
-                    return;
-                }
-            }
-        }
-
-        // Check if finished building (no more pending blocks and WFC is done)
-        if (treeWFCBuilder != null && treeWFCBuilder.isFinished() && !treeWFCBuilder.hasPendingBlocks()) {
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-        }
-    }
-
-    private boolean placeTreeTile(BlockPos tileOriginPos) {
-        if (this.getEntityWorld().isClient()) return true;
-        if (treeWFCBuilder == null) return true;
-
-        String tileId = treeWFCBuilder.getCollapsedTile(tileOriginPos);
-        if (tileId == null) return true;
-
-        ninja.trek.mc.goldgolem.tree.TreeTile tile = treeWFCBuilder.getTile(tileId);
-        if (tile == null) return true;
-
-        // Track if we successfully placed at least one block, and if we failed due to inventory
-        boolean placedAny = false;
-        boolean inventoryDepleted = false;
-
-        // Place all blocks in the tile
-        int tileSize = tile.size;
-        for (int dx = 0; dx < tileSize; dx++) {
-            for (int dy = 0; dy < tileSize; dy++) {
-                for (int dz = 0; dz < tileSize; dz++) {
-                    BlockPos placePos = tileOriginPos.add(dx, dy, dz);
-                    BlockState targetState = tile.getBlock(dx, dy, dz);
-
-                    // Skip air blocks
-                    if (targetState.isAir()) continue;
-
-                    // Don't overwrite existing non-air blocks
-                    if (!this.getEntityWorld().getBlockState(placePos).isAir()) continue;
-
-                    // Sample from gradient for this block type
-                    BlockState finalState = sampleTreeGradient(targetState, placePos);
-
-                    // Consume from inventory
-                    String blockIdToConsume = net.minecraft.registry.Registries.BLOCK.getId(finalState.getBlock()).toString();
-                    if (!consumeBlockFromInventory(blockIdToConsume)) {
-                        // No blocks in inventory - mark as depleted
-                        inventoryDepleted = true;
-                        continue;
-                    }
-
-                    // Place the block
-                    this.getEntityWorld().setBlockState(placePos, finalState, 3);
-                    placedAny = true;
-
-                    // Spawn particles
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.HAPPY_VILLAGER,
-                            placePos.getX() + 0.5, placePos.getY() + 0.5, placePos.getZ() + 0.5,
-                            3, 0.3, 0.3, 0.3, 0.0);
-                    }
-                }
-            }
-        }
-
-        // If we depleted inventory and couldn't place anything this tile, fail
-        if (inventoryDepleted && !placedAny) {
-            return false; // Signal inventory depletion
-        }
-
-        // Update hand animations (use first block of tile for visual)
-        if (placedAny) {
-            BlockPos animPos = tileOriginPos;
-            this.dataTracker.set(LEFT_HAND_TARGET_POS, Optional.of(animPos));
-            this.dataTracker.set(LEFT_ARM_HAS_TARGET, true);
-            this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, 0);
-        }
-
-        return true; // Success (or partial success is okay)
-    }
-
-    private BlockState sampleTreeGradient(BlockState originalState, BlockPos pos) {
-        // Get block ID
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(originalState.getBlock()).toString();
-
-        // Find the gradient group for this block
-        Integer groupIdx = treeBlockGroup.get(blockId);
-        if (groupIdx == null || groupIdx >= treeGroupSlots.size()) {
-            // No gradient assigned, use original
-            return originalState;
-        }
-
-        String[] gradientSlots = treeGroupSlots.get(groupIdx);
-        float window = treeGroupWindows.get(groupIdx);
-
-        // Sample from gradient using position hash
-        int lastNonEmpty = -1;
-        for (int i = gradientSlots.length - 1; i >= 0; i--) {
-            if (gradientSlots[i] != null && !gradientSlots[i].isEmpty()) {
-                lastNonEmpty = i;
-                break;
-            }
-        }
-
-        if (lastNonEmpty < 0) {
-            // Empty gradient, use original
-            return originalState;
-        }
-
-        int idx = Math.abs(pos.getX() + pos.getZ() + pos.getY()) % (int) Math.max(1, Math.round(window));
-        if (idx > lastNonEmpty) idx = lastNonEmpty;
-
-        String sampledBlockId = gradientSlots[idx];
-        if (sampledBlockId == null || sampledBlockId.isEmpty()) {
-            return originalState;
-        }
-
-        var id = net.minecraft.util.Identifier.tryParse(sampledBlockId);
-        if (id == null) return originalState;
-        net.minecraft.block.Block sampledBlock = net.minecraft.registry.Registries.BLOCK.get(id);
-        return sampledBlock.getDefaultState();
-    }
-
-    private void tickMiningMode() {
-        // Mining mode state machine
-        if (miningChestPos == null || miningDirection == null || miningStartPos == null) {
-            // Invalid state, stop mining
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-            return;
-        }
-
-        // State 1: Idle at chest (waiting for gold nugget)
-        if (miningIdleAtChest) {
-            // Navigate to start position and stay there
-            double dx = this.getX() - (miningStartPos.getX() + 0.5);
-            double dz = this.getZ() - (miningStartPos.getZ() + 0.5);
-            double distSq = dx * dx + dz * dz;
-            if (distSq > 4.0) {
-                this.getNavigation().startMovingTo(miningStartPos.getX() + 0.5,
-                    miningStartPos.getY(), miningStartPos.getZ() + 0.5, 1.0);
-            } else {
-                this.getNavigation().stop();
-            }
-            return;
-        }
-
-        // State 2: Returning to chest to deposit
-        if (miningReturningToChest) {
-            tickMiningReturn();
-            return;
-        }
-
-        // State 3: Check if inventory is full (need to return)
-        if (isMiningInventoryFull()) {
-            miningReturningToChest = true;
-            miningCurrentTarget = null;
-            miningBreakProgress = 0;
-            return;
-        }
-
-        // State 4: Active mining
-        tickMiningActive();
-    }
-
-    private void tickMiningReturn() {
-        // Navigate back to chest
-        double dx = this.getX() - (miningStartPos.getX() + 0.5);
-        double dz = this.getZ() - (miningStartPos.getZ() + 0.5);
-        double distSq = dx * dx + dz * dz;
-
-        if (distSq > 4.0) {
-            // Still far from chest, navigate
-            this.getNavigation().startMovingTo(miningStartPos.getX() + 0.5,
-                miningStartPos.getY(), miningStartPos.getZ() + 0.5, 1.1);
-
-            // Check if stuck and teleport if necessary
-            if (this.getNavigation().isIdle() && distSq > 16.0) {
-                stuckTicks++;
-                if (stuckTicks >= 60) {
-                    // Teleport to start position
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(),
-                            40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, miningStartPos.getX() + 0.5,
-                            miningStartPos.getY() + 0.5, miningStartPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    this.refreshPositionAndAngles(miningStartPos.getX() + 0.5, miningStartPos.getY(),
-                        miningStartPos.getZ() + 0.5, this.getYaw(), this.getPitch());
-                    this.getNavigation().stop();
-                    stuckTicks = 0;
-                }
-            } else {
-                stuckTicks = 0;
-            }
-        } else {
-            // Close to chest, deposit inventory
-            this.getNavigation().stop();
-            depositInventoryToChest();
-            miningReturningToChest = false;
-            // Check if chest is full after deposit
-            if (isMiningInventoryFull()) {
-                // Chest is full, go idle
-                miningIdleAtChest = true;
-                buildingPaths = false;
-                this.dataTracker.set(BUILDING_PATHS, false);
-            }
-        }
-    }
-
-    private void tickMiningActive() {
-        // Place blocks under feet if needed
-        placeBlocksUnderFeet();
-
-        // Scan for nearby ores and add to pending list
-        scanForOres();
-
-        // Determine next mining target
-        BlockPos targetPos = getNextMiningTarget();
-        if (targetPos == null) {
-            // No more blocks to mine, stop
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-            return;
-        }
-
-        // Navigate to target
-        double ty = targetPos.getY();
-        this.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
-
-        // Check if close enough to mine
-        double dx = this.getX() - (targetPos.getX() + 0.5);
-        double dy = this.getY() - targetPos.getY();
-        double dz = this.getZ() - (targetPos.getZ() + 0.5);
-        double distSq = dx * dx + dy * dy + dz * dz;
-
-        if (distSq <= 25.0) { // Within 5 block reach
-            // Mine the block
-            mineBlock(targetPos);
-        } else {
-            // Reset mining progress if too far
-            if (miningCurrentTarget != null && !miningCurrentTarget.equals(targetPos)) {
-                miningCurrentTarget = null;
-                miningBreakProgress = 0;
-            }
-        }
-
-        // Check if stuck and teleport if necessary
-        if (this.getNavigation().isIdle() && distSq > 16.0) {
-            stuckTicks++;
-            if (stuckTicks >= 60) {
-                // Teleport to start position
-                if (this.getEntityWorld() instanceof ServerWorld sw) {
-                    sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(),
-                        40, 0.5, 0.5, 0.5, 0.2);
-                    sw.spawnParticles(ParticleTypes.PORTAL, miningStartPos.getX() + 0.5,
-                        miningStartPos.getY() + 0.5, miningStartPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                }
-                this.refreshPositionAndAngles(miningStartPos.getX() + 0.5, miningStartPos.getY(),
-                    miningStartPos.getZ() + 0.5, this.getYaw(), this.getPitch());
-                this.getNavigation().stop();
-                stuckTicks = 0;
-                miningCurrentTarget = null;
-                miningBreakProgress = 0;
-                // Reset mining state
-                miningPrimaryProgress = 0;
-                miningCurrentBranch = -1;
-                miningBranchProgress = 0;
-                miningPendingOres.clear();
-            }
-        } else {
-            stuckTicks = 0;
-        }
-    }
-
-    private boolean isMiningInventoryFull() {
-        // Check if inventory has space (excluding one stack of building blocks)
-        int emptySlots = 0;
-        int buildingBlockCount = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty()) {
-                emptySlots++;
-            } else if (miningBuildingBlockType != null) {
-                String blockId = getBlockIdFromStack(stack);
-                if (blockId != null && blockId.equals(miningBuildingBlockType)) {
-                    buildingBlockCount += stack.getCount();
-                }
-            }
-        }
-        // Full if less than 2 empty slots (need room for building blocks)
-        return emptySlots < 2;
-    }
-
-    private void depositInventoryToChest() {
-        if (miningChestPos == null || this.getEntityWorld().isClient()) return;
-
-        // Get chest inventory
-        var chestEntity = this.getEntityWorld().getBlockEntity(miningChestPos);
-        if (!(chestEntity instanceof net.minecraft.inventory.Inventory chestInv)) return;
-
-        // Keep one stack of building blocks, deposit everything else
-        int buildingBlocksKept = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty()) continue;
-
-            String blockId = getBlockIdFromStack(stack);
-            boolean isBuildingBlock = miningBuildingBlockType != null && blockId != null &&
-                blockId.equals(miningBuildingBlockType);
-
-            if (isBuildingBlock && buildingBlocksKept < 64) {
-                // Keep up to one stack of building blocks
-                int toKeep = Math.min(64 - buildingBlocksKept, stack.getCount());
-                buildingBlocksKept += toKeep;
-                if (stack.getCount() > toKeep) {
-                    // Deposit excess
-                    ItemStack toDeposit = stack.copy();
-                    toDeposit.setCount(stack.getCount() - toKeep);
-                    ItemStack remainder = transferToInventory(toDeposit, chestInv);
-                    stack.setCount(toKeep + (remainder.isEmpty() ? 0 : remainder.getCount()));
-                    inventory.setStack(i, stack);
-                }
-            } else {
-                // Deposit non-building blocks
-                ItemStack remainder = transferToInventory(stack, chestInv);
-                inventory.setStack(i, remainder);
-            }
-        }
-    }
+    // Mining methods have been moved to MiningBuildStrategy
 
     private ItemStack transferToInventory(ItemStack stack, net.minecraft.inventory.Inventory targetInv) {
         if (stack.isEmpty()) return ItemStack.EMPTY;
@@ -1821,163 +1127,6 @@ public class GoldGolemEntity extends PathAwareEntity {
         return stack;
     }
 
-    private void placeBlocksUnderFeet() {
-        if (this.getEntityWorld().isClient()) return;
-
-        BlockPos below = this.getBlockPos().down();
-        if (!this.getEntityWorld().getBlockState(below).isAir()) return;
-
-        // Find a building block in inventory
-        if (miningBuildingBlockType == null) {
-            // Select first non-ore, non-gravity block as building block type
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
-
-                var block = blockItem.getBlock();
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
-
-                if (!isOreBlock(blockId) && !isGravityBlock(block)) {
-                    miningBuildingBlockType = blockId;
-                    break;
-                }
-            }
-        }
-
-        if (miningBuildingBlockType != null) {
-            // Find and consume the building block
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
-
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
-                if (blockId.equals(miningBuildingBlockType)) {
-                    BlockState state = blockItem.getBlock().getDefaultState();
-                    this.getEntityWorld().setBlockState(below, state);
-                    stack.decrement(1);
-                    inventory.setStack(i, stack);
-                    return;
-                }
-            }
-        }
-    }
-
-    private void scanForOres() {
-        if (this.getEntityWorld().isClient()) return;
-
-        // Scan 3 block radius for ores
-        BlockPos center = this.getBlockPos();
-        for (int dx = -3; dx <= 3; dx++) {
-            for (int dy = -3; dy <= 3; dy++) {
-                for (int dz = -3; dz <= 3; dz++) {
-                    BlockPos pos = center.add(dx, dy, dz);
-                    BlockState state = this.getEntityWorld().getBlockState(pos);
-                    String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
-
-                    if (isOreBlock(blockId) && !miningPendingOres.contains(pos)) {
-                        miningPendingOres.add(pos);
-                    }
-                }
-            }
-        }
-    }
-
-    private BlockPos getNextMiningTarget() {
-        // Priority 1: Mine pending ores
-        if (!miningPendingOres.isEmpty()) {
-            BlockPos orePos = miningPendingOres.iterator().next();
-            // Check if ore still exists
-            BlockState state = this.getEntityWorld().getBlockState(orePos);
-            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
-            if (!isOreBlock(blockId) || state.isAir()) {
-                miningPendingOres.remove(orePos);
-                return getNextMiningTarget(); // Recursive call to get next
-            }
-            return orePos;
-        }
-
-        // Priority 2: Continue branch mining pattern
-        return getNextBranchMiningTarget();
-    }
-
-    private BlockPos getNextBranchMiningTarget() {
-        // Branch mining pattern:
-        // - Primary tunnel in miningDirection
-        // - Branches perpendicular every miningBranchSpacing blocks
-        // - Each branch extends miningBranchDepth blocks to left and right
-
-        if (miningCurrentBranch == -1) {
-            // Mining primary tunnel
-            BlockPos primaryStart = miningStartPos.offset(miningDirection, 1);
-            BlockPos target = primaryStart.offset(miningDirection, miningPrimaryProgress);
-
-            // Check if we should start a branch
-            if (miningPrimaryProgress > 0 && miningPrimaryProgress % miningBranchSpacing == 0) {
-                // Start a branch (left first)
-                miningCurrentBranch = miningPrimaryProgress / miningBranchSpacing;
-                miningBranchLeft = true;
-                miningBranchProgress = 0;
-                return getNextBranchMiningTarget(); // Get first block of branch
-            }
-
-            // Return next block in primary tunnel (height layers, don't mine floor)
-            for (int y = 1; y < miningTunnelHeight; y++) {
-                BlockPos layerTarget = target.up(y - 1);
-                if (shouldMineBlock(layerTarget)) {
-                    return layerTarget;
-                }
-            }
-
-            // All layers mined, advance primary
-            miningPrimaryProgress++;
-            return getNextBranchMiningTarget();
-        } else {
-            // Mining a branch
-            net.minecraft.util.math.Direction branchDir = getBranchDirection(miningBranchLeft);
-            BlockPos branchStart = miningStartPos.offset(miningDirection, 1 + miningCurrentBranch * miningBranchSpacing);
-            BlockPos target = branchStart.offset(branchDir, miningBranchProgress + 1);
-
-            // Return next block in branch (height layers, don't mine floor)
-            for (int y = 1; y < miningTunnelHeight; y++) {
-                BlockPos layerTarget = target.up(y - 1);
-                if (shouldMineBlock(layerTarget)) {
-                    return layerTarget;
-                }
-            }
-
-            // All layers mined, advance branch
-            miningBranchProgress++;
-
-            // Check if branch is complete
-            if (miningBranchProgress >= miningBranchDepth) {
-                if (miningBranchLeft) {
-                    // Switch to right branch
-                    miningBranchLeft = false;
-                    miningBranchProgress = 0;
-                } else {
-                    // Both branches complete, return to primary
-                    miningCurrentBranch = -1;
-                    miningBranchProgress = 0;
-                }
-            }
-
-            return getNextBranchMiningTarget();
-        }
-    }
-
-    private net.minecraft.util.math.Direction getBranchDirection(boolean left) {
-        // Get perpendicular direction
-        if (miningDirection == net.minecraft.util.math.Direction.NORTH) {
-            return left ? net.minecraft.util.math.Direction.WEST : net.minecraft.util.math.Direction.EAST;
-        } else if (miningDirection == net.minecraft.util.math.Direction.SOUTH) {
-            return left ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST;
-        } else if (miningDirection == net.minecraft.util.math.Direction.EAST) {
-            return left ? net.minecraft.util.math.Direction.NORTH : net.minecraft.util.math.Direction.SOUTH;
-        } else { // WEST
-            return left ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH;
-        }
-    }
-
     private boolean shouldMineBlock(BlockPos pos) {
         BlockState state = this.getEntityWorld().getBlockState(pos);
         return !state.isAir() && state.getHardness(this.getEntityWorld(), pos) >= 0;
@@ -1997,105 +1146,6 @@ public class GoldGolemEntity extends PathAwareEntity {
             return null;
         }
         return net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
-    }
-
-    private void mineBlock(BlockPos pos) {
-        if (this.getEntityWorld().isClient()) return;
-
-        BlockState state = this.getEntityWorld().getBlockState(pos);
-        if (state.isAir()) {
-            // Block already mined, clear pending ore if applicable
-            miningPendingOres.remove(pos);
-            miningCurrentTarget = null;
-            miningBreakProgress = 0;
-            return;
-        }
-
-        // Start mining a new block
-        if (miningCurrentTarget == null || !miningCurrentTarget.equals(pos)) {
-            miningCurrentTarget = pos;
-            miningBreakProgress = 0;
-        }
-
-        // Find best tool in inventory
-        ItemStack bestTool = findBestTool(state);
-        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
-
-        // Golem mines at half speed (double the time)
-        breakSpeed *= 0.5f;
-
-        // Calculate break time in ticks
-        float hardness = state.getHardness(this.getEntityWorld(), pos);
-        if (hardness < 0) {
-            // Unbreakable block
-            miningCurrentTarget = null;
-            miningBreakProgress = 0;
-            return;
-        }
-
-        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
-        requiredTicks = Math.max(1, requiredTicks); // At least 1 tick
-
-        miningBreakProgress++;
-
-        // Show breaking animation (optional - could add later)
-
-        if (miningBreakProgress >= requiredTicks) {
-            // Break the block
-            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
-            boolean isOre = isOreBlock(blockId);
-
-            // Drop items into golem inventory
-            if (this.getEntityWorld() instanceof ServerWorld sw) {
-                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
-                    this.getEntityWorld().getBlockEntity(pos), this, bestTool);
-
-                for (ItemStack drop : drops) {
-                    // Add to inventory
-                    addToInventory(drop);
-                }
-            }
-
-            // Break the block
-            this.getEntityWorld().breakBlock(pos, false);
-
-            // Damage tool if used
-            if (!bestTool.isEmpty() && bestTool.isDamageable()) {
-                bestTool.damage(1, this, net.minecraft.entity.EquipmentSlot.MAINHAND);
-                // Update inventory
-                for (int i = 0; i < inventory.size(); i++) {
-                    if (inventory.getStack(i) == bestTool) {
-                        inventory.setStack(i, bestTool);
-                        break;
-                    }
-                }
-            }
-
-            // Clear pending ore
-            miningPendingOres.remove(pos);
-            miningCurrentTarget = null;
-            miningBreakProgress = 0;
-
-            // If it was an ore, mine surrounding blocks
-            if (isOre) {
-                mineOreSurroundings(pos);
-            }
-        }
-    }
-
-    private void mineOreSurroundings(BlockPos center) {
-        // Mine 1 block in each of the 6 directions
-        for (net.minecraft.util.math.Direction dir : net.minecraft.util.math.Direction.values()) {
-            BlockPos adjacent = center.offset(dir);
-            BlockState state = this.getEntityWorld().getBlockState(adjacent);
-
-            if (!state.isAir() && state.getHardness(this.getEntityWorld(), adjacent) >= 0) {
-                // Add to pending mining targets (will be mined next)
-                if (!miningPendingOres.contains(adjacent)) {
-                    miningPendingOres.add(adjacent);
-                }
-            }
-        }
     }
 
     private ItemStack findBestTool(BlockState state) {
@@ -2150,7 +1200,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private void placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
+    public void placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
         // Check if block already exists at position
         if (this.getEntityWorld().getBlockState(pos).equals(state)) return;
 
@@ -2193,7 +1243,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return false;
     }
 
-    private boolean consumeBlockFromInventory(String blockId) {
+    public boolean consumeBlockFromInventory(String blockId) {
         // Search inventory for matching block
         for (int i = 0; i < inventory.size(); i++) {
             ItemStack stack = inventory.getStack(i);
@@ -2223,7 +1273,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return false;
     }
 
-    private BlockState getBlockStateFromId(String blockId) {
+    public BlockState getBlockStateFromId(String blockId) {
         try {
             net.minecraft.util.Identifier id = net.minecraft.util.Identifier.tryParse(blockId);
             if (id == null) return null;
@@ -2235,592 +1285,13 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    // ========== EXCAVATION MODE METHODS ==========
 
-    private void tickExcavationMode() {
-        // Excavation mode state machine
-        if (excavationChestPos1 == null || excavationChestPos2 == null || excavationStartPos == null) {
-            // Invalid state, stop excavation
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-            return;
-        }
-
-        // State 1: Idle at start (waiting for gold nugget)
-        if (excavationIdleAtStart) {
-            // Navigate to start position and stay there
-            double dx = this.getX() - (excavationStartPos.getX() + 0.5);
-            double dz = this.getZ() - (excavationStartPos.getZ() + 0.5);
-            double distSq = dx * dx + dz * dz;
-            if (distSq > 4.0) {
-                this.getNavigation().startMovingTo(excavationStartPos.getX() + 0.5,
-                    excavationStartPos.getY(), excavationStartPos.getZ() + 0.5, 1.0);
-            } else {
-                this.getNavigation().stop();
-            }
-            return;
-        }
-
-        // State 2: Returning to chest to deposit
-        if (excavationReturningToChest) {
-            tickExcavationReturn();
-            return;
-        }
-
-        // State 3: Check if inventory is full (need to return)
-        if (isExcavationInventoryFull()) {
-            excavationReturningToChest = true;
-            excavationCurrentTarget = null;
-            excavationBreakProgress = 0;
-            return;
-        }
-
-        // State 4: Active excavation
-        tickExcavationActive();
-    }
-
-    private void tickExcavationReturn() {
-        // Navigate to nearest chest
-        BlockPos nearestChest = getNearestExcavationChest();
-        double dx = this.getX() - (nearestChest.getX() + 0.5);
-        double dz = this.getZ() - (nearestChest.getZ() + 0.5);
-        double distSq = dx * dx + dz * dz;
-
-        if (distSq > 4.0) {
-            // Still far from chest, navigate
-            this.getNavigation().startMovingTo(nearestChest.getX() + 0.5,
-                nearestChest.getY(), nearestChest.getZ() + 0.5, 1.1);
-
-            // Check if stuck and teleport if necessary
-            if (this.getNavigation().isIdle() && distSq > 16.0) {
-                stuckTicks++;
-                if (stuckTicks >= 60) {
-                    // Teleport to chest
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(),
-                            40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, nearestChest.getX() + 0.5,
-                            nearestChest.getY() + 0.5, nearestChest.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    this.refreshPositionAndAngles(nearestChest.getX() + 0.5, nearestChest.getY(),
-                        nearestChest.getZ() + 0.5, this.getYaw(), this.getPitch());
-                    this.getNavigation().stop();
-                    stuckTicks = 0;
-                }
-            } else {
-                stuckTicks = 0;
-            }
-        } else {
-            // Close to chest, deposit inventory
-            this.getNavigation().stop();
-            depositExcavationInventoryToChest(nearestChest);
-            excavationReturningToChest = false;
-            // Check if chest is full after deposit
-            if (isExcavationInventoryFull()) {
-                // Chest is full, go idle
-                excavationIdleAtStart = true;
-                buildingPaths = false;
-                this.dataTracker.set(BUILDING_PATHS, false);
-            }
-        }
-    }
-
-    private void tickExcavationActive() {
-        // Place floor blocks if needed
-        placeExcavationFloorBlocks();
-
-        // Determine next excavation target
-        BlockPos targetPos = getNextExcavationTarget();
-        if (targetPos == null) {
-            // Excavation complete, stop
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-            return;
-        }
-
-        // Navigate to target
-        double ty = targetPos.getY();
-        this.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
-
-        // Check if close enough to mine
-        double dx = this.getX() - (targetPos.getX() + 0.5);
-        double dy = this.getY() - targetPos.getY();
-        double dz = this.getZ() - (targetPos.getZ() + 0.5);
-        double distSq = dx * dx + dy * dy + dz * dz;
-
-        if (distSq <= 25.0) { // Within 5 block reach
-            // Mine the block
-            excavateBlock(targetPos);
-        } else {
-            // Reset mining progress if too far
-            if (excavationCurrentTarget != null && !excavationCurrentTarget.equals(targetPos)) {
-                excavationCurrentTarget = null;
-                excavationBreakProgress = 0;
-            }
-        }
-    }
-
-    private BlockPos getNearestExcavationChest() {
-        double dx1 = this.getX() - (excavationChestPos1.getX() + 0.5);
-        double dy1 = this.getY() - (excavationChestPos1.getY() + 0.5);
-        double dz1 = this.getZ() - (excavationChestPos1.getZ() + 0.5);
-        double dist1 = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
-
-        double dx2 = this.getX() - (excavationChestPos2.getX() + 0.5);
-        double dy2 = this.getY() - (excavationChestPos2.getY() + 0.5);
-        double dz2 = this.getZ() - (excavationChestPos2.getZ() + 0.5);
-        double dist2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
-
-        return dist1 <= dist2 ? excavationChestPos1 : excavationChestPos2;
-    }
-
-    private BlockPos getNextExcavationTarget() {
-        // Mine in concentric square rings, clockwise
-        // Each position mines a full column from golem Y up to Y + height - 1
-
-        // Check if current ring is complete
-        int ringSize = excavationCurrentRing == 0 ? 1 : (excavationCurrentRing * 8);
-        if (excavationRingProgress >= ringSize) {
-            // Move to next ring
-            excavationCurrentRing++;
-            excavationRingProgress = 0;
-        }
-
-        // Check if excavation is complete (reached depth)
-        if (excavationCurrentRing > excavationDepth) {
-            return null; // Done
-        }
-
-        // Get current position in the ring
-        BlockPos ringPos = getRingPosition(excavationCurrentRing, excavationRingProgress);
-
-        // Check each Y level in the column (golem Y level up to Y + height)
-        int golemY = (int) this.getY();
-        for (int dy = 0; dy < excavationHeight; dy++) {
-            BlockPos checkPos = ringPos.up(dy);
-            if (shouldMineBlock(checkPos)) {
-                return checkPos;
-            }
-        }
-
-        // All layers mined at this position, advance to next position in ring
-        excavationRingProgress++;
-        return getNextExcavationTarget(); // Recursive call
-    }
-
-    private BlockPos getRingPosition(int ring, int progress) {
-        // Ring 0 is just the center
-        if (ring == 0) {
-            return excavationStartPos;
-        }
-
-        // For ring > 0, calculate position in clockwise square
-        // Start from top-left corner, go clockwise
-        int sideLength = ring * 2;
-        int x = excavationStartPos.getX();
-        int z = excavationStartPos.getZ();
-
-        // Determine which side of the square we're on
-        int perimeter = sideLength * 4;
-        int pos = progress % perimeter;
-
-        if (pos < sideLength) {
-            // Top side (moving east)
-            x = x - ring + pos;
-            z = z - ring;
-        } else if (pos < sideLength * 2) {
-            // Right side (moving south)
-            x = x + ring;
-            z = z - ring + (pos - sideLength);
-        } else if (pos < sideLength * 3) {
-            // Bottom side (moving west)
-            x = x + ring - (pos - sideLength * 2);
-            z = z + ring;
-        } else {
-            // Left side (moving north)
-            x = x - ring;
-            z = z + ring - (pos - sideLength * 3);
-        }
-
-        return new BlockPos(x, excavationStartPos.getY(), z);
-    }
-
-    private boolean isExcavationInventoryFull() {
-        // Check if inventory has space (excluding one stack of building blocks)
-        int emptySlots = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty()) {
-                emptySlots++;
-            }
-        }
-        // Full if less than 2 empty slots
-        return emptySlots < 2;
-    }
-
-    private void depositExcavationInventoryToChest(BlockPos chestPos) {
-        if (chestPos == null || this.getEntityWorld().isClient()) return;
-
-        // Get chest inventory
-        var chestEntity = this.getEntityWorld().getBlockEntity(chestPos);
-        if (!(chestEntity instanceof net.minecraft.inventory.Inventory chestInv)) return;
-
-        // Keep one stack of building blocks, deposit everything else
-        int buildingBlocksKept = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty()) continue;
-
-            String blockId = getBlockIdFromStack(stack);
-            boolean isBuildingBlock = excavationBuildingBlockType != null && blockId != null &&
-                blockId.equals(excavationBuildingBlockType);
-
-            if (isBuildingBlock && buildingBlocksKept < 64) {
-                // Keep up to one stack of building blocks
-                int toKeep = Math.min(64 - buildingBlocksKept, stack.getCount());
-                buildingBlocksKept += toKeep;
-                if (stack.getCount() > toKeep) {
-                    // Deposit excess
-                    ItemStack toDeposit = stack.copy();
-                    toDeposit.setCount(stack.getCount() - toKeep);
-                    ItemStack remainder = transferToInventory(toDeposit, chestInv);
-                    stack.setCount(toKeep + (remainder.isEmpty() ? 0 : remainder.getCount()));
-                    inventory.setStack(i, stack);
-                }
-            } else if (!isBuildingBlock) {
-                // Deposit all non-building blocks
-                ItemStack remainder = transferToInventory(stack, chestInv);
-                if (remainder.isEmpty()) {
-                    inventory.setStack(i, ItemStack.EMPTY);
-                } else {
-                    inventory.setStack(i, remainder);
-                }
-            }
-        }
-    }
-
-    private void placeExcavationFloorBlocks() {
-        if (this.getEntityWorld().isClient()) return;
-
-        BlockPos below = this.getBlockPos().down();
-        if (!this.getEntityWorld().getBlockState(below).isAir()) return;
-
-        // Find a building block in inventory
-        if (excavationBuildingBlockType == null) {
-            // Select first non-gravity block as building block type
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
-
-                var block = blockItem.getBlock();
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
-
-                if (!isGravityBlock(block)) {
-                    excavationBuildingBlockType = blockId;
-                    break;
-                }
-            }
-        }
-
-        if (excavationBuildingBlockType != null) {
-            // Find and consume the building block
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) continue;
-
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
-                if (blockId.equals(excavationBuildingBlockType)) {
-                    // Place the block
-                    BlockState state = blockItem.getBlock().getDefaultState();
-                    this.getEntityWorld().setBlockState(below, state);
-                    stack.decrement(1);
-                    return;
-                }
-            }
-        }
-    }
-
-    private void excavateBlock(BlockPos pos) {
-        if (this.getEntityWorld().isClient()) return;
-
-        BlockState state = this.getEntityWorld().getBlockState(pos);
-        if (state.isAir()) {
-            // Block already mined
-            excavationCurrentTarget = null;
-            excavationBreakProgress = 0;
-            return;
-        }
-
-        // Start mining a new block
-        if (excavationCurrentTarget == null || !excavationCurrentTarget.equals(pos)) {
-            excavationCurrentTarget = pos;
-            excavationBreakProgress = 0;
-        }
-
-        // Find best tool in inventory
-        ItemStack bestTool = findBestTool(state);
-        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
-
-        // Golem mines at half speed (double the time)
-        breakSpeed *= 0.5f;
-
-        // Calculate break time in ticks
-        float hardness = state.getHardness(this.getEntityWorld(), pos);
-        if (hardness < 0) {
-            // Unbreakable block
-            excavationCurrentTarget = null;
-            excavationBreakProgress = 0;
-            return;
-        }
-
-        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
-        requiredTicks = Math.max(1, requiredTicks);
-
-        excavationBreakProgress++;
-
-        if (excavationBreakProgress >= requiredTicks) {
-            // Break the block
-            String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
-
-            // Drop items into golem inventory
-            if (this.getEntityWorld() instanceof ServerWorld sw) {
-                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
-                    this.getEntityWorld().getBlockEntity(pos), this, bestTool);
-
-                for (ItemStack drop : drops) {
-                    addToInventory(drop);
-                }
-            }
-
-            // Remove the block
-            this.getEntityWorld().breakBlock(pos, false);
-
-            // Show particles
-            if (this.getEntityWorld() instanceof ServerWorld sw) {
-                sw.spawnParticles(ParticleTypes.CLOUD, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                    10, 0.25, 0.25, 0.25, 0.1);
-            }
-
-            // Reset for next block
-            excavationCurrentTarget = null;
-            excavationBreakProgress = 0;
-        }
-    }
-
-    // ========== END EXCAVATION MODE METHODS ==========
-
-    // ========== TERRAFORMING MODE METHODS ==========
-
-    private void tickTerraformingMode() {
-        // Terraforming mode state machine
-        if (terraformingShellByLayer == null || terraformingOrigin == null) {
-            // Invalid state, stop building
-            buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
-            return;
-        }
-
-        // STATE: WAITING - idle at start position until activated with gold nugget
-        if (!buildingPaths) {
-            // Navigate to start position
-            double dx = this.getX() - (terraformingStartPos.getX() + 0.5);
-            double dz = this.getZ() - (terraformingStartPos.getZ() + 0.5);
-            double distSq = dx * dx + dz * dz;
-            if (distSq > 4.0) {
-                this.getNavigation().startMovingTo(terraformingStartPos.getX() + 0.5,
-                    terraformingStartPos.getY(), terraformingStartPos.getZ() + 0.5, 1.0);
-            } else {
-                this.getNavigation().stop();
-            }
-            return;
-        }
-
-        // STATE: BUILDING - place shell blocks layer by layer
-        java.util.List<BlockPos> currentLayer = terraformingShellByLayer.get(terraformingCurrentY);
-
-        // If no shell at this Y level, move to next level
-        if (currentLayer == null || currentLayer.isEmpty()) {
-            terraformingCurrentY++;
-            terraformingLayerProgress = 0;
-
-            // Check if all layers are complete
-            if (terraformingCurrentY > terraformingMaxY) {
-                // All layers done - COMPLETE
-                buildingPaths = false;
-                this.dataTracker.set(BUILDING_PATHS, false);
-            }
-            return;
-        }
-
-        // If layer is complete, move to next layer
-        if (terraformingLayerProgress >= currentLayer.size()) {
-            terraformingLayerProgress = 0;
-            terraformingCurrentY++;
-
-            if (terraformingCurrentY > terraformingMaxY) {
-                // All layers done - COMPLETE
-                buildingPaths = false;
-                this.dataTracker.set(BUILDING_PATHS, false);
-            }
-            return;
-        }
-
-        // Get current target position
-        BlockPos targetPos = currentLayer.get(terraformingLayerProgress);
-
-        // Navigate to position
-        double distSq = this.getBlockPos().getSquaredDistance(targetPos);
-        if (distSq > 16.0) {
-            this.getNavigation().startMovingTo(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5, 1.0);
-
-            // Stuck detection
-            if (this.getNavigation().isIdle()) {
-                stuckTicks++;
-                if (stuckTicks >= 20) {
-                    // Teleport
-                    this.refreshPositionAndAngles(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5,
-                            this.getYaw(), this.getPitch());
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 1.0, this.getZ(),
-                                20, 0.5, 0.5, 0.5, 0.1);
-                    }
-                    stuckTicks = 0;
-                }
-            } else {
-                stuckTicks = 0;
-            }
-            return;
-        }
-
-        stuckTicks = 0;
-
-        // At position - place block every 2 ticks (controlled by placementTickCounter)
-        if (placementTickCounter % 2 == 0) {
-            // Remove skeleton block if present
-            BlockState currentState = this.getEntityWorld().getBlockState(targetPos);
-            if (terraformingSkeletonTypes != null && terraformingSkeletonTypes.contains(currentState.getBlock())) {
-                this.getEntityWorld().breakBlock(targetPos, false);
-            }
-
-            // Place shell block using slope-based gradient sampling
-            BlockState toPlace = sampleTerraformingGradient(targetPos);
-            if (toPlace != null) {
-                placeBlockFromInventory(targetPos, toPlace, targetPos.up());
-            }
-
-            terraformingLayerProgress++;
-        }
-    }
-
-    /**
-     * Samples the appropriate terraforming gradient based on local surface slope.
-     * Classifies the surface as VERTICAL, HORIZONTAL, or SLOPED and samples from the corresponding gradient.
-     */
-    private BlockState sampleTerraformingGradient(BlockPos pos) {
-        // Count surrounding shell blocks in scan radius to determine slope
-        int vertical = 0;
-        int horizontal = 0;
-
-        for (BlockPos nearPos : BlockPos.iterate(
-                pos.add(-terraformingScanRadius, -terraformingScanRadius, -terraformingScanRadius),
-                pos.add(terraformingScanRadius, terraformingScanRadius, terraformingScanRadius))) {
-
-            if (nearPos.equals(pos)) continue;
-
-            // Check if this position is part of the shell or skeleton
-            boolean isShellOrSkeleton = false;
-            if (terraformingSkeletonBlocks != null && terraformingSkeletonBlocks.contains(nearPos)) {
-                isShellOrSkeleton = true;
-            } else {
-                // Check if it's in any shell layer
-                int nearY = nearPos.getY();
-                if (terraformingShellByLayer.containsKey(nearY)) {
-                    java.util.List<BlockPos> layer = terraformingShellByLayer.get(nearY);
-                    if (layer != null && layer.contains(nearPos)) {
-                        isShellOrSkeleton = true;
-                    }
-                }
-            }
-
-            if (!isShellOrSkeleton) continue;
-
-            int dx = Math.abs(nearPos.getX() - pos.getX());
-            int dy = Math.abs(nearPos.getY() - pos.getY());
-            int dz = Math.abs(nearPos.getZ() - pos.getZ());
-
-            // Classify as vertical or horizontal based on dominant axis
-            if (dy > dx && dy > dz) {
-                vertical++;
-            } else {
-                horizontal++;
-            }
-        }
-
-        // Calculate slope ratio
-        float total = vertical + horizontal;
-        if (total == 0) {
-            // No nearby blocks, default to horizontal
-            return sampleGradientArray(terraformingGradientHorizontal, terraformingGradientHorizontalWindow, pos);
-        }
-
-        float ratio = vertical / total;
-
-        // Classify and sample appropriate gradient
-        if (ratio > 0.7f) {
-            // Steep/vertical surface (cliffs, walls)
-            return sampleGradientArray(terraformingGradientVertical, terraformingGradientVerticalWindow, pos);
-        } else if (ratio < 0.3f) {
-            // Flat/horizontal surface (floors, tops)
-            return sampleGradientArray(terraformingGradientHorizontal, terraformingGradientHorizontalWindow, pos);
-        } else {
-            // Sloped/diagonal surface
-            return sampleGradientArray(terraformingGradientSloped, terraformingGradientSlopedWindow, pos);
-        }
-    }
-
-    /**
-     * Samples from a gradient array using positional hashing (similar to path mode sampling).
-     */
-    private BlockState sampleGradientArray(String[] gradientArray, int window, BlockPos pos) {
-        if (gradientArray == null || window <= 0) return null;
-
-        // Count non-empty entries
-        int g = 0;
-        for (int i = gradientArray.length - 1; i >= 0; i--) {
-            if (gradientArray[i] != null && !gradientArray[i].isEmpty()) {
-                g = i + 1;
-                break;
-            }
-        }
-
-        if (g == 0) return null;
-
-        // Clamp window
-        int w = Math.max(0, Math.min(g, window));
-        if (w == 0) return null;
-
-        // Use positional hash to sample from gradient window
-        long hash = (long) pos.getX() * 374761393L + (long) pos.getY() * 668265263L + (long) pos.getZ() * 2147483647L;
-        int idx = (int) ((hash & 0x7FFFFFFFL) % w);
-
-        String blockId = gradientArray[idx];
-        if (blockId == null || blockId.isEmpty()) return null;
-
-        var ident = net.minecraft.util.Identifier.tryParse(blockId);
-        if (ident == null) return null;
-
-        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
-        if (block == null) return null;
-
-        return block.getDefaultState();
-    }
-
-    // ========== END TERRAFORMING MODE METHODS ==========
+    // Terraforming mode logic is now in TerraformingBuildStrategy
 
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
     @Override
     protected void writeCustomData(WriteView view) {
-        view.putString("Mode", this.buildMode.name());
+        view.putString("Mode", getBuildMode().name());
         view.putInt("PathWidth", this.pathWidth);
         view.putFloat("GradWindow", this.gradientWindow);
         view.putFloat("StepWindow", this.stepGradientWindow);
@@ -2932,73 +1403,68 @@ public class GoldGolemEntity extends PathAwareEntity {
             view.putInt("TowerGM" + i, grp);
         }
 
-        // Mining-mode persisted bits
-        if (this.miningChestPos != null) {
-            view.putInt("MiningChestX", this.miningChestPos.getX());
-            view.putInt("MiningChestY", this.miningChestPos.getY());
-            view.putInt("MiningChestZ", this.miningChestPos.getZ());
+        // Mining-mode persisted bits (delegated to strategy with flattened keys for backward compat)
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            NbtCompound miningNbt = new NbtCompound();
+            miningStrategy.writeNbt(miningNbt);
+            // Flatten with Mining prefix for backward compatibility
+            if (miningNbt.contains("ChestX")) {
+                view.putInt("MiningChestX", miningNbt.getInt("ChestX", 0));
+                view.putInt("MiningChestY", miningNbt.getInt("ChestY", 0));
+                view.putInt("MiningChestZ", miningNbt.getInt("ChestZ", 0));
+            }
+            if (miningNbt.contains("Dir")) view.putString("MiningDir", miningNbt.getString("Dir", "NORTH"));
+            if (miningNbt.contains("StartX")) {
+                view.putInt("MiningStartX", miningNbt.getInt("StartX", 0));
+                view.putInt("MiningStartY", miningNbt.getInt("StartY", 0));
+                view.putInt("MiningStartZ", miningNbt.getInt("StartZ", 0));
+            }
+            view.putInt("MiningBranchDepth", miningNbt.getInt("BranchDepth", 16));
+            view.putInt("MiningBranchSpacing", miningNbt.getInt("BranchSpacing", 3));
+            view.putInt("MiningTunnelHeight", miningNbt.getInt("TunnelHeight", 2));
+            view.putInt("MiningPrimaryProgress", miningNbt.getInt("PrimaryProgress", 0));
+            view.putInt("MiningCurrentBranch", miningNbt.getInt("CurrentBranch", -1));
+            view.putBoolean("MiningBranchLeft", miningNbt.getBoolean("BranchLeft", true));
+            view.putInt("MiningBranchProgress", miningNbt.getInt("BranchProgress", 0));
+            view.putBoolean("MiningReturningToChest", miningNbt.getBoolean("ReturningToChest", false));
+            view.putBoolean("MiningIdleAtChest", miningNbt.getBoolean("IdleAtChest", false));
+            if (miningNbt.contains("BuildingBlock")) view.putString("MiningBuildingBlock", miningNbt.getString("BuildingBlock", ""));
         }
-        if (this.miningDirection != null) view.putString("MiningDir", this.miningDirection.name());
-        if (this.miningStartPos != null) {
-            view.putInt("MiningStartX", this.miningStartPos.getX());
-            view.putInt("MiningStartY", this.miningStartPos.getY());
-            view.putInt("MiningStartZ", this.miningStartPos.getZ());
-        }
-        view.putInt("MiningBranchDepth", this.miningBranchDepth);
-        view.putInt("MiningBranchSpacing", this.miningBranchSpacing);
-        view.putInt("MiningTunnelHeight", this.miningTunnelHeight);
-        view.putInt("MiningPrimaryProgress", this.miningPrimaryProgress);
-        view.putInt("MiningCurrentBranch", this.miningCurrentBranch);
-        view.putBoolean("MiningBranchLeft", this.miningBranchLeft);
-        view.putInt("MiningBranchProgress", this.miningBranchProgress);
-        view.putBoolean("MiningReturningToChest", this.miningReturningToChest);
-        view.putBoolean("MiningIdleAtChest", this.miningIdleAtChest);
-        if (this.miningBuildingBlockType != null) view.putString("MiningBuildingBlock", this.miningBuildingBlockType);
 
-        // Excavation-mode persisted bits
-        if (this.excavationChestPos1 != null) {
-            view.putInt("ExcavChest1X", this.excavationChestPos1.getX());
-            view.putInt("ExcavChest1Y", this.excavationChestPos1.getY());
-            view.putInt("ExcavChest1Z", this.excavationChestPos1.getZ());
+        // Excavation-mode persisted bits (delegated to strategy with flattened keys for backward compat)
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            NbtCompound excavationNbt = new NbtCompound();
+            excavationStrategy.writeNbt(excavationNbt);
+            // Flatten with Excav prefix for backward compatibility
+            if (excavationNbt.contains("Chest1X")) {
+                view.putInt("ExcavChest1X", excavationNbt.getInt("Chest1X", 0));
+                view.putInt("ExcavChest1Y", excavationNbt.getInt("Chest1Y", 0));
+                view.putInt("ExcavChest1Z", excavationNbt.getInt("Chest1Z", 0));
+            }
+            if (excavationNbt.contains("Chest2X")) {
+                view.putInt("ExcavChest2X", excavationNbt.getInt("Chest2X", 0));
+                view.putInt("ExcavChest2Y", excavationNbt.getInt("Chest2Y", 0));
+                view.putInt("ExcavChest2Z", excavationNbt.getInt("Chest2Z", 0));
+            }
+            if (excavationNbt.contains("Dir1")) view.putString("ExcavDir1", excavationNbt.getString("Dir1", "NORTH"));
+            if (excavationNbt.contains("Dir2")) view.putString("ExcavDir2", excavationNbt.getString("Dir2", "EAST"));
+            if (excavationNbt.contains("StartX")) {
+                view.putInt("ExcavStartX", excavationNbt.getInt("StartX", 0));
+                view.putInt("ExcavStartY", excavationNbt.getInt("StartY", 0));
+                view.putInt("ExcavStartZ", excavationNbt.getInt("StartZ", 0));
+            }
+            view.putInt("ExcavHeight", excavationNbt.getInt("Height", 3));
+            view.putInt("ExcavDepth", excavationNbt.getInt("Depth", 16));
+            view.putInt("ExcavCurrentRing", excavationNbt.getInt("CurrentRing", 0));
+            view.putInt("ExcavRingProgress", excavationNbt.getInt("RingProgress", 0));
+            view.putBoolean("ExcavReturningToChest", excavationNbt.getBoolean("ReturningToChest", false));
+            view.putBoolean("ExcavIdleAtStart", excavationNbt.getBoolean("IdleAtStart", false));
+            if (excavationNbt.contains("BuildingBlock")) view.putString("ExcavBuildingBlock", excavationNbt.getString("BuildingBlock", ""));
         }
-        if (this.excavationChestPos2 != null) {
-            view.putInt("ExcavChest2X", this.excavationChestPos2.getX());
-            view.putInt("ExcavChest2Y", this.excavationChestPos2.getY());
-            view.putInt("ExcavChest2Z", this.excavationChestPos2.getZ());
-        }
-        if (this.excavationDir1 != null) view.putString("ExcavDir1", this.excavationDir1.name());
-        if (this.excavationDir2 != null) view.putString("ExcavDir2", this.excavationDir2.name());
-        if (this.excavationStartPos != null) {
-            view.putInt("ExcavStartX", this.excavationStartPos.getX());
-            view.putInt("ExcavStartY", this.excavationStartPos.getY());
-            view.putInt("ExcavStartZ", this.excavationStartPos.getZ());
-        }
-        view.putInt("ExcavHeight", this.excavationHeight);
-        view.putInt("ExcavDepth", this.excavationDepth);
-        view.putInt("ExcavCurrentRing", this.excavationCurrentRing);
-        view.putInt("ExcavRingProgress", this.excavationRingProgress);
-        view.putBoolean("ExcavReturningToChest", this.excavationReturningToChest);
-        view.putBoolean("ExcavIdleAtStart", this.excavationIdleAtStart);
-        if (this.excavationBuildingBlockType != null) view.putString("ExcavBuildingBlock", this.excavationBuildingBlockType);
 
-        // Terraforming-mode persisted bits
-        if (this.terraformingOrigin != null) {
-            view.putInt("TFormOriginX", this.terraformingOrigin.getX());
-            view.putInt("TFormOriginY", this.terraformingOrigin.getY());
-            view.putInt("TFormOriginZ", this.terraformingOrigin.getZ());
-        }
-        if (this.terraformingStartPos != null) {
-            view.putInt("TFormStartX", this.terraformingStartPos.getX());
-            view.putInt("TFormStartY", this.terraformingStartPos.getY());
-            view.putInt("TFormStartZ", this.terraformingStartPos.getZ());
-        }
+        // Terraforming-mode UI settings (remain in entity)
         view.putInt("TFormScanRadius", this.terraformingScanRadius);
         view.putInt("TFormAlpha", this.terraformingAlpha);
-        view.putInt("TFormMinY", this.terraformingMinY);
-        view.putInt("TFormMaxY", this.terraformingMaxY);
-        view.putInt("TFormCurrentY", this.terraformingCurrentY);
-        view.putInt("TFormLayerProgress", this.terraformingLayerProgress);
-
         // Terraforming gradients
         for (int i = 0; i < 9; i++) {
             String v = (terraformingGradientVertical != null && i < terraformingGradientVertical.length && terraformingGradientVertical[i] != null) ? terraformingGradientVertical[i] : "";
@@ -3016,30 +1482,39 @@ public class GoldGolemEntity extends PathAwareEntity {
         view.putInt("TFormGHWindow", this.terraformingGradientHorizontalWindow);
         view.putInt("TFormGSWindow", this.terraformingGradientSlopedWindow);
 
-        // Skeleton blocks
-        if (this.terraformingSkeletonBlocks != null && !this.terraformingSkeletonBlocks.isEmpty()) {
-            view.putInt("TFormSkeletonCount", this.terraformingSkeletonBlocks.size());
-            for (int i = 0; i < this.terraformingSkeletonBlocks.size(); i++) {
-                BlockPos pos = this.terraformingSkeletonBlocks.get(i);
-                view.putInt("TFormSkel" + i + "X", pos.getX());
-                view.putInt("TFormSkel" + i + "Y", pos.getY());
-                view.putInt("TFormSkel" + i + "Z", pos.getZ());
+        // Terraforming-mode state (delegate to strategy)
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy terraformingStrategy) {
+            NbtCompound terraformingNbt = new NbtCompound();
+            terraformingStrategy.writeNbt(terraformingNbt);
+            // Flatten with TForm prefix for backward compatibility
+            if (terraformingNbt.contains("OriginX")) {
+                view.putInt("TFormOriginX", terraformingNbt.getInt("OriginX", 0));
+                view.putInt("TFormOriginY", terraformingNbt.getInt("OriginY", 0));
+                view.putInt("TFormOriginZ", terraformingNbt.getInt("OriginZ", 0));
             }
-        } else {
-            view.putInt("TFormSkeletonCount", 0);
-        }
-
-        // Skeleton types
-        if (this.terraformingSkeletonTypes != null && !this.terraformingSkeletonTypes.isEmpty()) {
-            view.putInt("TFormSkelTypesCount", this.terraformingSkeletonTypes.size());
-            int idx = 0;
-            for (net.minecraft.block.Block block : this.terraformingSkeletonTypes) {
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
-                view.putString("TFormSkelType" + idx, blockId);
-                idx++;
+            if (terraformingNbt.contains("StartX")) {
+                view.putInt("TFormStartX", terraformingNbt.getInt("StartX", 0));
+                view.putInt("TFormStartY", terraformingNbt.getInt("StartY", 0));
+                view.putInt("TFormStartZ", terraformingNbt.getInt("StartZ", 0));
             }
-        } else {
-            view.putInt("TFormSkelTypesCount", 0);
+            view.putInt("TFormMinY", terraformingNbt.getInt("MinY", 0));
+            view.putInt("TFormMaxY", terraformingNbt.getInt("MaxY", 0));
+            view.putInt("TFormCurrentY", terraformingNbt.getInt("CurrentY", 0));
+            view.putInt("TFormLayerProgress", terraformingNbt.getInt("LayerProgress", 0));
+            // Skeleton blocks
+            int skelCount = terraformingNbt.getInt("SkeletonCount", 0);
+            view.putInt("TFormSkeletonCount", skelCount);
+            for (int i = 0; i < skelCount; i++) {
+                view.putInt("TFormSkel" + i + "X", terraformingNbt.getInt("Skel" + i + "X", 0));
+                view.putInt("TFormSkel" + i + "Y", terraformingNbt.getInt("Skel" + i + "Y", 0));
+                view.putInt("TFormSkel" + i + "Z", terraformingNbt.getInt("Skel" + i + "Z", 0));
+            }
+            // Skeleton types
+            int skelTypesCount = terraformingNbt.getInt("SkelTypesCount", 0);
+            view.putInt("TFormSkelTypesCount", skelTypesCount);
+            for (int i = 0; i < skelTypesCount; i++) {
+                view.putString("TFormSkelType" + i, terraformingNbt.getString("SkelType" + i, ""));
+            }
         }
 
         // Tree-mode persisted bits
@@ -3050,7 +1525,14 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         if (this.treeJsonFile != null) view.putString("TreeJson", this.treeJsonFile);
         view.putInt("TreeTilingPreset", this.treeTilingPreset.ordinal());
-        view.putBoolean("TreeWaitingForInventory", this.treeWaitingForInventory);
+        // Tree state is serialized by strategy
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
+            NbtCompound treeNbt = new NbtCompound();
+            treeStrategy.writeNbt(treeNbt);
+            view.putBoolean("TreeWaitingForInventory", treeNbt.getBoolean("WaitingForInventory", false));
+        } else {
+            view.putBoolean("TreeWaitingForInventory", false);
+        }
 
         // Tree unique block IDs
         if (this.treeUniqueBlockIds != null && !this.treeUniqueBlockIds.isEmpty()) {
@@ -3098,9 +1580,9 @@ public class GoldGolemEntity extends PathAwareEntity {
     protected void readCustomData(ReadView view) {
         String mode = view.getString("Mode", BuildMode.PATH.name());
         try {
-            this.buildMode = BuildMode.valueOf(mode);
+            setBuildMode(BuildMode.valueOf(mode));
         } catch (IllegalArgumentException ex) {
-            this.buildMode = BuildMode.PATH;
+            setBuildMode(BuildMode.PATH);
         }
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("GradWindow", this.gradientWindow)));
@@ -3217,82 +1699,77 @@ public class GoldGolemEntity extends PathAwareEntity {
             towerBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, towerGroupSlots.size() - 1), grp)));
         }
 
-        // Mining-mode bits
-        if (view.contains("MiningChestX")) {
-            this.miningChestPos = new BlockPos(view.getInt("MiningChestX", 0), view.getInt("MiningChestY", 0), view.getInt("MiningChestZ", 0));
-        } else {
-            this.miningChestPos = null;
+        // Mining-mode bits (read from flattened keys and pass to strategy)
+        if (getBuildMode() == BuildMode.MINING) {
+            initializeStrategyForCurrentMode();
+            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+                NbtCompound miningNbt = new NbtCompound();
+                if (view.contains("MiningChestX")) {
+                    miningNbt.putInt("ChestX", view.getInt("MiningChestX", 0));
+                    miningNbt.putInt("ChestY", view.getInt("MiningChestY", 0));
+                    miningNbt.putInt("ChestZ", view.getInt("MiningChestZ", 0));
+                }
+                String miningDir = view.getString("MiningDir", null);
+                if (miningDir != null) miningNbt.putString("Dir", miningDir);
+                if (view.contains("MiningStartX")) {
+                    miningNbt.putInt("StartX", view.getInt("MiningStartX", 0));
+                    miningNbt.putInt("StartY", view.getInt("MiningStartY", 0));
+                    miningNbt.putInt("StartZ", view.getInt("MiningStartZ", 0));
+                }
+                miningNbt.putInt("BranchDepth", view.getInt("MiningBranchDepth", 16));
+                miningNbt.putInt("BranchSpacing", view.getInt("MiningBranchSpacing", 3));
+                miningNbt.putInt("TunnelHeight", view.getInt("MiningTunnelHeight", 2));
+                miningNbt.putInt("PrimaryProgress", view.getInt("MiningPrimaryProgress", 0));
+                miningNbt.putInt("CurrentBranch", view.getInt("MiningCurrentBranch", -1));
+                miningNbt.putBoolean("BranchLeft", view.getBoolean("MiningBranchLeft", true));
+                miningNbt.putInt("BranchProgress", view.getInt("MiningBranchProgress", 0));
+                miningNbt.putBoolean("ReturningToChest", view.getBoolean("MiningReturningToChest", false));
+                miningNbt.putBoolean("IdleAtChest", view.getBoolean("MiningIdleAtChest", false));
+                String buildingBlock = view.getString("MiningBuildingBlock", null);
+                if (buildingBlock != null) miningNbt.putString("BuildingBlock", buildingBlock);
+                miningStrategy.readNbt(miningNbt);
+            }
         }
-        String miningDir = view.getString("MiningDir", null);
-        if (miningDir != null) {
-            try { this.miningDirection = net.minecraft.util.math.Direction.valueOf(miningDir); } catch (IllegalArgumentException ignored) {}
-        }
-        if (view.contains("MiningStartX")) {
-            this.miningStartPos = new BlockPos(view.getInt("MiningStartX", 0), view.getInt("MiningStartY", 0), view.getInt("MiningStartZ", 0));
-        } else {
-            this.miningStartPos = null;
-        }
-        this.miningBranchDepth = view.getInt("MiningBranchDepth", 16);
-        this.miningBranchSpacing = view.getInt("MiningBranchSpacing", 3);
-        this.miningTunnelHeight = view.getInt("MiningTunnelHeight", 2);
-        this.miningPrimaryProgress = view.getInt("MiningPrimaryProgress", 0);
-        this.miningCurrentBranch = view.getInt("MiningCurrentBranch", -1);
-        this.miningBranchLeft = view.getBoolean("MiningBranchLeft", true);
-        this.miningBranchProgress = view.getInt("MiningBranchProgress", 0);
-        this.miningReturningToChest = view.getBoolean("MiningReturningToChest", false);
-        this.miningIdleAtChest = view.getBoolean("MiningIdleAtChest", false);
-        this.miningBuildingBlockType = view.getString("MiningBuildingBlock", null);
 
-        // Excavation-mode bits
-        if (view.contains("ExcavChest1X")) {
-            this.excavationChestPos1 = new BlockPos(view.getInt("ExcavChest1X", 0), view.getInt("ExcavChest1Y", 0), view.getInt("ExcavChest1Z", 0));
-        } else {
-            this.excavationChestPos1 = null;
+        // Excavation-mode bits (read from flattened keys and pass to strategy)
+        if (getBuildMode() == BuildMode.EXCAVATION) {
+            initializeStrategyForCurrentMode();
+            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+                NbtCompound excavationNbt = new NbtCompound();
+                if (view.contains("ExcavChest1X")) {
+                    excavationNbt.putInt("Chest1X", view.getInt("ExcavChest1X", 0));
+                    excavationNbt.putInt("Chest1Y", view.getInt("ExcavChest1Y", 0));
+                    excavationNbt.putInt("Chest1Z", view.getInt("ExcavChest1Z", 0));
+                }
+                if (view.contains("ExcavChest2X")) {
+                    excavationNbt.putInt("Chest2X", view.getInt("ExcavChest2X", 0));
+                    excavationNbt.putInt("Chest2Y", view.getInt("ExcavChest2Y", 0));
+                    excavationNbt.putInt("Chest2Z", view.getInt("ExcavChest2Z", 0));
+                }
+                String excavDir1 = view.getString("ExcavDir1", null);
+                if (excavDir1 != null) excavationNbt.putString("Dir1", excavDir1);
+                String excavDir2 = view.getString("ExcavDir2", null);
+                if (excavDir2 != null) excavationNbt.putString("Dir2", excavDir2);
+                if (view.contains("ExcavStartX")) {
+                    excavationNbt.putInt("StartX", view.getInt("ExcavStartX", 0));
+                    excavationNbt.putInt("StartY", view.getInt("ExcavStartY", 0));
+                    excavationNbt.putInt("StartZ", view.getInt("ExcavStartZ", 0));
+                }
+                excavationNbt.putInt("Height", view.getInt("ExcavHeight", 3));
+                excavationNbt.putInt("Depth", view.getInt("ExcavDepth", 16));
+                excavationNbt.putInt("CurrentRing", view.getInt("ExcavCurrentRing", 0));
+                excavationNbt.putInt("RingProgress", view.getInt("ExcavRingProgress", 0));
+                excavationNbt.putBoolean("ReturningToChest", view.getBoolean("ExcavReturningToChest", false));
+                excavationNbt.putBoolean("IdleAtStart", view.getBoolean("ExcavIdleAtStart", false));
+                String buildingBlock = view.getString("ExcavBuildingBlock", null);
+                if (buildingBlock != null) excavationNbt.putString("BuildingBlock", buildingBlock);
+                excavationStrategy.readNbt(excavationNbt);
+            }
         }
-        if (view.contains("ExcavChest2X")) {
-            this.excavationChestPos2 = new BlockPos(view.getInt("ExcavChest2X", 0), view.getInt("ExcavChest2Y", 0), view.getInt("ExcavChest2Z", 0));
-        } else {
-            this.excavationChestPos2 = null;
-        }
-        String excavDir1 = view.getString("ExcavDir1", null);
-        if (excavDir1 != null) {
-            try { this.excavationDir1 = net.minecraft.util.math.Direction.valueOf(excavDir1); } catch (IllegalArgumentException ignored) {}
-        }
-        String excavDir2 = view.getString("ExcavDir2", null);
-        if (excavDir2 != null) {
-            try { this.excavationDir2 = net.minecraft.util.math.Direction.valueOf(excavDir2); } catch (IllegalArgumentException ignored) {}
-        }
-        if (view.contains("ExcavStartX")) {
-            this.excavationStartPos = new BlockPos(view.getInt("ExcavStartX", 0), view.getInt("ExcavStartY", 0), view.getInt("ExcavStartZ", 0));
-        } else {
-            this.excavationStartPos = null;
-        }
-        this.excavationHeight = view.getInt("ExcavHeight", 3);
-        this.excavationDepth = view.getInt("ExcavDepth", 16);
-        this.excavationCurrentRing = view.getInt("ExcavCurrentRing", 0);
-        this.excavationRingProgress = view.getInt("ExcavRingProgress", 0);
-        this.excavationReturningToChest = view.getBoolean("ExcavReturningToChest", false);
-        this.excavationIdleAtStart = view.getBoolean("ExcavIdleAtStart", false);
-        this.excavationBuildingBlockType = view.getString("ExcavBuildingBlock", null);
 
-        // Terraforming-mode bits
-        if (view.contains("TFormOriginX")) {
-            this.terraformingOrigin = new BlockPos(view.getInt("TFormOriginX", 0), view.getInt("TFormOriginY", 0), view.getInt("TFormOriginZ", 0));
-        } else {
-            this.terraformingOrigin = null;
-        }
-        if (view.contains("TFormStartX")) {
-            this.terraformingStartPos = new BlockPos(view.getInt("TFormStartX", 0), view.getInt("TFormStartY", 0), view.getInt("TFormStartZ", 0));
-        } else {
-            this.terraformingStartPos = null;
-        }
+        // Terraforming-mode UI settings (remain in entity)
         this.terraformingScanRadius = view.getInt("TFormScanRadius", 2);
         this.terraformingAlpha = view.getInt("TFormAlpha", 3);
-        this.terraformingMinY = view.getInt("TFormMinY", 0);
-        this.terraformingMaxY = view.getInt("TFormMaxY", 0);
-        this.terraformingCurrentY = view.getInt("TFormCurrentY", 0);
-        this.terraformingLayerProgress = view.getInt("TFormLayerProgress", 0);
-
         // Terraforming gradients
         for (int i = 0; i < 9; i++) {
             terraformingGradientVertical[i] = view.getString("TFormGV" + i, "");
@@ -3307,56 +1784,40 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.terraformingGradientHorizontalWindow = view.getInt("TFormGHWindow", 1);
         this.terraformingGradientSlopedWindow = view.getInt("TFormGSWindow", 1);
 
-        // Skeleton blocks
-        int skelCount = view.getInt("TFormSkeletonCount", 0);
-        if (skelCount > 0) {
-            this.terraformingSkeletonBlocks = new java.util.ArrayList<>();
-            for (int i = 0; i < skelCount; i++) {
-                int x = view.getInt("TFormSkel" + i + "X", 0);
-                int y = view.getInt("TFormSkel" + i + "Y", 0);
-                int z = view.getInt("TFormSkel" + i + "Z", 0);
-                this.terraformingSkeletonBlocks.add(new BlockPos(x, y, z));
-            }
-        } else {
-            this.terraformingSkeletonBlocks = null;
-        }
-
-        // Skeleton types
-        int skelTypesCount = view.getInt("TFormSkelTypesCount", 0);
-        if (skelTypesCount > 0) {
-            this.terraformingSkeletonTypes = new java.util.HashSet<>();
-            for (int i = 0; i < skelTypesCount; i++) {
-                String blockId = view.getString("TFormSkelType" + i, "");
-                if (!blockId.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(blockId);
-                    if (ident != null) {
-                        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            this.terraformingSkeletonTypes.add(block);
-                        }
-                    }
+        // Terraforming-mode state (delegate to strategy)
+        if (getBuildMode() == BuildMode.TERRAFORMING) {
+            initializeStrategyForCurrentMode();
+            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy terraformingStrategy) {
+                NbtCompound terraformingNbt = new NbtCompound();
+                if (view.contains("TFormOriginX")) {
+                    terraformingNbt.putInt("OriginX", view.getInt("TFormOriginX", 0));
+                    terraformingNbt.putInt("OriginY", view.getInt("TFormOriginY", 0));
+                    terraformingNbt.putInt("OriginZ", view.getInt("TFormOriginZ", 0));
                 }
-            }
-        } else {
-            this.terraformingSkeletonTypes = null;
-        }
-
-        // Regenerate shell layers from skeleton if we have the data
-        if (this.terraformingSkeletonBlocks != null && !this.terraformingSkeletonBlocks.isEmpty()) {
-            this.terraformingShellByLayer = new java.util.HashMap<>();
-            for (int y = terraformingMinY; y <= terraformingMaxY; y++) {
-                java.util.List<BlockPos> skeletonAtY = new java.util.ArrayList<>();
-                for (BlockPos pos : terraformingSkeletonBlocks) {
-                    if (pos.getY() == y) {
-                        skeletonAtY.add(pos);
-                    }
+                if (view.contains("TFormStartX")) {
+                    terraformingNbt.putInt("StartX", view.getInt("TFormStartX", 0));
+                    terraformingNbt.putInt("StartY", view.getInt("TFormStartY", 0));
+                    terraformingNbt.putInt("StartZ", view.getInt("TFormStartZ", 0));
                 }
-
-                if (!skeletonAtY.isEmpty()) {
-                    java.util.Set<BlockPos> shellSet = ninja.trek.mc.goldgolem.terraforming.AlphaShape.generateShell(
-                            skeletonAtY, terraformingAlpha, y);
-                    terraformingShellByLayer.put(y, new java.util.ArrayList<>(shellSet));
+                terraformingNbt.putInt("MinY", view.getInt("TFormMinY", 0));
+                terraformingNbt.putInt("MaxY", view.getInt("TFormMaxY", 0));
+                terraformingNbt.putInt("CurrentY", view.getInt("TFormCurrentY", 0));
+                terraformingNbt.putInt("LayerProgress", view.getInt("TFormLayerProgress", 0));
+                // Skeleton blocks
+                int skelCount = view.getInt("TFormSkeletonCount", 0);
+                terraformingNbt.putInt("SkeletonCount", skelCount);
+                for (int i = 0; i < skelCount; i++) {
+                    terraformingNbt.putInt("Skel" + i + "X", view.getInt("TFormSkel" + i + "X", 0));
+                    terraformingNbt.putInt("Skel" + i + "Y", view.getInt("TFormSkel" + i + "Y", 0));
+                    terraformingNbt.putInt("Skel" + i + "Z", view.getInt("TFormSkel" + i + "Z", 0));
                 }
+                // Skeleton types
+                int skelTypesCount = view.getInt("TFormSkelTypesCount", 0);
+                terraformingNbt.putInt("SkelTypesCount", skelTypesCount);
+                for (int i = 0; i < skelTypesCount; i++) {
+                    terraformingNbt.putString("SkelType" + i, view.getString("TFormSkelType" + i, ""));
+                }
+                terraformingStrategy.readNbt(terraformingNbt);
             }
         }
 
@@ -3370,7 +1831,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.treeJsonFile = view.getOptionalString("TreeJson").orElse(null);
         int presetOrdinal = view.getInt("TreeTilingPreset", 0);
         this.treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(presetOrdinal);
-        this.treeWaitingForInventory = view.getBoolean("TreeWaitingForInventory", false);
+        // Tree state is deserialized by strategy (if active)
+        // Note: treeWaitingForInventory is transient - strategy will rebuild state when building resumes
 
         // Tree unique block IDs
         int treeUniqCount = view.getInt("TreeUniqCount", 0);
@@ -3446,6 +1908,49 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setGradientWindow(float w) { this.gradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
     public float getStepGradientWindow() { return stepGradientWindow; }
     public void setStepGradientWindow(float w) { this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
+
+    // ========== Shared tracking field accessors (PATH/WALL modes) ==========
+    public Vec3d getTrackStart() { return trackStart; }
+    public void setTrackStart(Vec3d start) { this.trackStart = start; }
+
+    public java.util.ArrayDeque<ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg> getPendingLines() { return pendingLines; }
+    public ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg getCurrentLine() { return currentLine; }
+    public void setCurrentLine(ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg line) { this.currentLine = line; }
+
+    /**
+     * Record a block position as placed to prevent duplicate placements.
+     * @return true if this is a new placement, false if already recorded
+     */
+    public boolean recordPlaced(long key) {
+        if (recentPlaced.contains(key)) return false;
+        if (placedSize == placedRing.length) {
+            long old = placedRing[placedHead];
+            recentPlaced.remove(old);
+            placedRing[placedHead] = key;
+            placedHead = (placedHead + 1) % placedRing.length;
+        } else {
+            placedRing[(placedHead + placedSize) % placedRing.length] = key;
+            placedSize++;
+        }
+        recentPlaced.add(key);
+        return true;
+    }
+
+    /**
+     * Unrecord a block position (best-effort, no-op to avoid thrash).
+     */
+    public void unrecordPlaced(long key) {
+        // best-effort: keep it recorded to avoid thrash; no-op
+    }
+
+    /**
+     * Clear placement tracking state.
+     */
+    public void clearPlacementTracking() {
+        recentPlaced.clear();
+        placedHead = 0;
+        placedSize = 0;
+    }
 
     public String[] getGradientCopy() {
         String[] copy = new String[9];
@@ -3532,7 +2037,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setOwner(PlayerEntity player) { this.ownerUuid = player.getUuid(); }
     public boolean isOwner(PlayerEntity player) { return ownerUuid != null && player != null && ownerUuid.equals(player.getUuid()); }
 
-    private PlayerEntity getOwnerPlayer() {
+    public PlayerEntity getOwnerPlayer() {
         if (ownerUuid == null) return null;
         for (PlayerEntity p : this.getEntityWorld().getPlayers()) {
             if (ownerUuid.equals(p.getUuid())) return p;
@@ -3561,43 +2066,49 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
             if (!this.getEntityWorld().isClient()) {
-                if (this.buildMode == BuildMode.MINING) {
+                if (getBuildMode() == BuildMode.MINING) {
                     // Mining mode: only start if idle at chest
-                    if (this.miningIdleAtChest) {
-                        this.miningIdleAtChest = false;
-                        this.buildingPaths = true;
-                        this.dataTracker.set(BUILDING_PATHS, true);
-                        if (!player.isCreative()) stack.decrement(1);
-                        spawnHearts();
-                    } else {
-                        // Already mining or returning, ignore
-                        sp.sendMessage(Text.literal("[Gold Golem] Already mining!"), true);
-                        return ActionResult.FAIL;
+                    initializeStrategyForCurrentMode();
+                    if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+                        if (miningStrategy.isIdleAtChest()) {
+                            miningStrategy.startFromIdle();
+                            this.buildingPaths = true;
+                            this.dataTracker.set(BUILDING_PATHS, true);
+                            if (!player.isCreative()) stack.decrement(1);
+                            spawnHearts();
+                        } else {
+                            // Already mining or returning, ignore
+                            sp.sendMessage(Text.literal("[Gold Golem] Already mining!"), true);
+                            return ActionResult.FAIL;
+                        }
                     }
-                } else if (this.buildMode == BuildMode.EXCAVATION) {
+                } else if (getBuildMode() == BuildMode.EXCAVATION) {
                     // Excavation mode: only start if idle at start
-                    if (this.excavationIdleAtStart) {
-                        this.excavationIdleAtStart = false;
-                        this.buildingPaths = true;
-                        this.dataTracker.set(BUILDING_PATHS, true);
-                        if (!player.isCreative()) stack.decrement(1);
-                        spawnHearts();
-                    } else {
-                        // Already excavating or returning, ignore
-                        sp.sendMessage(Text.literal("[Gold Golem] Already excavating!"), true);
-                        return ActionResult.FAIL;
+                    initializeStrategyForCurrentMode();
+                    if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+                        if (excavationStrategy.isIdleAtStart()) {
+                            excavationStrategy.startFromIdle();
+                            this.buildingPaths = true;
+                            this.dataTracker.set(BUILDING_PATHS, true);
+                            if (!player.isCreative()) stack.decrement(1);
+                            spawnHearts();
+                        } else {
+                            // Already excavating or returning, ignore
+                            sp.sendMessage(Text.literal("[Gold Golem] Already excavating!"), true);
+                            return ActionResult.FAIL;
+                        }
                     }
-                } else if (this.buildMode == BuildMode.TERRAFORMING) {
+                } else if (getBuildMode() == BuildMode.TERRAFORMING) {
                     // Terraforming mode: start building when nugget is fed
                     this.buildingPaths = true;
                     this.dataTracker.set(BUILDING_PATHS, true);
                     if (!player.isCreative()) stack.decrement(1);
                     spawnHearts();
-                } else if (this.buildMode == BuildMode.TREE) {
+                } else if (getBuildMode() == BuildMode.TREE) {
                     // Tree mode: start or resume building
-                    if (this.treeWaitingForInventory) {
+                    if (isTreeWaitingForInventory()) {
                         // Resume from where we left off
-                        this.treeWaitingForInventory = false;
+                        setTreeWaitingForInventory(false);
                         this.buildingPaths = true;
                         this.dataTracker.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.decrement(1);
@@ -3653,15 +2164,14 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Stop building on owner hit; show angry particles; ignore damage
             this.buildingPaths = false;
             this.dataTracker.set(BUILDING_PATHS, false);
-            if (this.buildMode == BuildMode.MINING) {
+            if (getBuildMode() == BuildMode.MINING) {
                 // Reset to idle state for mining mode
-                this.miningIdleAtChest = true;
-                this.miningReturningToChest = false;
-                this.miningCurrentTarget = null;
-                this.miningBreakProgress = 0;
-            } else if (this.buildMode == BuildMode.TREE) {
+                if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+                    miningStrategy.resetToIdle();
+                }
+            } else if (getBuildMode() == BuildMode.TREE) {
                 // Tree mode: reset waiting state (allows canceling "out of inventory" state)
-                this.treeWaitingForInventory = false;
+                setTreeWaitingForInventory(false);
             } else {
                 // Path/Wall/Tower mode cleanup
                 this.trackStart = null;
@@ -3691,28 +2201,6 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private void enqueueLine(Vec3d a, Vec3d b) {
-        LineSeg seg = new LineSeg(a, b);
-        pendingLines.addLast(seg);
-        // Sync to client for debug rendering (owner only)
-        if (this.getEntityWorld() instanceof ServerWorld) {
-            var owner = getOwnerPlayer();
-            if (owner instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
-                java.util.List<net.minecraft.util.math.Vec3d> list = new java.util.ArrayList<>();
-                if (currentLine != null) {
-                    list.add(currentLine.a);
-                    list.add(currentLine.b);
-                }
-                for (LineSeg s : pendingLines) {
-                    list.add(s.a);
-                    list.add(s.b);
-                }
-                java.util.Optional<Vec3d> anchor = java.util.Optional.ofNullable(this.trackStart);
-                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, this.getId(), list, anchor);
-            }
-        }
-    }
-
     private Vec3d withFloorY(Vec3d pos) {
         var world = this.getEntityWorld();
         int bx = net.minecraft.util.math.MathHelper.floor(pos.x);
@@ -3731,7 +2219,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     // Place a single offset column at the given center x/z for strip index j
-    private void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.util.math.Direction travelDir) {
+    public void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.util.math.Direction travelDir) {
         int w = Math.max(1, Math.min(9, stripWidth));
         var world = this.getEntityWorld();
         double ox = x + px * j;
@@ -3841,7 +2329,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private void placeStripAt(double x, double y, double z, double px, double pz) {
+    public void placeStripAt(double x, double y, double z, double px, double pz) {
         int w = Math.max(1, Math.min(9, this.pathWidth));
         int half = (w - 1) / 2;
         var world = this.getEntityWorld();
@@ -3962,7 +2450,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return MathHelper.clamp(idx, 0, G - 1);
     }
 
-    private int sampleWallGradient(String[] slots, float window, int moduleHeight, int relY, BlockPos pos) {
+    public int sampleWallGradient(String[] slots, float window, int moduleHeight, int relY, BlockPos pos) {
         // Count non-empty gradient slots
         int G = 0;
         for (int i = 8; i >= 0; i--) {
@@ -4220,49 +2708,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         @Override boolean done() { return true; }
     }
 
-    private void placeCornerFill(LineSeg prev, LineSeg next) {
-        // Compute end position of prev and start of next at ground y estimate and place strips with both normals
-        BlockPos endCell = prev.cells.isEmpty() ? BlockPos.ofFloored(prev.b) : prev.cells.get(prev.cells.size() - 1);
-        BlockPos startCell = next.cells.isEmpty() ? BlockPos.ofFloored(next.a) : next.cells.get(0);
-        double yPrev = prev.b.y;
-        double x = endCell.getX() + 0.5;
-        double z = endCell.getZ() + 0.5;
-        // prev normal
-        double len1 = Math.sqrt(prev.dirX * prev.dirX + prev.dirZ * prev.dirZ);
-        double px1 = len1 > 1e-4 ? (-prev.dirZ / len1) : 0.0;
-        double pz1 = len1 > 1e-4 ? ( prev.dirX / len1) : 0.0;
-        // next normal
-        double len2 = Math.sqrt(next.dirX * next.dirX + next.dirZ * next.dirZ);
-        double px2 = len2 > 1e-4 ? (-next.dirZ / len2) : 0.0;
-        double pz2 = len2 > 1e-4 ? ( next.dirX / len2) : 0.0;
-        // Expand width by +1 to help fill gaps
-        int old = this.pathWidth;
-        this.pathWidth = Math.min(9, old + 1);
-        placeStripAt(x, yPrev, z, px1, pz1);
-        placeStripAt(x, yPrev, z, px2, pz2);
-        this.pathWidth = old;
-    }
-
-    private boolean recordPlaced(long key) {
-        if (recentPlaced.contains(key)) return false;
-        if (placedSize == placedRing.length) {
-            long old = placedRing[placedHead];
-            recentPlaced.remove(old);
-            placedRing[placedHead] = key;
-            placedHead = (placedHead + 1) % placedRing.length;
-        } else {
-            placedRing[(placedHead + placedSize) % placedRing.length] = key;
-            placedSize++;
-        }
-        recentPlaced.add(key);
-        return true;
-    }
-
-    private void unrecordPlaced(long key) {
-        // best-effort: keep it recorded to avoid thrash; no-op
-    }
-
-    private int findItem(net.minecraft.item.Item item) {
+    public int findItem(net.minecraft.item.Item item) {
         for (int i = 0; i < inventory.size(); i++) {
             var st = inventory.getStack(i);
             if (!st.isEmpty() && st.isOf(item)) return i;
@@ -4270,209 +2716,20 @@ public class GoldGolemEntity extends PathAwareEntity {
         return -1;
     }
 
-    // removed: runtime block use logging helper
-
-    private static class LineSeg {
-        final Vec3d a;
-        final Vec3d b;
-        final double dirX;
-        final double dirZ;
-        final java.util.List<BlockPos> cells;
-        // Pending placement state (initialized on begin)
-        int widthSnapshot = 1;
-        int half = 0;
-        java.util.BitSet processed; // per (cellIndex * width + (j+half))
-        int totalBits = 0;
-        int scanBit = 0;
-        LineSeg(Vec3d a, Vec3d b) {
-            this.a = a;
-            this.b = b;
-            this.dirX = b.x - a.x;
-            this.dirZ = b.z - a.z;
-            this.cells = computeCells(BlockPos.ofFloored(a.x, 0, a.z), BlockPos.ofFloored(b.x, 0, b.z));
-        }
-        void begin(GoldGolemEntity golem) {
-            this.widthSnapshot = Math.max(1, Math.min(9, golem.getPathWidth()));
-            this.half = (widthSnapshot - 1) / 2;
-            this.totalBits = Math.max(0, cells.size() * widthSnapshot);
-            this.processed = new java.util.BitSet(totalBits);
-            this.scanBit = 0;
-        }
-        boolean isFullyProcessed() {
-            if (totalBits == 0) return true;
-            int idx = processed.nextClearBit(0);
-            return idx >= totalBits;
-        }
-        int progressCellIndex(double gx, double gz) {
-            // Project golem XZ onto the AB vector to estimate progress along the line
-            double ax = a.x, az = a.z;
-            double vx = dirX, vz = dirZ;
-            double denom = (vx * vx + vz * vz);
-            double t = 0.0;
-            if (denom > 1e-6) {
-                double wx = gx - ax;
-                double wz = gz - az;
-                t = (wx * vx + wz * vz) / denom;
-            }
-            t = MathHelper.clamp(t, 0.0, 1.0);
-            int n = Math.max(1, cells.size());
-            return MathHelper.clamp((int) Math.floor(t * (n - 1)), 0, n - 1);
-        }
-        Vec3d pointAtIndex(int idx) {
-            if (cells.isEmpty()) return b;
-            int i = MathHelper.clamp(idx, 0, cells.size() - 1);
-            BlockPos c = cells.get(i);
-            double t = cells.size() <= 1 ? 1.0 : (double) i / (double) (cells.size() - 1);
-            double y = MathHelper.lerp(t, a.y, b.y);
-            return new Vec3d(c.getX() + 0.5, y, c.getZ() + 0.5);
-        }
-        void placePendingUpTo(GoldGolemEntity golem, int boundCell, int maxOps) {
-            if (processed == null || totalBits == 0) return;
-            int boundExclusive = Math.min(totalBits, Math.max(0, (boundCell + 1) * widthSnapshot));
-            // Compute perpendicular
-            double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
-            double px = len > 1e-4 ? (-dirZ / len) : 0.0;
-            double pz = len > 1e-4 ? ( dirX / len) : 0.0;
-            int ops = 0;
-            int bit = processed.nextClearBit(scanBit);
-            while (ops < maxOps && bit >= 0 && bit < boundExclusive) {
-                int cellIndex = bit / widthSnapshot;
-                int jIndex = bit % widthSnapshot;
-                int j = jIndex - half;
-                BlockPos cell = cells.get(cellIndex);
-                double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
-                double y = MathHelper.lerp(t, a.y, b.y);
-                double x = cell.getX() + 0.5;
-                double z = cell.getZ() + 0.5;
-                boolean xMajor = Math.abs(dirX) >= Math.abs(dirZ);
-                net.minecraft.util.math.Direction travelDir = xMajor
-                        ? (dirX >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST)
-                        : (dirZ >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH);
-                golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
-                processed.set(bit); // mark attempted (placed or skipped) to avoid thrash
-                ops++;
-                bit = processed.nextClearBit(bit + 1);
-            }
-            scanBit = Math.min(Math.max(0, bit), totalBits);
-        }
-
-        BlockPos placeNextBlock(GoldGolemEntity golem, int boundCell) {
-            if (processed == null || totalBits == 0) return null;
-            int boundExclusive = Math.min(totalBits, Math.max(0, (boundCell + 1) * widthSnapshot));
-            // Compute perpendicular
-            double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
-            double px = len > 1e-4 ? (-dirZ / len) : 0.0;
-            double pz = len > 1e-4 ? ( dirX / len) : 0.0;
-
-            int bit = processed.nextClearBit(scanBit);
-            if (bit >= 0 && bit < boundExclusive) {
-                int cellIndex = bit / widthSnapshot;
-                int jIndex = bit % widthSnapshot;
-                int j = jIndex - half;
-                BlockPos cell = cells.get(cellIndex);
-                double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
-                double y = MathHelper.lerp(t, a.y, b.y);
-                double x = cell.getX() + 0.5;
-                double z = cell.getZ() + 0.5;
-                boolean xMajor = Math.abs(dirX) >= Math.abs(dirZ);
-                net.minecraft.util.math.Direction travelDir = xMajor
-                        ? (dirX >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST)
-                        : (dirZ >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH);
-
-                // Find the actual block position where we'll place
-                int bx = MathHelper.floor(x + px * j);
-                int bz = MathHelper.floor(z + pz * j);
-                int y0 = MathHelper.floor(y);
-
-                // Find ground Y
-                var world = golem.getEntityWorld();
-                Integer groundY = null;
-                for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
-                    BlockPos test = new BlockPos(bx, yy, bz);
-                    var st = world.getBlockState(test);
-                    if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
-                }
-
-                BlockPos result = null;
-                if (groundY != null) {
-                    // Find the actual placement position
-                    for (int dy = -1; dy <= 1; dy++) {
-                        BlockPos rp = new BlockPos(bx, groundY + dy, bz);
-                        var rs = world.getBlockState(rp);
-                        if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
-                        BlockPos ap = rp.up();
-                        var as = world.getBlockState(ap);
-                        if (as.isFullCube(world, ap)) continue;
-                        result = rp;
-                        break;
-                    }
-                }
-
-                golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
-                processed.set(bit);
-                scanBit = Math.min(Math.max(0, bit + 1), totalBits);
-
-                return result != null ? result : new BlockPos(bx, groundY != null ? groundY : y0, bz);
-            }
-            return null;
-        }
-
-        BlockPos getNextUnplacedBlock(int boundCell) {
-            if (processed == null || totalBits == 0) return null;
-            int boundExclusive = Math.min(totalBits, Math.max(0, (boundCell + 1) * widthSnapshot));
-
-            // Find the next unplaced block after scanBit
-            int bit = processed.nextClearBit(scanBit);
-            if (bit >= 0 && bit < boundExclusive) {
-                int cellIndex = bit / widthSnapshot;
-                int jIndex = bit % widthSnapshot;
-                int j = jIndex - half;
-                BlockPos cell = cells.get(cellIndex);
-                double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
-                double y = MathHelper.lerp(t, a.y, b.y);
-
-                double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
-                double px = len > 1e-4 ? (-dirZ / len) : 0.0;
-                double pz = len > 1e-4 ? ( dirX / len) : 0.0;
-                double x = cell.getX() + 0.5;
-                double z = cell.getZ() + 0.5;
-
-                int bx = MathHelper.floor(x + px * j);
-                int bz = MathHelper.floor(z + pz * j);
-                int by = MathHelper.floor(y);
-
-                return new BlockPos(bx, by, bz);
-            }
-            return null;
-        }
-        int suggestFollowIndex(double gx, double gz, int lookAhead) {
-            int prog = progressCellIndex(gx, gz);
-            int idx = Math.min(Math.max(0, prog + Math.max(1, lookAhead)), Math.max(0, cells.size() - 1));
-            return idx;
-        }
-        private static java.util.List<BlockPos> computeCells(BlockPos a, BlockPos b) {
-            // Supercover Bresenham: cover corners when both axes change to avoid diagonal gaps
-            java.util.ArrayList<BlockPos> out = new java.util.ArrayList<>();
-            int x0 = a.getX();
-            int z0 = a.getZ();
-            int x1 = b.getX();
-            int z1 = b.getZ();
-            int dx = Math.abs(x1 - x0);
-            int dz = Math.abs(z1 - z0);
-            int sx = (x0 < x1) ? 1 : -1;
-            int sz = (z0 < z1) ? 1 : -1;
-            int err = dx - dz;
-            int x = x0;
-            int z = z0;
-            out.add(new BlockPos(x, 0, z));
-            while (x != x1 || z != z1) {
-                int e2 = err << 1;
-                if (e2 > -dz) { err -= dz; x += sx; out.add(new BlockPos(x, 0, z)); }
-                if (e2 < dx) { err += dx; z += sz; out.add(new BlockPos(x, 0, z)); }
-            }
-            return out;
+    /**
+     * Decrement one item from an inventory slot.
+     */
+    public void decrementInventorySlot(int slot) {
+        if (slot < 0 || slot >= inventory.size()) return;
+        var st = inventory.getStack(slot);
+        if (!st.isEmpty()) {
+            st.decrement(1);
+            inventory.setStack(slot, st);
         }
     }
+
+    // removed: runtime block use logging helper
+
 }
 
 class FollowGoldNuggetHolderGoal extends Goal {

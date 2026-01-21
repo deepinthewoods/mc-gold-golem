@@ -45,10 +45,35 @@ public class PumpkinSummoning {
         }) {
             var np = below.offset(dir);
             var st = world.getBlockState(np);
-            if (st.isOf(Blocks.CHEST)) {
+            // Check for chest, trapped chest, or barrel
+            boolean isStorageBlock = st.isOf(Blocks.CHEST) || st.isOf(Blocks.TRAPPED_CHEST) || st.isOf(Blocks.BARREL);
+            if (isStorageBlock) {
                 if (chestCount == 0) chestDirection1 = dir;
                 else if (chestCount == 1) chestDirection2 = dir;
                 chestCount++;
+            }
+        }
+
+        // Debug: Log chest count and detected blocks
+        if (player instanceof net.minecraft.server.network.ServerPlayerEntity sp) {
+            if (chestCount > 0) {
+                sp.sendMessage(net.minecraft.text.Text.literal("[Debug] Found " + chestCount + " storage block(s) at: " +
+                    (chestDirection1 != null ? chestDirection1.asString() : "none") +
+                    (chestDirection2 != null ? ", " + chestDirection2.asString() : "")), false);
+            } else {
+                // Show what blocks are around the gold block
+                StringBuilder blockInfo = new StringBuilder("[Debug] No chests detected. Adjacent blocks: ");
+                for (var dir : new net.minecraft.util.math.Direction[]{
+                        net.minecraft.util.math.Direction.NORTH,
+                        net.minecraft.util.math.Direction.SOUTH,
+                        net.minecraft.util.math.Direction.EAST,
+                        net.minecraft.util.math.Direction.WEST
+                }) {
+                    var np = below.offset(dir);
+                    var st = world.getBlockState(np);
+                    blockInfo.append(dir.asString()).append("=").append(st.getBlock().getName().getString()).append(" ");
+                }
+                sp.sendMessage(net.minecraft.text.Text.literal(blockInfo.toString()), false);
             }
         }
 
