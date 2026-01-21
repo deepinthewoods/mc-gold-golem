@@ -6,6 +6,8 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
@@ -119,6 +121,53 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
     public void setWFCBuilder(TreeWFCBuilder builder) {
         this.treeWFCBuilder = builder;
+    }
+
+    // ========== Polymorphic Dispatch Methods ==========
+
+    @Override
+    public boolean isWaitingForResources() {
+        return treeWaitingForInventory;
+    }
+
+    @Override
+    public void setWaitingForResources(boolean waiting) {
+        treeWaitingForInventory = waiting;
+        // When resuming (waiting=false), clear state so tiles will be recached
+        if (!waiting) {
+            clearState();
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(String configKey) {
+        if ("tilingPreset".equals(configKey)) {
+            clearState();
+        }
+    }
+
+    @Override
+    public void writeLegacyNbt(WriteView view) {
+        view.putBoolean("TreeWaitingForInventory", treeWaitingForInventory);
+    }
+
+    @Override
+    public void readLegacyNbt(ReadView view) {
+        treeWaitingForInventory = view.getBoolean("TreeWaitingForInventory", false);
+    }
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (treeWaitingForInventory) {
+            treeWaitingForInventory = false;
+            return FeedResult.RESUMED;
+        }
+        return FeedResult.STARTED;
+    }
+
+    @Override
+    public void handleOwnerDamage() {
+        treeWaitingForInventory = false;
     }
 
     // ========== Main tick logic ==========

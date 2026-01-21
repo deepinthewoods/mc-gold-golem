@@ -4,7 +4,10 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.OreMiningMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy;
+import ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy;
 
 public class NetworkInit {
     public static void register() {
@@ -30,6 +33,12 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(SyncExcavationS2CPayload.ID, SyncExcavationS2CPayload.CODEC);
+
+        // === MINING MODE PAYLOADS ===
+        PayloadTypeRegistry.playS2C().register(SyncMiningS2CPayload.ID, SyncMiningS2CPayload.CODEC);
+
+        // === ORE MINING MODE PAYLOAD (shared by Mining and Excavation) ===
+        PayloadTypeRegistry.playC2S().register(SetOreMiningModeC2SPayload.ID, SetOreMiningModeC2SPayload.CODEC);
 
         // === TERRAFORMING MODE PAYLOADS ===
         PayloadTypeRegistry.playC2S().register(SetTerraformingGradientSlotC2SPayload.ID, SetTerraformingGradientSlotC2SPayload.CODEC);
@@ -156,6 +165,25 @@ public class NetworkInit {
                 var e = world.getEntityById(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setExcavationSliders(golem.getExcavationHeight(), payload.depth());
+                }
+            });
+        });
+
+        // === ORE MINING MODE HANDLER ===
+        ServerPlayNetworking.registerGlobalReceiver(SetOreMiningModeC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    OreMiningMode mode = OreMiningMode.fromOrdinal(payload.oreMiningModeOrdinal());
+                    if (payload.targetMode() == 0) {
+                        // Mining mode
+                        golem.setMiningOreMiningMode(mode);
+                    } else {
+                        // Excavation mode
+                        golem.setExcavationOreMiningMode(mode);
+                    }
                 }
             });
         });

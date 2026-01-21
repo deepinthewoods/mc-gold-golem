@@ -10,10 +10,16 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.OreMiningMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import net.minecraft.enchantment.EnchantmentHelper;
+import net.minecraft.enchantment.Enchantments;
+import net.minecraft.registry.RegistryKeys;
 
 /**
  * Strategy for Excavation mode.
@@ -28,7 +34,8 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     private Direction dir2 = null;
     private BlockPos startPos = null;
     private int height = 3;
-    private int depth = 16;
+    private int depth = 16;  // 0 = infinite (stops at gold blocks)
+    private OreMiningMode oreMiningMode = OreMiningMode.ALWAYS;
 
     // Excavation progress state
     private int currentRing = 0;
@@ -94,11 +101,13 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     public void setSliders(int height, int depth) {
         this.height = Math.max(1, Math.min(5, height));
-        this.depth = Math.max(1, Math.min(64, depth));
+        this.depth = Math.max(0, Math.min(64, depth));  // 0 = infinite
     }
 
     public int getHeight() { return height; }
     public int getDepth() { return depth; }
+    public OreMiningMode getOreMiningMode() { return oreMiningMode; }
+    public void setOreMiningMode(OreMiningMode mode) { this.oreMiningMode = mode != null ? mode : OreMiningMode.ALWAYS; }
 
     public boolean isIdleAtStart() { return idleAtStart; }
     public void setIdleAtStart(boolean idle) { this.idleAtStart = idle; }
@@ -146,6 +155,7 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         }
         nbt.putInt("Height", height);
         nbt.putInt("Depth", depth);
+        nbt.putInt("OreMiningMode", oreMiningMode.ordinal());
         nbt.putInt("CurrentRing", currentRing);
         nbt.putInt("RingProgress", ringProgress);
         nbt.putBoolean("ReturningToChest", returningToChest);
@@ -188,11 +198,134 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         }
         height = nbt.getInt("Height", 3);
         depth = nbt.getInt("Depth", 16);
+        oreMiningMode = OreMiningMode.fromOrdinal(nbt.getInt("OreMiningMode", 0));
         currentRing = nbt.getInt("CurrentRing", 0);
         ringProgress = nbt.getInt("RingProgress", 0);
         returningToChest = nbt.getBoolean("ReturningToChest", false);
         idleAtStart = nbt.getBoolean("IdleAtStart", false);
         buildingBlockType = nbt.contains("BuildingBlock") ? nbt.getString("BuildingBlock", null) : null;
+    }
+
+    // ==================== Polymorphic Dispatch Methods ====================
+
+    @Override
+    public int getConfigInt(String key, int defaultValue) {
+        return switch (key) {
+            case "height" -> height;
+            case "depth" -> depth;
+            case "oreMiningMode" -> oreMiningMode.ordinal();
+            default -> defaultValue;
+        };
+    }
+
+    @Override
+    public void writeLegacyNbt(WriteView view) {
+        if (chestPos1 != null) {
+            view.putInt("ExcavChest1X", chestPos1.getX());
+            view.putInt("ExcavChest1Y", chestPos1.getY());
+            view.putInt("ExcavChest1Z", chestPos1.getZ());
+        }
+        if (chestPos2 != null) {
+            view.putInt("ExcavChest2X", chestPos2.getX());
+            view.putInt("ExcavChest2Y", chestPos2.getY());
+            view.putInt("ExcavChest2Z", chestPos2.getZ());
+        }
+        if (dir1 != null) {
+            view.putString("ExcavDir1", dir1.name());
+        }
+        if (dir2 != null) {
+            view.putString("ExcavDir2", dir2.name());
+        }
+        if (startPos != null) {
+            view.putInt("ExcavStartX", startPos.getX());
+            view.putInt("ExcavStartY", startPos.getY());
+            view.putInt("ExcavStartZ", startPos.getZ());
+        }
+        view.putInt("ExcavHeight", height);
+        view.putInt("ExcavDepth", depth);
+        view.putInt("ExcavOreMiningMode", oreMiningMode.ordinal());
+        view.putInt("ExcavCurrentRing", currentRing);
+        view.putInt("ExcavRingProgress", ringProgress);
+        view.putBoolean("ExcavReturningToChest", returningToChest);
+        view.putBoolean("ExcavIdleAtStart", idleAtStart);
+        if (buildingBlockType != null) {
+            view.putString("ExcavBuildingBlock", buildingBlockType);
+        }
+    }
+
+    @Override
+    public void readLegacyNbt(ReadView view) {
+        if (view.contains("ExcavChest1X")) {
+            chestPos1 = new BlockPos(
+                view.getInt("ExcavChest1X", 0),
+                view.getInt("ExcavChest1Y", 0),
+                view.getInt("ExcavChest1Z", 0)
+            );
+        } else {
+            chestPos1 = null;
+        }
+        if (view.contains("ExcavChest2X")) {
+            chestPos2 = new BlockPos(
+                view.getInt("ExcavChest2X", 0),
+                view.getInt("ExcavChest2Y", 0),
+                view.getInt("ExcavChest2Z", 0)
+            );
+        } else {
+            chestPos2 = null;
+        }
+        String excavDir1 = view.getString("ExcavDir1", null);
+        if (excavDir1 != null) {
+            try {
+                dir1 = Direction.valueOf(excavDir1);
+            } catch (IllegalArgumentException ignored) {
+                dir1 = null;
+            }
+        }
+        String excavDir2 = view.getString("ExcavDir2", null);
+        if (excavDir2 != null) {
+            try {
+                dir2 = Direction.valueOf(excavDir2);
+            } catch (IllegalArgumentException ignored) {
+                dir2 = null;
+            }
+        }
+        if (view.contains("ExcavStartX")) {
+            startPos = new BlockPos(
+                view.getInt("ExcavStartX", 0),
+                view.getInt("ExcavStartY", 0),
+                view.getInt("ExcavStartZ", 0)
+            );
+        } else {
+            startPos = null;
+        }
+        height = view.getInt("ExcavHeight", 3);
+        depth = view.getInt("ExcavDepth", 16);
+        oreMiningMode = OreMiningMode.fromOrdinal(view.getInt("ExcavOreMiningMode", 0));
+        currentRing = view.getInt("ExcavCurrentRing", 0);
+        ringProgress = view.getInt("ExcavRingProgress", 0);
+        returningToChest = view.getBoolean("ExcavReturningToChest", false);
+        idleAtStart = view.getBoolean("ExcavIdleAtStart", false);
+        String block = view.getString("ExcavBuildingBlock", null);
+        buildingBlockType = (block != null && !block.isEmpty()) ? block : null;
+    }
+
+    @Override
+    public boolean canStartFromIdle() {
+        return isIdleAtStart();
+    }
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isIdleAtStart()) {
+            startFromIdle();
+            return FeedResult.STARTED;
+        }
+        return FeedResult.ALREADY_ACTIVE;
+    }
+
+    @Override
+    public void handleOwnerDamage() {
+        resetToIdle();
     }
 
     // ==================== Excavation Logic ====================
@@ -439,7 +572,9 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
             ringProgress = 0;
         }
 
-        if (currentRing > depth) {
+        // depth == 0 means infinite (no ring limit)
+        // depth > 0 means stop at that ring
+        if (depth > 0 && currentRing > depth) {
             return null;
         }
 
@@ -487,7 +622,81 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     private boolean shouldMineBlock(BlockPos pos) {
         BlockState state = entity.getEntityWorld().getBlockState(pos);
-        return !state.isAir() && state.getHardness(entity.getEntityWorld(), pos) >= 0;
+        if (state.isAir() || state.getHardness(entity.getEntityWorld(), pos) < 0) {
+            return false;
+        }
+
+        String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+
+        // In infinite mode (depth == 0), gold blocks act as boundaries
+        if (depth == 0 && isGoldBlock(blockId)) {
+            return false;
+        }
+
+        // Check ore mining mode
+        if (isOreBlock(blockId)) {
+            switch (oreMiningMode) {
+                case NEVER:
+                    return false;
+                case SILK_TOUCH_FORTUNE:
+                    if (!hasValidEnchantedTool()) {
+                        return false;
+                    }
+                    break;
+                case ALWAYS:
+                default:
+                    break;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if a block is an ore block.
+     */
+    private boolean isOreBlock(String blockId) {
+        return blockId.contains("_ore") || blockId.contains("ancient_debris") ||
+               blockId.equals("minecraft:gilded_blackstone");
+    }
+
+    /**
+     * Check if a block is a gold block (boundary marker).
+     */
+    private boolean isGoldBlock(String blockId) {
+        return blockId.equals("minecraft:gold_block");
+    }
+
+    /**
+     * Check if the golem has a tool with Silk Touch or Fortune 3+.
+     */
+    private boolean hasValidEnchantedTool() {
+        Inventory inventory = entity.getInventory();
+        var world = entity.getEntityWorld();
+        if (world == null) return false;
+
+        var registryManager = world.getRegistryManager();
+        var enchantmentRegistry = registryManager.getOrThrow(RegistryKeys.ENCHANTMENT);
+
+        // Get entries using identifier from registry key
+        var silkTouchEntry = enchantmentRegistry.getEntry(Enchantments.SILK_TOUCH.getValue());
+        var fortuneEntry = enchantmentRegistry.getEntry(Enchantments.FORTUNE.getValue());
+
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+
+            // Check for Silk Touch
+            if (silkTouchEntry.isPresent() && EnchantmentHelper.getLevel(silkTouchEntry.get(), stack) > 0) {
+                return true;
+            }
+
+            // Check for Fortune 3+
+            if (fortuneEntry.isPresent() && EnchantmentHelper.getLevel(fortuneEntry.get(), stack) >= 3) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void excavateBlock(BlockPos pos) {

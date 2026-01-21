@@ -272,6 +272,20 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return entity != null ? entity.getWallBlockGroup() : Collections.emptyMap();
     }
 
+    // ========== Polymorphic Dispatch Methods ==========
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        // Wall mode: always starts when nugget is fed
+        return FeedResult.STARTED;
+    }
+
+    @Override
+    public void handleOwnerDamage() {
+        // Clear wall mode state
+        clearState();
+    }
+
     // ========== Main tick logic ==========
 
     private void tickWallMode(GoldGolemEntity golem, PlayerEntity owner) {

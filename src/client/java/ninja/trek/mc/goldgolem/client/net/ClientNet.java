@@ -88,7 +88,17 @@ public final class ClientNet {
             var mc = MinecraftClient.getInstance();
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.setExcavationValues(payload.height(), payload.depth());
+                    screen.setExcavationValues(payload.height(), payload.depth(), payload.oreMiningMode());
+                }
+            });
+        });
+
+        // === MINING MODE ===
+        ClientPlayNetworking.registerGlobalReceiver(SyncMiningS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.setMiningValues(payload.branchDepth(), payload.branchSpacing(), payload.tunnelHeight(), payload.oreMiningMode());
                 }
             });
         });

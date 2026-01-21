@@ -11,10 +11,16 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.OreMiningMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import net.minecraft.enchantment.EnchantmentHelper;
+import net.minecraft.enchantment.Enchantments;
+import net.minecraft.registry.RegistryKeys;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -32,6 +38,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     private int branchDepth = 16;
     private int branchSpacing = 3;
     private int tunnelHeight = 2;
+    private OreMiningMode oreMiningMode = OreMiningMode.ALWAYS;
 
     // Mining progress state
     private int primaryProgress = 0;
@@ -106,6 +113,8 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     public int getBranchDepth() { return branchDepth; }
     public int getBranchSpacing() { return branchSpacing; }
     public int getTunnelHeight() { return tunnelHeight; }
+    public OreMiningMode getOreMiningMode() { return oreMiningMode; }
+    public void setOreMiningMode(OreMiningMode mode) { this.oreMiningMode = mode != null ? mode : OreMiningMode.ALWAYS; }
 
     public boolean isIdleAtChest() { return idleAtChest; }
     public void setIdleAtChest(boolean idle) { this.idleAtChest = idle; }
@@ -158,6 +167,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("BranchProgress", branchProgress);
         nbt.putBoolean("ReturningToChest", returningToChest);
         nbt.putBoolean("IdleAtChest", idleAtChest);
+        nbt.putInt("OreMiningMode", oreMiningMode.ordinal());
         if (buildingBlockType != null) {
             nbt.putString("BuildingBlock", buildingBlockType);
         }
@@ -191,7 +201,112 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         branchProgress = nbt.getInt("BranchProgress", 0);
         returningToChest = nbt.getBoolean("ReturningToChest", false);
         idleAtChest = nbt.getBoolean("IdleAtChest", false);
+        oreMiningMode = OreMiningMode.fromOrdinal(nbt.getInt("OreMiningMode", 0));
         buildingBlockType = nbt.contains("BuildingBlock") ? nbt.getString("BuildingBlock", null) : null;
+    }
+
+    // ==================== Polymorphic Dispatch Methods ====================
+
+    @Override
+    public int getConfigInt(String key, int defaultValue) {
+        return switch (key) {
+            case "branchDepth" -> branchDepth;
+            case "branchSpacing" -> branchSpacing;
+            case "tunnelHeight" -> tunnelHeight;
+            case "oreMiningMode" -> oreMiningMode.ordinal();
+            default -> defaultValue;
+        };
+    }
+
+    @Override
+    public void writeLegacyNbt(WriteView view) {
+        if (chestPos != null) {
+            view.putInt("MiningChestX", chestPos.getX());
+            view.putInt("MiningChestY", chestPos.getY());
+            view.putInt("MiningChestZ", chestPos.getZ());
+        }
+        if (direction != null) {
+            view.putString("MiningDir", direction.name());
+        }
+        if (startPos != null) {
+            view.putInt("MiningStartX", startPos.getX());
+            view.putInt("MiningStartY", startPos.getY());
+            view.putInt("MiningStartZ", startPos.getZ());
+        }
+        view.putInt("MiningBranchDepth", branchDepth);
+        view.putInt("MiningBranchSpacing", branchSpacing);
+        view.putInt("MiningTunnelHeight", tunnelHeight);
+        view.putInt("MiningPrimaryProgress", primaryProgress);
+        view.putInt("MiningCurrentBranch", currentBranch);
+        view.putBoolean("MiningBranchLeft", branchLeft);
+        view.putInt("MiningBranchProgress", branchProgress);
+        view.putBoolean("MiningReturningToChest", returningToChest);
+        view.putBoolean("MiningIdleAtChest", idleAtChest);
+        view.putInt("MiningOreMiningMode", oreMiningMode.ordinal());
+        if (buildingBlockType != null) {
+            view.putString("MiningBuildingBlock", buildingBlockType);
+        }
+    }
+
+    @Override
+    public void readLegacyNbt(ReadView view) {
+        if (view.contains("MiningChestX")) {
+            chestPos = new BlockPos(
+                view.getInt("MiningChestX", 0),
+                view.getInt("MiningChestY", 0),
+                view.getInt("MiningChestZ", 0)
+            );
+        } else {
+            chestPos = null;
+        }
+        String miningDir = view.getString("MiningDir", null);
+        if (miningDir != null) {
+            try {
+                direction = Direction.valueOf(miningDir);
+            } catch (IllegalArgumentException ignored) {
+                direction = null;
+            }
+        }
+        if (view.contains("MiningStartX")) {
+            startPos = new BlockPos(
+                view.getInt("MiningStartX", 0),
+                view.getInt("MiningStartY", 0),
+                view.getInt("MiningStartZ", 0)
+            );
+        } else {
+            startPos = null;
+        }
+        branchDepth = view.getInt("MiningBranchDepth", 16);
+        branchSpacing = view.getInt("MiningBranchSpacing", 3);
+        tunnelHeight = view.getInt("MiningTunnelHeight", 2);
+        primaryProgress = view.getInt("MiningPrimaryProgress", 0);
+        currentBranch = view.getInt("MiningCurrentBranch", -1);
+        branchLeft = view.getBoolean("MiningBranchLeft", true);
+        branchProgress = view.getInt("MiningBranchProgress", 0);
+        returningToChest = view.getBoolean("MiningReturningToChest", false);
+        idleAtChest = view.getBoolean("MiningIdleAtChest", false);
+        oreMiningMode = OreMiningMode.fromOrdinal(view.getInt("MiningOreMiningMode", 0));
+        String block = view.getString("MiningBuildingBlock", null);
+        buildingBlockType = (block != null && !block.isEmpty()) ? block : null;
+    }
+
+    @Override
+    public boolean canStartFromIdle() {
+        return isIdleAtChest();
+    }
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isIdleAtChest()) {
+            startFromIdle();
+            return FeedResult.STARTED;
+        }
+        return FeedResult.ALREADY_ACTIVE;
+    }
+
+    @Override
+    public void handleOwnerDamage() {
+        resetToIdle();
     }
 
     // ==================== Mining Logic ====================
@@ -435,6 +550,12 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     private void scanForOres() {
         if (entity.getEntityWorld().isClient()) return;
 
+        // Skip ore scanning entirely if mode is NEVER
+        if (oreMiningMode == OreMiningMode.NEVER) {
+            pendingOres.clear();
+            return;
+        }
+
         BlockPos center = entity.getBlockPos();
         for (int dx = -3; dx <= 3; dx++) {
             for (int dy = -3; dy <= 3; dy++) {
@@ -453,6 +574,18 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     private BlockPos getNextMiningTarget() {
         if (!pendingOres.isEmpty()) {
+            // Check if we should skip ores based on mode
+            if (oreMiningMode == OreMiningMode.NEVER) {
+                pendingOres.clear();
+                return getNextBranchMiningTarget();
+            }
+
+            // In SILK_TOUCH_FORTUNE mode, only mine if we have a valid tool
+            if (oreMiningMode == OreMiningMode.SILK_TOUCH_FORTUNE && !hasValidEnchantedTool()) {
+                pendingOres.clear();
+                return getNextBranchMiningTarget();
+            }
+
             BlockPos orePos = pendingOres.iterator().next();
             BlockState state = entity.getEntityWorld().getBlockState(orePos);
             String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
@@ -463,6 +596,84 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
             return orePos;
         }
         return getNextBranchMiningTarget();
+    }
+
+    /**
+     * Check if the golem has a tool with Silk Touch or Fortune 3+.
+     * Prefers Silk Touch over Fortune.
+     */
+    private boolean hasValidEnchantedTool() {
+        Inventory inventory = entity.getInventory();
+        var world = entity.getEntityWorld();
+        if (world == null) return false;
+
+        var registryManager = world.getRegistryManager();
+        var enchantmentRegistry = registryManager.getOrThrow(RegistryKeys.ENCHANTMENT);
+
+        // Get entries using identifier from registry key
+        var silkTouchEntry = enchantmentRegistry.getEntry(Enchantments.SILK_TOUCH.getValue());
+        var fortuneEntry = enchantmentRegistry.getEntry(Enchantments.FORTUNE.getValue());
+
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+
+            // Check for Silk Touch
+            if (silkTouchEntry.isPresent() && EnchantmentHelper.getLevel(silkTouchEntry.get(), stack) > 0) {
+                return true;
+            }
+
+            // Check for Fortune 3+
+            if (fortuneEntry.isPresent() && EnchantmentHelper.getLevel(fortuneEntry.get(), stack) >= 3) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Find the best enchanted tool for mining ores.
+     * Prefers Silk Touch over Fortune 3+.
+     */
+    private ItemStack findBestEnchantedTool(BlockState state) {
+        Inventory inventory = entity.getInventory();
+        var world = entity.getEntityWorld();
+        if (world == null) return ItemStack.EMPTY;
+
+        var registryManager = world.getRegistryManager();
+        var enchantmentRegistry = registryManager.getOrThrow(RegistryKeys.ENCHANTMENT);
+
+        // Get entries using identifier from registry key
+        var silkTouchEntry = enchantmentRegistry.getEntry(Enchantments.SILK_TOUCH.getValue());
+        var fortuneEntry = enchantmentRegistry.getEntry(Enchantments.FORTUNE.getValue());
+
+        ItemStack silkTouchTool = ItemStack.EMPTY;
+        ItemStack fortuneTool = ItemStack.EMPTY;
+        int bestFortuneLevel = 0;
+
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
+
+            // Check for Silk Touch (preferred)
+            if (silkTouchEntry.isPresent() && EnchantmentHelper.getLevel(silkTouchEntry.get(), stack) > 0) {
+                silkTouchTool = stack;
+            }
+
+            // Check for Fortune
+            if (fortuneEntry.isPresent()) {
+                int fortuneLevel = EnchantmentHelper.getLevel(fortuneEntry.get(), stack);
+                if (fortuneLevel >= 3 && fortuneLevel > bestFortuneLevel) {
+                    bestFortuneLevel = fortuneLevel;
+                    fortuneTool = stack;
+                }
+            }
+        }
+
+        // Prefer Silk Touch over Fortune
+        if (!silkTouchTool.isEmpty()) return silkTouchTool;
+        if (!fortuneTool.isEmpty()) return fortuneTool;
+        return ItemStack.EMPTY;
     }
 
     private BlockPos getNextBranchMiningTarget() {

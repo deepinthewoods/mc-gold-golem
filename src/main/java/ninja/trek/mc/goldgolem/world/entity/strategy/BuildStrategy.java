@@ -2,6 +2,8 @@ package ninja.trek.mc.goldgolem.world.entity.strategy;
 
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
@@ -11,6 +13,16 @@ import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
  * to encapsulate its specific behavior and state.
  */
 public interface BuildStrategy {
+
+    /**
+     * Result of handling a feed interaction (gold nugget fed to golem).
+     */
+    enum FeedResult {
+        NOT_HANDLED,     // Use default behavior
+        STARTED,         // Building started successfully
+        ALREADY_ACTIVE,  // Already active, show message
+        RESUMED          // Resumed from waiting state
+    }
 
     /**
      * Set the entity reference for this strategy.
@@ -96,5 +108,94 @@ public interface BuildStrategy {
      */
     default String getNbtPrefix() {
         return getMode().name();
+    }
+
+    // ==================== Polymorphic Dispatch Methods ====================
+
+    /**
+     * Get a configuration integer value by key.
+     * Replaces instanceof checks for getMiningBranchDepth, getExcavationHeight, etc.
+     * @param key Configuration key (e.g., "branchDepth", "height")
+     * @param defaultValue Value to return if key is not found
+     * @return The configuration value or defaultValue
+     */
+    default int getConfigInt(String key, int defaultValue) {
+        return defaultValue;
+    }
+
+    /**
+     * Set a configuration integer value by key.
+     * @param key Configuration key
+     * @param value Value to set
+     */
+    default void setConfigInt(String key, int value) {
+    }
+
+    /**
+     * Called when a configuration value changes that may require state updates.
+     * For example, when tree tiling preset changes.
+     * @param configKey The key that changed
+     */
+    default void onConfigurationChanged(String configKey) {
+    }
+
+    /**
+     * @return true if this strategy is waiting for resources (e.g., tree mode out of inventory)
+     */
+    default boolean isWaitingForResources() {
+        return false;
+    }
+
+    /**
+     * Set the waiting for resources state.
+     * @param waiting Whether the strategy is waiting for resources
+     */
+    default void setWaitingForResources(boolean waiting) {
+    }
+
+    /**
+     * Write legacy NBT data with prefixed keys for backward compatibility.
+     * Called from GoldGolemEntity.writeCustomData() instead of instanceof checks.
+     * @param view The WriteView to write to
+     */
+    default void writeLegacyNbt(WriteView view) {
+    }
+
+    /**
+     * Read legacy NBT data with prefixed keys for backward compatibility.
+     * Called from GoldGolemEntity.readCustomData() instead of instanceof checks.
+     * @param view The ReadView to read from
+     */
+    default void readLegacyNbt(ReadView view) {
+    }
+
+    /**
+     * Handle a feed interaction (gold nugget fed to golem).
+     * Replaces instanceof checks in interactMob().
+     * @param player The player feeding the golem
+     * @return FeedResult indicating what happened
+     */
+    default FeedResult handleFeedInteraction(PlayerEntity player) {
+        return FeedResult.NOT_HANDLED;
+    }
+
+    /**
+     * Handle owner damage (owner hitting the golem to stop it).
+     * Replaces instanceof checks in damage().
+     */
+    default void handleOwnerDamage() {
+    }
+
+    /**
+     * @return true if this strategy can start from its idle state
+     */
+    default boolean canStartFromIdle() {
+        return true;
+    }
+
+    /**
+     * Start building from the idle state.
+     */
+    default void startFromIdle() {
     }
 }

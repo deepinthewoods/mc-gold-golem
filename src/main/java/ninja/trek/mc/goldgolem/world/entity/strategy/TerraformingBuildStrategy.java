@@ -6,6 +6,8 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
@@ -248,6 +250,128 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     public int getLayerProgress() { return layerProgress; }
     public int getMinY() { return minY; }
     public int getMaxY() { return maxY; }
+
+    // ========== Polymorphic Dispatch Methods ==========
+
+    @Override
+    public void writeLegacyNbt(WriteView view) {
+        if (origin != null) {
+            view.putInt("TFormOriginX", origin.getX());
+            view.putInt("TFormOriginY", origin.getY());
+            view.putInt("TFormOriginZ", origin.getZ());
+        }
+        if (startPos != null) {
+            view.putInt("TFormStartX", startPos.getX());
+            view.putInt("TFormStartY", startPos.getY());
+            view.putInt("TFormStartZ", startPos.getZ());
+        }
+        view.putInt("TFormMinY", minY);
+        view.putInt("TFormMaxY", maxY);
+        view.putInt("TFormCurrentY", currentY);
+        view.putInt("TFormLayerProgress", layerProgress);
+
+        // Skeleton blocks
+        if (skeletonBlocks != null && !skeletonBlocks.isEmpty()) {
+            view.putInt("TFormSkeletonCount", skeletonBlocks.size());
+            for (int i = 0; i < skeletonBlocks.size(); i++) {
+                BlockPos pos = skeletonBlocks.get(i);
+                view.putInt("TFormSkel" + i + "X", pos.getX());
+                view.putInt("TFormSkel" + i + "Y", pos.getY());
+                view.putInt("TFormSkel" + i + "Z", pos.getZ());
+            }
+        } else {
+            view.putInt("TFormSkeletonCount", 0);
+        }
+
+        // Skeleton types
+        if (skeletonTypes != null && !skeletonTypes.isEmpty()) {
+            view.putInt("TFormSkelTypesCount", skeletonTypes.size());
+            int idx = 0;
+            for (Block block : skeletonTypes) {
+                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
+                view.putString("TFormSkelType" + idx, blockId);
+                idx++;
+            }
+        } else {
+            view.putInt("TFormSkelTypesCount", 0);
+        }
+    }
+
+    @Override
+    public void readLegacyNbt(ReadView view) {
+        // Load origin
+        if (view.contains("TFormOriginX")) {
+            origin = new BlockPos(
+                view.getInt("TFormOriginX", 0),
+                view.getInt("TFormOriginY", 0),
+                view.getInt("TFormOriginZ", 0)
+            );
+        } else {
+            origin = null;
+        }
+
+        // Load start position
+        if (view.contains("TFormStartX")) {
+            startPos = new BlockPos(
+                view.getInt("TFormStartX", 0),
+                view.getInt("TFormStartY", 0),
+                view.getInt("TFormStartZ", 0)
+            );
+        } else {
+            startPos = null;
+        }
+
+        // Load bounds and progress
+        minY = view.getInt("TFormMinY", 0);
+        maxY = view.getInt("TFormMaxY", 0);
+        currentY = view.getInt("TFormCurrentY", 0);
+        layerProgress = view.getInt("TFormLayerProgress", 0);
+
+        // Load skeleton blocks
+        int skelCount = view.getInt("TFormSkeletonCount", 0);
+        if (skelCount > 0) {
+            skeletonBlocks = new ArrayList<>();
+            for (int i = 0; i < skelCount; i++) {
+                int x = view.getInt("TFormSkel" + i + "X", 0);
+                int y = view.getInt("TFormSkel" + i + "Y", 0);
+                int z = view.getInt("TFormSkel" + i + "Z", 0);
+                skeletonBlocks.add(new BlockPos(x, y, z));
+            }
+        } else {
+            skeletonBlocks = null;
+        }
+
+        // Load skeleton types
+        int skelTypesCount = view.getInt("TFormSkelTypesCount", 0);
+        if (skelTypesCount > 0) {
+            skeletonTypes = new HashSet<>();
+            for (int i = 0; i < skelTypesCount; i++) {
+                String blockId = view.getString("TFormSkelType" + i, "");
+                if (!blockId.isEmpty()) {
+                    var ident = net.minecraft.util.Identifier.tryParse(blockId);
+                    if (ident != null) {
+                        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                        if (block != null) {
+                            skeletonTypes.add(block);
+                        }
+                    }
+                }
+            }
+        } else {
+            skeletonTypes = null;
+        }
+
+        // Rebuild shell from skeleton if we have skeleton blocks
+        if (skeletonBlocks != null && !skeletonBlocks.isEmpty() && entity != null) {
+            rebuildShell();
+        }
+    }
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        // Terraforming mode: always starts when nugget is fed
+        return FeedResult.STARTED;
+    }
 
     // ========== Main tick logic ==========
 

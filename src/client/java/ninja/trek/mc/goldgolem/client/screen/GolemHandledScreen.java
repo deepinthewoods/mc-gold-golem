@@ -65,9 +65,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     // Excavation mode state
     private int excavationHeight = 3; // 1-5
-    private int excavationDepth = 16; // 1-64
+    private int excavationDepth = 16; // 0-64 (0 = infinite)
+    private int excavationOreMiningMode = 0; // 0=Always, 1=Never, 2=Silk/Fortune
     private ExcavationHeightSlider excavationHeightSlider;
     private ExcavationDepthSlider excavationDepthSlider;
+    private ButtonWidget excavationOreModeButton;
+
+    // Mining mode state
+    private int miningOreMiningMode = 0; // 0=Always, 1=Never, 2=Silk/Fortune
+    private ButtonWidget miningOreModeButton;
 
     // Terraforming mode state
     private int terraformingScanRadius = 2; // 1-5
@@ -202,11 +208,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         public ExcavationDepthSlider(int x, int y, int width, int height, int initialDepth) {
             super(x, y, width, height, Text.literal("Depth"), toValueInit(initialDepth));
         }
-        private static double toValueInit(int d) { return (d - 1) / 63.0; } // 1-64 range
-        private static int toDepth(double v) { return Math.max(1, Math.min(64, 1 + (int)Math.round(v * 63.0))); }
+        private static double toValueInit(int d) { return d / 64.0; } // 0-64 range (0 = infinite)
+        private static int toDepth(double v) { return Math.max(0, Math.min(64, (int)Math.round(v * 64.0))); }
         @Override
         protected void updateMessage() {
-            this.setMessage(Text.literal("Depth: " + toDepth(this.value)));
+            int d = toDepth(this.value);
+            if (d == 0) {
+                this.setMessage(Text.literal("Depth: Infinite"));
+            } else {
+                this.setMessage(Text.literal("Depth: " + d));
+            }
         }
         @Override
         protected void applyValue() {
@@ -335,15 +346,36 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     // Excavation mode network sync method
-    public void setExcavationValues(int height, int depth) {
+    public void setExcavationValues(int height, int depth, int oreMiningMode) {
         this.excavationHeight = height;
         this.excavationDepth = depth;
+        this.excavationOreMiningMode = oreMiningMode;
         if (this.excavationHeightSlider != null) {
             this.excavationHeightSlider.syncTo(height);
         }
         if (this.excavationDepthSlider != null) {
             this.excavationDepthSlider.syncTo(depth);
         }
+        if (this.excavationOreModeButton != null) {
+            this.excavationOreModeButton.setMessage(Text.literal("Ores: " + getOreModeDisplayName(oreMiningMode)));
+        }
+    }
+
+    // Mining mode network sync method
+    public void setMiningValues(int branchDepth, int branchSpacing, int tunnelHeight, int oreMiningMode) {
+        this.miningOreMiningMode = oreMiningMode;
+        if (this.miningOreModeButton != null) {
+            this.miningOreModeButton.setMessage(Text.literal("Ores: " + getOreModeDisplayName(oreMiningMode)));
+        }
+    }
+
+    private String getOreModeDisplayName(int ordinal) {
+        return switch (ordinal) {
+            case 0 -> "Always";
+            case 1 -> "Never";
+            case 2 -> "Silk/Fortune";
+            default -> "Always";
+        };
     }
 
     // Terraforming mode network sync method
@@ -1076,18 +1108,48 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 syncGroupSliders(strategy);
             }
         } else if (isExcavationMode()) {
-            // Excavation Mode UI: simple sliders for height and depth
+            // Excavation Mode UI: simple sliders for height and depth + ore mode button
             int sliderW = 120;
             int sliderH = 12;
             int sliderX = this.x + this.backgroundWidth - 8 - sliderW;
             int sliderY1 = this.y + 26; // First slider position
             int sliderY2 = sliderY1 + sliderH + 14; // Second slider below with gap
+            int buttonY = sliderY2 + sliderH + 14; // Button below depth slider
 
             excavationHeightSlider = new ExcavationHeightSlider(sliderX, sliderY1, sliderW, sliderH, excavationHeight);
             excavationDepthSlider = new ExcavationDepthSlider(sliderX, sliderY2, sliderW, sliderH, excavationDepth);
 
             this.addDrawableChild(excavationHeightSlider);
             this.addDrawableChild(excavationDepthSlider);
+
+            // Ore mining mode cycling button
+            excavationOreModeButton = ButtonWidget.builder(
+                Text.literal("Ores: " + getOreModeDisplayName(excavationOreMiningMode)),
+                b -> {
+                    excavationOreMiningMode = (excavationOreMiningMode + 1) % 3;
+                    b.setMessage(Text.literal("Ores: " + getOreModeDisplayName(excavationOreMiningMode)));
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetOreMiningModeC2SPayload(
+                        getEntityId(), 1, excavationOreMiningMode)); // targetMode=1 for excavation
+                }
+            ).dimensions(sliderX, buttonY, sliderW, 16).build();
+            this.addDrawableChild(excavationOreModeButton);
+        } else if (isMiningMode()) {
+            // Mining Mode UI: ore mode button
+            int sliderW = 120;
+            int sliderX = this.x + this.backgroundWidth - 8 - sliderW;
+            int buttonY = this.y + 26;
+
+            // Ore mining mode cycling button
+            miningOreModeButton = ButtonWidget.builder(
+                Text.literal("Ores: " + getOreModeDisplayName(miningOreMiningMode)),
+                b -> {
+                    miningOreMiningMode = (miningOreMiningMode + 1) % 3;
+                    b.setMessage(Text.literal("Ores: " + getOreModeDisplayName(miningOreMiningMode)));
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetOreMiningModeC2SPayload(
+                        getEntityId(), 0, miningOreMiningMode)); // targetMode=0 for mining
+                }
+            ).dimensions(sliderX, buttonY, sliderW, 16).build();
+            this.addDrawableChild(miningOreModeButton);
         } else if (isTerraformingMode()) {
             // Terraforming mode: 3 gradient rows + window sliders + scan radius slider
             int wx = this.x + 8 + 9 * 18 + 12;

@@ -443,9 +443,9 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setTreeTilingPreset(ninja.trek.mc.goldgolem.tree.TilingPreset preset) {
         if (preset != null && preset != this.treeTilingPreset) {
             this.treeTilingPreset = preset;
-            // Invalidate tile cache so it will be regenerated with new size
-            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
-                treeStrategy.clearState();
+            // Invalidate tile cache via polymorphic dispatch
+            if (activeStrategy != null) {
+                activeStrategy.onConfigurationChanged("tilingPreset");
             }
         }
     }
@@ -499,19 +499,14 @@ public class GoldGolemEntity extends PathAwareEntity {
     public java.util.Map<String, Integer> getTreeBlockGroup() { return treeBlockGroup; }
     public java.util.List<String[]> getTreeGroupSlots() { return treeGroupSlots; }
 
-    // Tree waiting state accessors (delegating to strategy)
+    // Tree waiting state accessors (using polymorphic dispatch)
     public boolean isTreeWaitingForInventory() {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
-            return treeStrategy.isWaitingForInventory();
-        }
-        return false;
+        return activeStrategy != null && activeStrategy.isWaitingForResources();
     }
     public void setTreeWaitingForInventory(boolean waiting) {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
-            // Reset waiting state - strategy will rebuild cache when building resumes
-            if (!waiting) {
-                treeStrategy.clearState();
-            }
+        if (activeStrategy != null) {
+            activeStrategy.setWaitingForResources(waiting);
+            // When resuming (waiting=false), the strategy's setWaitingForResources handles the reset
         }
     }
 
@@ -543,22 +538,13 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
     public int getMiningBranchDepth() {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-            return miningStrategy.getBranchDepth();
-        }
-        return 16;
+        return activeStrategy != null ? activeStrategy.getConfigInt("branchDepth", 16) : 16;
     }
     public int getMiningBranchSpacing() {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-            return miningStrategy.getBranchSpacing();
-        }
-        return 3;
+        return activeStrategy != null ? activeStrategy.getConfigInt("branchSpacing", 3) : 3;
     }
     public int getMiningTunnelHeight() {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-            return miningStrategy.getTunnelHeight();
-        }
-        return 2;
+        return activeStrategy != null ? activeStrategy.getConfigInt("tunnelHeight", 2) : 2;
     }
 
     // Excavation mode configuration
@@ -578,16 +564,36 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
     public int getExcavationHeight() {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
-            return excavationStrategy.getHeight();
-        }
-        return 3;
+        return activeStrategy != null ? activeStrategy.getConfigInt("height", 3) : 3;
     }
     public int getExcavationDepth() {
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
-            return excavationStrategy.getDepth();
+        return activeStrategy != null ? activeStrategy.getConfigInt("depth", 16) : 16;
+    }
+
+    // Ore Mining Mode helpers for Mining strategy
+    public void setMiningOreMiningMode(ninja.trek.mc.goldgolem.OreMiningMode mode) {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            miningStrategy.setOreMiningMode(mode);
         }
-        return 16;
+    }
+    public ninja.trek.mc.goldgolem.OreMiningMode getMiningOreMiningMode() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
+            return miningStrategy.getOreMiningMode();
+        }
+        return ninja.trek.mc.goldgolem.OreMiningMode.ALWAYS;
+    }
+
+    // Ore Mining Mode helpers for Excavation strategy
+    public void setExcavationOreMiningMode(ninja.trek.mc.goldgolem.OreMiningMode mode) {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            excavationStrategy.setOreMiningMode(mode);
+        }
+    }
+    public ninja.trek.mc.goldgolem.OreMiningMode getExcavationOreMiningMode() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
+            return excavationStrategy.getOreMiningMode();
+        }
+        return ninja.trek.mc.goldgolem.OreMiningMode.ALWAYS;
     }
 
     public void setTerraformingConfig(ninja.trek.mc.goldgolem.terraforming.TerraformingDefinition def, BlockPos startPos) {
@@ -1403,63 +1409,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             view.putInt("TowerGM" + i, grp);
         }
 
-        // Mining-mode persisted bits (delegated to strategy with flattened keys for backward compat)
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-            NbtCompound miningNbt = new NbtCompound();
-            miningStrategy.writeNbt(miningNbt);
-            // Flatten with Mining prefix for backward compatibility
-            if (miningNbt.contains("ChestX")) {
-                view.putInt("MiningChestX", miningNbt.getInt("ChestX", 0));
-                view.putInt("MiningChestY", miningNbt.getInt("ChestY", 0));
-                view.putInt("MiningChestZ", miningNbt.getInt("ChestZ", 0));
-            }
-            if (miningNbt.contains("Dir")) view.putString("MiningDir", miningNbt.getString("Dir", "NORTH"));
-            if (miningNbt.contains("StartX")) {
-                view.putInt("MiningStartX", miningNbt.getInt("StartX", 0));
-                view.putInt("MiningStartY", miningNbt.getInt("StartY", 0));
-                view.putInt("MiningStartZ", miningNbt.getInt("StartZ", 0));
-            }
-            view.putInt("MiningBranchDepth", miningNbt.getInt("BranchDepth", 16));
-            view.putInt("MiningBranchSpacing", miningNbt.getInt("BranchSpacing", 3));
-            view.putInt("MiningTunnelHeight", miningNbt.getInt("TunnelHeight", 2));
-            view.putInt("MiningPrimaryProgress", miningNbt.getInt("PrimaryProgress", 0));
-            view.putInt("MiningCurrentBranch", miningNbt.getInt("CurrentBranch", -1));
-            view.putBoolean("MiningBranchLeft", miningNbt.getBoolean("BranchLeft", true));
-            view.putInt("MiningBranchProgress", miningNbt.getInt("BranchProgress", 0));
-            view.putBoolean("MiningReturningToChest", miningNbt.getBoolean("ReturningToChest", false));
-            view.putBoolean("MiningIdleAtChest", miningNbt.getBoolean("IdleAtChest", false));
-            if (miningNbt.contains("BuildingBlock")) view.putString("MiningBuildingBlock", miningNbt.getString("BuildingBlock", ""));
-        }
-
-        // Excavation-mode persisted bits (delegated to strategy with flattened keys for backward compat)
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
-            NbtCompound excavationNbt = new NbtCompound();
-            excavationStrategy.writeNbt(excavationNbt);
-            // Flatten with Excav prefix for backward compatibility
-            if (excavationNbt.contains("Chest1X")) {
-                view.putInt("ExcavChest1X", excavationNbt.getInt("Chest1X", 0));
-                view.putInt("ExcavChest1Y", excavationNbt.getInt("Chest1Y", 0));
-                view.putInt("ExcavChest1Z", excavationNbt.getInt("Chest1Z", 0));
-            }
-            if (excavationNbt.contains("Chest2X")) {
-                view.putInt("ExcavChest2X", excavationNbt.getInt("Chest2X", 0));
-                view.putInt("ExcavChest2Y", excavationNbt.getInt("Chest2Y", 0));
-                view.putInt("ExcavChest2Z", excavationNbt.getInt("Chest2Z", 0));
-            }
-            if (excavationNbt.contains("Dir1")) view.putString("ExcavDir1", excavationNbt.getString("Dir1", "NORTH"));
-            if (excavationNbt.contains("Dir2")) view.putString("ExcavDir2", excavationNbt.getString("Dir2", "EAST"));
-            if (excavationNbt.contains("StartX")) {
-                view.putInt("ExcavStartX", excavationNbt.getInt("StartX", 0));
-                view.putInt("ExcavStartY", excavationNbt.getInt("StartY", 0));
-                view.putInt("ExcavStartZ", excavationNbt.getInt("StartZ", 0));
-            }
-            view.putInt("ExcavHeight", excavationNbt.getInt("Height", 3));
-            view.putInt("ExcavDepth", excavationNbt.getInt("Depth", 16));
-            view.putInt("ExcavCurrentRing", excavationNbt.getInt("CurrentRing", 0));
-            view.putInt("ExcavRingProgress", excavationNbt.getInt("RingProgress", 0));
-            view.putBoolean("ExcavReturningToChest", excavationNbt.getBoolean("ReturningToChest", false));
-            view.putBoolean("ExcavIdleAtStart", excavationNbt.getBoolean("IdleAtStart", false));
-            if (excavationNbt.contains("BuildingBlock")) view.putString("ExcavBuildingBlock", excavationNbt.getString("BuildingBlock", ""));
+        // Strategy state persisted via polymorphic dispatch (Mining, Excavation modes)
+        if (activeStrategy != null) {
+            activeStrategy.writeLegacyNbt(view);
         }
 
         // Terraforming-mode UI settings (remain in entity)
@@ -1482,40 +1434,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         view.putInt("TFormGHWindow", this.terraformingGradientHorizontalWindow);
         view.putInt("TFormGSWindow", this.terraformingGradientSlopedWindow);
 
-        // Terraforming-mode state (delegate to strategy)
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy terraformingStrategy) {
-            NbtCompound terraformingNbt = new NbtCompound();
-            terraformingStrategy.writeNbt(terraformingNbt);
-            // Flatten with TForm prefix for backward compatibility
-            if (terraformingNbt.contains("OriginX")) {
-                view.putInt("TFormOriginX", terraformingNbt.getInt("OriginX", 0));
-                view.putInt("TFormOriginY", terraformingNbt.getInt("OriginY", 0));
-                view.putInt("TFormOriginZ", terraformingNbt.getInt("OriginZ", 0));
-            }
-            if (terraformingNbt.contains("StartX")) {
-                view.putInt("TFormStartX", terraformingNbt.getInt("StartX", 0));
-                view.putInt("TFormStartY", terraformingNbt.getInt("StartY", 0));
-                view.putInt("TFormStartZ", terraformingNbt.getInt("StartZ", 0));
-            }
-            view.putInt("TFormMinY", terraformingNbt.getInt("MinY", 0));
-            view.putInt("TFormMaxY", terraformingNbt.getInt("MaxY", 0));
-            view.putInt("TFormCurrentY", terraformingNbt.getInt("CurrentY", 0));
-            view.putInt("TFormLayerProgress", terraformingNbt.getInt("LayerProgress", 0));
-            // Skeleton blocks
-            int skelCount = terraformingNbt.getInt("SkeletonCount", 0);
-            view.putInt("TFormSkeletonCount", skelCount);
-            for (int i = 0; i < skelCount; i++) {
-                view.putInt("TFormSkel" + i + "X", terraformingNbt.getInt("Skel" + i + "X", 0));
-                view.putInt("TFormSkel" + i + "Y", terraformingNbt.getInt("Skel" + i + "Y", 0));
-                view.putInt("TFormSkel" + i + "Z", terraformingNbt.getInt("Skel" + i + "Z", 0));
-            }
-            // Skeleton types
-            int skelTypesCount = terraformingNbt.getInt("SkelTypesCount", 0);
-            view.putInt("TFormSkelTypesCount", skelTypesCount);
-            for (int i = 0; i < skelTypesCount; i++) {
-                view.putString("TFormSkelType" + i, terraformingNbt.getString("SkelType" + i, ""));
-            }
-        }
+        // Note: Terraforming state is now written via activeStrategy.writeLegacyNbt(view) above
 
         // Tree-mode persisted bits
         if (this.treeOrigin != null) {
@@ -1525,14 +1444,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         if (this.treeJsonFile != null) view.putString("TreeJson", this.treeJsonFile);
         view.putInt("TreeTilingPreset", this.treeTilingPreset.ordinal());
-        // Tree state is serialized by strategy
-        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
-            NbtCompound treeNbt = new NbtCompound();
-            treeStrategy.writeNbt(treeNbt);
-            view.putBoolean("TreeWaitingForInventory", treeNbt.getBoolean("WaitingForInventory", false));
-        } else {
-            view.putBoolean("TreeWaitingForInventory", false);
-        }
+        // Note: TreeWaitingForInventory is now written via activeStrategy.writeLegacyNbt(view) above
 
         // Tree unique block IDs
         if (this.treeUniqueBlockIds != null && !this.treeUniqueBlockIds.isEmpty()) {
@@ -1699,72 +1611,10 @@ public class GoldGolemEntity extends PathAwareEntity {
             towerBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, towerGroupSlots.size() - 1), grp)));
         }
 
-        // Mining-mode bits (read from flattened keys and pass to strategy)
-        if (getBuildMode() == BuildMode.MINING) {
-            initializeStrategyForCurrentMode();
-            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-                NbtCompound miningNbt = new NbtCompound();
-                if (view.contains("MiningChestX")) {
-                    miningNbt.putInt("ChestX", view.getInt("MiningChestX", 0));
-                    miningNbt.putInt("ChestY", view.getInt("MiningChestY", 0));
-                    miningNbt.putInt("ChestZ", view.getInt("MiningChestZ", 0));
-                }
-                String miningDir = view.getString("MiningDir", null);
-                if (miningDir != null) miningNbt.putString("Dir", miningDir);
-                if (view.contains("MiningStartX")) {
-                    miningNbt.putInt("StartX", view.getInt("MiningStartX", 0));
-                    miningNbt.putInt("StartY", view.getInt("MiningStartY", 0));
-                    miningNbt.putInt("StartZ", view.getInt("MiningStartZ", 0));
-                }
-                miningNbt.putInt("BranchDepth", view.getInt("MiningBranchDepth", 16));
-                miningNbt.putInt("BranchSpacing", view.getInt("MiningBranchSpacing", 3));
-                miningNbt.putInt("TunnelHeight", view.getInt("MiningTunnelHeight", 2));
-                miningNbt.putInt("PrimaryProgress", view.getInt("MiningPrimaryProgress", 0));
-                miningNbt.putInt("CurrentBranch", view.getInt("MiningCurrentBranch", -1));
-                miningNbt.putBoolean("BranchLeft", view.getBoolean("MiningBranchLeft", true));
-                miningNbt.putInt("BranchProgress", view.getInt("MiningBranchProgress", 0));
-                miningNbt.putBoolean("ReturningToChest", view.getBoolean("MiningReturningToChest", false));
-                miningNbt.putBoolean("IdleAtChest", view.getBoolean("MiningIdleAtChest", false));
-                String buildingBlock = view.getString("MiningBuildingBlock", null);
-                if (buildingBlock != null) miningNbt.putString("BuildingBlock", buildingBlock);
-                miningStrategy.readNbt(miningNbt);
-            }
-        }
-
-        // Excavation-mode bits (read from flattened keys and pass to strategy)
-        if (getBuildMode() == BuildMode.EXCAVATION) {
-            initializeStrategyForCurrentMode();
-            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
-                NbtCompound excavationNbt = new NbtCompound();
-                if (view.contains("ExcavChest1X")) {
-                    excavationNbt.putInt("Chest1X", view.getInt("ExcavChest1X", 0));
-                    excavationNbt.putInt("Chest1Y", view.getInt("ExcavChest1Y", 0));
-                    excavationNbt.putInt("Chest1Z", view.getInt("ExcavChest1Z", 0));
-                }
-                if (view.contains("ExcavChest2X")) {
-                    excavationNbt.putInt("Chest2X", view.getInt("ExcavChest2X", 0));
-                    excavationNbt.putInt("Chest2Y", view.getInt("ExcavChest2Y", 0));
-                    excavationNbt.putInt("Chest2Z", view.getInt("ExcavChest2Z", 0));
-                }
-                String excavDir1 = view.getString("ExcavDir1", null);
-                if (excavDir1 != null) excavationNbt.putString("Dir1", excavDir1);
-                String excavDir2 = view.getString("ExcavDir2", null);
-                if (excavDir2 != null) excavationNbt.putString("Dir2", excavDir2);
-                if (view.contains("ExcavStartX")) {
-                    excavationNbt.putInt("StartX", view.getInt("ExcavStartX", 0));
-                    excavationNbt.putInt("StartY", view.getInt("ExcavStartY", 0));
-                    excavationNbt.putInt("StartZ", view.getInt("ExcavStartZ", 0));
-                }
-                excavationNbt.putInt("Height", view.getInt("ExcavHeight", 3));
-                excavationNbt.putInt("Depth", view.getInt("ExcavDepth", 16));
-                excavationNbt.putInt("CurrentRing", view.getInt("ExcavCurrentRing", 0));
-                excavationNbt.putInt("RingProgress", view.getInt("ExcavRingProgress", 0));
-                excavationNbt.putBoolean("ReturningToChest", view.getBoolean("ExcavReturningToChest", false));
-                excavationNbt.putBoolean("IdleAtStart", view.getBoolean("ExcavIdleAtStart", false));
-                String buildingBlock = view.getString("ExcavBuildingBlock", null);
-                if (buildingBlock != null) excavationNbt.putString("BuildingBlock", buildingBlock);
-                excavationStrategy.readNbt(excavationNbt);
-            }
+        // Strategy state loaded via polymorphic dispatch (Mining, Excavation, Terraforming, Tree modes)
+        initializeStrategyForCurrentMode();
+        if (activeStrategy != null) {
+            activeStrategy.readLegacyNbt(view);
         }
 
         // Terraforming-mode UI settings (remain in entity)
@@ -1784,42 +1634,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.terraformingGradientHorizontalWindow = view.getInt("TFormGHWindow", 1);
         this.terraformingGradientSlopedWindow = view.getInt("TFormGSWindow", 1);
 
-        // Terraforming-mode state (delegate to strategy)
-        if (getBuildMode() == BuildMode.TERRAFORMING) {
-            initializeStrategyForCurrentMode();
-            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TerraformingBuildStrategy terraformingStrategy) {
-                NbtCompound terraformingNbt = new NbtCompound();
-                if (view.contains("TFormOriginX")) {
-                    terraformingNbt.putInt("OriginX", view.getInt("TFormOriginX", 0));
-                    terraformingNbt.putInt("OriginY", view.getInt("TFormOriginY", 0));
-                    terraformingNbt.putInt("OriginZ", view.getInt("TFormOriginZ", 0));
-                }
-                if (view.contains("TFormStartX")) {
-                    terraformingNbt.putInt("StartX", view.getInt("TFormStartX", 0));
-                    terraformingNbt.putInt("StartY", view.getInt("TFormStartY", 0));
-                    terraformingNbt.putInt("StartZ", view.getInt("TFormStartZ", 0));
-                }
-                terraformingNbt.putInt("MinY", view.getInt("TFormMinY", 0));
-                terraformingNbt.putInt("MaxY", view.getInt("TFormMaxY", 0));
-                terraformingNbt.putInt("CurrentY", view.getInt("TFormCurrentY", 0));
-                terraformingNbt.putInt("LayerProgress", view.getInt("TFormLayerProgress", 0));
-                // Skeleton blocks
-                int skelCount = view.getInt("TFormSkeletonCount", 0);
-                terraformingNbt.putInt("SkeletonCount", skelCount);
-                for (int i = 0; i < skelCount; i++) {
-                    terraformingNbt.putInt("Skel" + i + "X", view.getInt("TFormSkel" + i + "X", 0));
-                    terraformingNbt.putInt("Skel" + i + "Y", view.getInt("TFormSkel" + i + "Y", 0));
-                    terraformingNbt.putInt("Skel" + i + "Z", view.getInt("TFormSkel" + i + "Z", 0));
-                }
-                // Skeleton types
-                int skelTypesCount = view.getInt("TFormSkelTypesCount", 0);
-                terraformingNbt.putInt("SkelTypesCount", skelTypesCount);
-                for (int i = 0; i < skelTypesCount; i++) {
-                    terraformingNbt.putString("SkelType" + i, view.getString("TFormSkelType" + i, ""));
-                }
-                terraformingStrategy.readNbt(terraformingNbt);
-            }
-        }
+        // Note: Terraforming state is now read via activeStrategy.readLegacyNbt(view) above
 
         // Tree-mode persisted bits
         if (view.contains("TreeOX")) {
@@ -2066,77 +1881,43 @@ public class GoldGolemEntity extends PathAwareEntity {
                 }
             }
             if (!this.getEntityWorld().isClient()) {
-                if (getBuildMode() == BuildMode.MINING) {
-                    // Mining mode: only start if idle at chest
-                    initializeStrategyForCurrentMode();
-                    if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-                        if (miningStrategy.isIdleAtChest()) {
-                            miningStrategy.startFromIdle();
-                            this.buildingPaths = true;
-                            this.dataTracker.set(BUILDING_PATHS, true);
-                            if (!player.isCreative()) stack.decrement(1);
-                            spawnHearts();
-                        } else {
-                            // Already mining or returning, ignore
-                            sp.sendMessage(Text.literal("[Gold Golem] Already mining!"), true);
-                            return ActionResult.FAIL;
-                        }
-                    }
-                } else if (getBuildMode() == BuildMode.EXCAVATION) {
-                    // Excavation mode: only start if idle at start
-                    initializeStrategyForCurrentMode();
-                    if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {
-                        if (excavationStrategy.isIdleAtStart()) {
-                            excavationStrategy.startFromIdle();
-                            this.buildingPaths = true;
-                            this.dataTracker.set(BUILDING_PATHS, true);
-                            if (!player.isCreative()) stack.decrement(1);
-                            spawnHearts();
-                        } else {
-                            // Already excavating or returning, ignore
-                            sp.sendMessage(Text.literal("[Gold Golem] Already excavating!"), true);
-                            return ActionResult.FAIL;
-                        }
-                    }
-                } else if (getBuildMode() == BuildMode.TERRAFORMING) {
-                    // Terraforming mode: start building when nugget is fed
-                    this.buildingPaths = true;
-                    this.dataTracker.set(BUILDING_PATHS, true);
-                    if (!player.isCreative()) stack.decrement(1);
-                    spawnHearts();
-                } else if (getBuildMode() == BuildMode.TREE) {
-                    // Tree mode: start or resume building
-                    if (isTreeWaitingForInventory()) {
-                        // Resume from where we left off
-                        setTreeWaitingForInventory(false);
+                // Use polymorphic dispatch for feed interaction
+                initializeStrategyForCurrentMode();
+                BuildStrategy.FeedResult result = activeStrategy != null
+                    ? activeStrategy.handleFeedInteraction(player)
+                    : BuildStrategy.FeedResult.NOT_HANDLED;
+
+                switch (result) {
+                    case STARTED, RESUMED -> {
                         this.buildingPaths = true;
                         this.dataTracker.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.decrement(1);
                         spawnHearts();
-                        sp.sendMessage(Text.literal("[Gold Golem] Resuming Tree Mode building!"), true);
-                    } else {
-                        // Start fresh
+                        if (result == BuildStrategy.FeedResult.RESUMED) {
+                            sp.sendMessage(Text.literal("[Gold Golem] Resuming!"), true);
+                        }
+                        // Path/Wall/Tower modes need trackStart initialization
+                        if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
+                            this.trackStart = new Vec3d(this.getX(), this.getY() + 0.05, this.getZ());
+                            var owner = getOwnerPlayer();
+                            if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
+                            }
+                            recentPlaced.clear();
+                            placedHead = placedSize = 0;
+                        }
+                    }
+                    case ALREADY_ACTIVE -> {
+                        sp.sendMessage(Text.literal("[Gold Golem] Already active!"), true);
+                        return ActionResult.FAIL;
+                    }
+                    case NOT_HANDLED -> {
+                        // Default behavior: just start building
                         this.buildingPaths = true;
                         this.dataTracker.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.decrement(1);
                         spawnHearts();
                     }
-                } else {
-                    // Path/Wall/Tower modes: start building as before
-                    this.buildingPaths = true;
-                    this.dataTracker.set(BUILDING_PATHS, true);
-                    if (!player.isCreative()) stack.decrement(1);
-                    spawnHearts();
-                    // Initialize anchor at golem feet for preview when starting
-                    this.trackStart = new Vec3d(this.getX(), this.getY() + 0.05, this.getZ());
-                    // send initial (possibly empty) line list with anchor
-                    var owner = getOwnerPlayer();
-                    if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
-                        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
-                    }
-                    // reset recent placements cache
-                    recentPlaced.clear();
-                    placedHead = placedSize = 0;
                 }
             }
             return ActionResult.CONSUME;
@@ -2164,24 +1945,21 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Stop building on owner hit; show angry particles; ignore damage
             this.buildingPaths = false;
             this.dataTracker.set(BUILDING_PATHS, false);
-            if (getBuildMode() == BuildMode.MINING) {
-                // Reset to idle state for mining mode
-                if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy miningStrategy) {
-                    miningStrategy.resetToIdle();
-                }
-            } else if (getBuildMode() == BuildMode.TREE) {
-                // Tree mode: reset waiting state (allows canceling "out of inventory" state)
-                setTreeWaitingForInventory(false);
-            } else {
-                // Path/Wall/Tower mode cleanup
-                this.trackStart = null;
-                this.pendingLines.clear();
-                this.currentLine = null;
-                // clear client lines
-                if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
-                    ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
-                }
+
+            // Use polymorphic dispatch for owner damage handling
+            if (activeStrategy != null) {
+                activeStrategy.handleOwnerDamage();
             }
+
+            // Common cleanup for path-tracking modes
+            this.trackStart = null;
+            this.pendingLines.clear();
+            this.currentLine = null;
+            // Clear client lines
+            if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
+            }
+
             spawnAngry();
             recentPlaced.clear();
             placedHead = placedSize = 0;

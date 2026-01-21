@@ -93,7 +93,18 @@ public final class GolemScreens {
             // Send excavation sync
             if (mode == BuildMode.EXCAVATION) {
                 net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                        new SyncExcavationS2CPayload(entityId, golem.getExcavationHeight(), golem.getExcavationDepth()));
+                        new SyncExcavationS2CPayload(entityId, golem.getExcavationHeight(), golem.getExcavationDepth(),
+                                golem.getExcavationOreMiningMode().ordinal()));
+            }
+
+            // Send mining sync
+            if (mode == BuildMode.MINING) {
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                        new SyncMiningS2CPayload(entityId,
+                                golem.getActiveStrategy() != null ? golem.getActiveStrategy().getConfigInt("branchDepth", 16) : 16,
+                                golem.getActiveStrategy() != null ? golem.getActiveStrategy().getConfigInt("branchSpacing", 3) : 3,
+                                golem.getActiveStrategy() != null ? golem.getActiveStrategy().getConfigInt("tunnelHeight", 2) : 2,
+                                golem.getMiningOreMiningMode().ordinal()));
             }
 
             // Send terraforming sync

@@ -92,6 +92,20 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     public int getCurrentY() { return currentY; }
     public int getPlacementCursor() { return placementCursor; }
 
+    // ========== Polymorphic Dispatch Methods ==========
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        // Tower mode: always starts when nugget is fed
+        return FeedResult.STARTED;
+    }
+
+    @Override
+    public void handleOwnerDamage() {
+        // Clear tower mode state
+        clearState();
+    }
+
     // ========== Main tick logic ==========
 
     private void tickTowerMode(GoldGolemEntity golem, PlayerEntity owner) {

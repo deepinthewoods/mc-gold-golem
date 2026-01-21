@@ -4,6 +4,8 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.BuildMode;
@@ -167,6 +169,20 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
             entity.clearPlacementTracking();
         }
         leftHandActive = false;
+    }
+
+    // ========== Polymorphic Dispatch Methods ==========
+
+    @Override
+    public FeedResult handleFeedInteraction(PlayerEntity player) {
+        // Path mode: always starts when nugget is fed
+        return FeedResult.STARTED;
+    }
+
+    @Override
+    public void handleOwnerDamage() {
+        // Clear path mode state
+        clearState();
     }
 
     // ========== Main tick logic ==========
