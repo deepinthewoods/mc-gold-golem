@@ -3,6 +3,8 @@ package ninja.trek.mc.goldgolem.world.entity.strategy;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.storage.ReadView;
+import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
@@ -83,8 +85,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         layerInitialized = nbt.getBoolean("LayerInitialized", false);
         totalHeight = nbt.getInt("TotalHeight", 0);
 
-        // Load planner state (planner will be created on next initialize)
-        // Note: planner needs golem reference, so we defer loading
+        if (planner != null) {
+            nbt.getCompound("Planner").ifPresent(planner::readNbt);
+        }
     }
 
     @Override
@@ -142,6 +145,27 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     public void onConfigurationChanged(String configKey) {
         if ("towerOrigin".equals(configKey)) {
             clearState();
+        }
+    }
+
+    @Override
+    public void writeLegacyNbt(WriteView view) {
+        view.putInt("TowerCurrentY", currentLayerY);
+        view.putBoolean("TowerLayerInitialized", layerInitialized);
+        if (planner != null) {
+            planner.writeView(view.get("TowerPlanner"));
+        }
+    }
+
+    @Override
+    public void readLegacyNbt(ReadView view) {
+        currentLayerY = view.getInt("TowerCurrentY", 0);
+        layerInitialized = view.getBoolean("TowerLayerInitialized", false);
+        if (planner == null && entity != null) {
+            planner = new PlacementPlanner(entity);
+        }
+        if (planner != null) {
+            view.getOptionalReadView("TowerPlanner").ifPresent(planner::readView);
         }
     }
 

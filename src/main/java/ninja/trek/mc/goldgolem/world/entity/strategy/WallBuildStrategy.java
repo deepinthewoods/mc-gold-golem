@@ -194,6 +194,28 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Load direction
         wallLastDirX = nbt.getInt("LastDirX", 1);
         wallLastDirZ = nbt.getInt("LastDirZ", 0);
+        if (planner != null) {
+            nbt.getCompound("Planner").ifPresent(planner::readNbt);
+        }
+    }
+
+    @Override
+    public void writeLegacyNbt(net.minecraft.storage.WriteView view) {
+        view.putBoolean("WallModuleBlocksLoaded", moduleBlocksLoaded);
+        if (planner != null) {
+            planner.writeView(view.get("WallPlanner"));
+        }
+    }
+
+    @Override
+    public void readLegacyNbt(net.minecraft.storage.ReadView view) {
+        moduleBlocksLoaded = view.getBoolean("WallModuleBlocksLoaded", false);
+        if (planner == null && entity != null) {
+            planner = new PlacementPlanner(entity);
+        }
+        if (planner != null) {
+            view.getOptionalReadView("WallPlanner").ifPresent(planner::readView);
+        }
     }
 
     @Override

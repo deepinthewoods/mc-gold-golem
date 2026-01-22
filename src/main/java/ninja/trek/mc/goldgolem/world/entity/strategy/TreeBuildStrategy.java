@@ -115,6 +115,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                 nbt.getInt("TileOriginZ", 0)
             );
         }
+        if (planner != null) {
+            nbt.getCompound("Planner").ifPresent(planner::readNbt);
+        }
     }
 
     @Override
@@ -186,11 +189,20 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     @Override
     public void writeLegacyNbt(WriteView view) {
         view.putBoolean("TreeWaitingForInventory", treeWaitingForInventory);
+        if (planner != null) {
+            planner.writeView(view.get("TreePlanner"));
+        }
     }
 
     @Override
     public void readLegacyNbt(ReadView view) {
         treeWaitingForInventory = view.getBoolean("TreeWaitingForInventory", false);
+        if (planner == null && entity != null) {
+            planner = new PlacementPlanner(entity);
+        }
+        if (planner != null) {
+            view.getOptionalReadView("TreePlanner").ifPresent(planner::readView);
+        }
     }
 
     @Override

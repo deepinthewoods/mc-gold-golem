@@ -1524,6 +1524,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             if (this.getNavigation().isIdle() && distSq > 1.0) {
                 stuckTicks++;
                 if (stuckTicks >= 20) {
+                    LOGGER.info("Gold Golem stuck in Wall Mode! Teleporting to {}", end);
                     if (this.getEntityWorld() instanceof ServerWorld sw) {
                         sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
                         sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z, 40, 0.5, 0.5, 0.5, 0.2);

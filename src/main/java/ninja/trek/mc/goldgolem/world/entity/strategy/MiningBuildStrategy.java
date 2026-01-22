@@ -22,6 +22,9 @@ import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.enchantment.Enchantments;
 import net.minecraft.registry.RegistryKeys;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.HashSet;
 import java.util.Set;
 
@@ -30,6 +33,8 @@ import java.util.Set;
  * Digs tunnels in a branch mining pattern and deposits ore in a chest.
  */
 public class MiningBuildStrategy extends AbstractBuildStrategy {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(MiningBuildStrategy.class);
 
     // Mining configuration
     private BlockPos chestPos = null;
@@ -428,6 +433,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     }
 
     private void teleportToStart() {
+        LOGGER.info("Mining Golem stuck detected! Teleporting to start pos: {}", startPos);
         if (entity.getEntityWorld() instanceof ServerWorld sw) {
             sw.spawnParticles(ParticleTypes.PORTAL, entity.getX(), entity.getY() + 0.5, entity.getZ(),
                 40, 0.5, 0.5, 0.5, 0.2);

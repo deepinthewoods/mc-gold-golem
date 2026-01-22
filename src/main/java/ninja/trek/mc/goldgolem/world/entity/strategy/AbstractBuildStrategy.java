@@ -7,6 +7,8 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Abstract base class for build strategies with shared navigation,
@@ -14,6 +16,7 @@ import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
  */
 public abstract class AbstractBuildStrategy implements BuildStrategy {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(AbstractBuildStrategy.class);
     protected GoldGolemEntity entity;
     protected int stuckTicks = 0;
     protected int placementTickCounter = 0;
@@ -60,6 +63,7 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * Teleport the golem to a target position with portal particle effects.
      */
     protected void teleportWithParticles(GoldGolemEntity golem, Vec3d target) {
+        LOGGER.info("Gold Golem stuck detected! Teleporting from {} to {}", golem.getBlockPos(), target);
         if (golem.getEntityWorld() instanceof ServerWorld sw) {
             sw.spawnParticles(ParticleTypes.PORTAL,
                 golem.getX(), golem.getY() + 0.5, golem.getZ(),

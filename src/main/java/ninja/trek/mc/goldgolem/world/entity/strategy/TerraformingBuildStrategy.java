@@ -193,6 +193,10 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             skeletonTypes = null;
         }
 
+        if (planner != null) {
+            nbt.getCompound("Planner").ifPresent(planner::readNbt);
+        }
+
         // Rebuild shell from skeleton if we have skeleton blocks
         if (skeletonBlocks != null && !skeletonBlocks.isEmpty() && entity != null) {
             rebuildShell();
@@ -314,6 +318,9 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         } else {
             view.putInt("TFormSkelTypesCount", 0);
         }
+        if (planner != null) {
+            planner.writeView(view.get("TFormPlanner"));
+        }
     }
 
     @Override
@@ -377,6 +384,12 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             }
         } else {
             skeletonTypes = null;
+        }
+        if (planner == null && entity != null) {
+            planner = new PlacementPlanner(entity);
+        }
+        if (planner != null) {
+            view.getOptionalReadView("TFormPlanner").ifPresent(planner::readView);
         }
 
         // Rebuild shell from skeleton if we have skeleton blocks
