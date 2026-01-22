@@ -43,6 +43,7 @@ public final class TowerScanner {
     public static Result scan(World world, List<BlockPos> goldBlockPositions, BlockPos origin, PlayerEntity summoner) {
         // Determine the block the player is standing on (one below feet)
         BlockPos playerGround = summoner == null ? null : summoner.getBlockPos().down();
+        Set<BlockPos> summonGoldBlocks = new HashSet<>(goldBlockPositions);
 
         // Canonicalize ground-equivalence only if the player stands on a ground type
         boolean unifyGround = false;
@@ -116,8 +117,13 @@ public final class TowerScanner {
         List<String> uniques = new ArrayList<>();
         Set<String> uniqSet = new HashSet<>();
         Map<String, Integer> blockCounts = new HashMap<>();
+        BlockPos moduleMin = null;
+        BlockPos moduleMax = null;
 
         for (BlockPos abs : visited) {
+            if (summonGoldBlocks.contains(abs)) {
+                continue;
+            }
             BlockState st = world.getBlockState(abs);
             Block b = st.getBlock();
             String id = Registries.BLOCK.getId(b).toString();
@@ -132,10 +138,30 @@ public final class TowerScanner {
 
             BlockPos r = abs.subtract(origin);
             rel.add(r);
+
+            if (moduleMin == null) {
+                moduleMin = abs;
+                moduleMax = abs;
+            } else {
+                moduleMin = new BlockPos(
+                        Math.min(moduleMin.getX(), abs.getX()),
+                        Math.min(moduleMin.getY(), abs.getY()),
+                        Math.min(moduleMin.getZ(), abs.getZ())
+                );
+                moduleMax = new BlockPos(
+                        Math.max(moduleMax.getX(), abs.getX()),
+                        Math.max(moduleMax.getY(), abs.getY()),
+                        Math.max(moduleMax.getZ(), abs.getZ())
+                );
+            }
         }
 
-        // Calculate module height (Y extent)
-        int moduleHeight = max.getY() - min.getY() + 1;
+        if (rel.isEmpty()) {
+            return new Result(null, "No tower blocks found (only summoning gold blocks detected)");
+        }
+
+        // Calculate module height (Y extent), excluding summoning gold blocks
+        int moduleHeight = moduleMax.getY() - moduleMin.getY() + 1;
 
         TowerDefinition def = new TowerDefinition(origin.toImmutable(), rel, uniques, blockCounts, moduleHeight);
         return new Result(def, null);

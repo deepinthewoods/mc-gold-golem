@@ -279,6 +279,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return entity != null ? entity.getWallGroupWindows() : Collections.emptyList();
     }
 
+    public List<Integer> getWallGroupNoiseScales() {
+        return entity != null ? entity.getWallGroupNoiseScales() : Collections.emptyList();
+    }
+
     public Map<String, Integer> getWallBlockGroup() {
         return entity != null ? entity.getWallBlockGroup() : Collections.emptyMap();
     }

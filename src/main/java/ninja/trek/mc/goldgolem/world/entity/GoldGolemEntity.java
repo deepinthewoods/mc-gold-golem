@@ -719,7 +719,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.GRAVITY, 0.08)
                 .add(EntityAttributes.SAFE_FALL_DISTANCE, 3.0)
                 .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 1.0)
-                .add(EntityAttributes.JUMP_STRENGTH, 0.42);
+                .add(EntityAttributes.JUMP_STRENGTH, 0.42)
+                .add(EntityAttributes.SCALE, 1.0);
     }
 
     @Override

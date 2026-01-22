@@ -134,8 +134,9 @@ public class ModulePlacement {
             if (groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size()) {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
+                int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
                 int relY = ry - moduleMinY;
-                int sampledIndex = golem.sampleWallGradient(slots, window, moduleHeight, relY, new BlockPos(wx, wy, wz));
+                int sampledIndex = golem.sampleWallGradient(slots, window, noiseScale, moduleHeight, relY, new BlockPos(wx, wy, wz));
                 if (sampledIndex >= 0 && sampledIndex < 9) {
                     String sampledId = slots[sampledIndex];
                     if (sampledId != null && !sampledId.isEmpty()) {
@@ -216,9 +217,10 @@ public class ModulePlacement {
             if (groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size()) {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
+                int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
                 // Calculate relative Y position within module (0 at bottom)
                 int relY = ry - moduleMinY;
-                int sampledIndex = golem.sampleWallGradient(slots, window, moduleHeight, relY, new BlockPos(wx, wy, wz));
+                int sampledIndex = golem.sampleWallGradient(slots, window, noiseScale, moduleHeight, relY, new BlockPos(wx, wy, wz));
                 if (sampledIndex >= 0 && sampledIndex < 9) {
                     String sampledId = slots[sampledIndex];
                     if (sampledId != null && !sampledId.isEmpty()) {
