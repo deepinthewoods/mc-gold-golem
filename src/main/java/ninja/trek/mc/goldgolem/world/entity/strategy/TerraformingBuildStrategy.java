@@ -556,7 +556,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         if (total == 0) {
             // No nearby blocks, default to horizontal
             return sampleGradientArray(golem.getTerraformingGradientHorizontalCopy(),
-                    golem.getTerraformingGradientHorizontalWindow(), pos);
+                    golem.getTerraformingGradientHorizontalWindow(), golem.getTerraformingGradientHorizontalScale(), pos);
         }
 
         float ratio = vertical / total;
@@ -565,22 +565,22 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         if (ratio > 0.7f) {
             // Steep/vertical surface (cliffs, walls)
             return sampleGradientArray(golem.getTerraformingGradientVerticalCopy(),
-                    golem.getTerraformingGradientVerticalWindow(), pos);
+                    golem.getTerraformingGradientVerticalWindow(), golem.getTerraformingGradientVerticalScale(), pos);
         } else if (ratio < 0.3f) {
             // Flat/horizontal surface (floors, tops)
             return sampleGradientArray(golem.getTerraformingGradientHorizontalCopy(),
-                    golem.getTerraformingGradientHorizontalWindow(), pos);
+                    golem.getTerraformingGradientHorizontalWindow(), golem.getTerraformingGradientHorizontalScale(), pos);
         } else {
             // Sloped/diagonal surface
             return sampleGradientArray(golem.getTerraformingGradientSlopedCopy(),
-                    golem.getTerraformingGradientSlopedWindow(), pos);
+                    golem.getTerraformingGradientSlopedWindow(), golem.getTerraformingGradientSlopedScale(), pos);
         }
     }
 
     /**
      * Samples from a gradient array using positional hashing.
      */
-    private BlockState sampleGradientArray(String[] gradientArray, int window, BlockPos pos) {
+    private BlockState sampleGradientArray(String[] gradientArray, int window, int noiseScale, BlockPos pos) {
         if (gradientArray == null || window <= 0) return null;
 
         // Count non-empty entries
@@ -598,9 +598,11 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         int w = Math.max(0, Math.min(g, window));
         if (w == 0) return null;
 
-        // Use positional hash to sample from gradient window
-        long hash = (long) pos.getX() * 374761393L + (long) pos.getY() * 668265263L + (long) pos.getZ() * 2147483647L;
-        int idx = (int) ((hash & 0x7FFFFFFFL) % w);
+        // Use simplex noise to sample from gradient window
+        GoldGolemEntity golem = this.entity;
+        double u01 = golem != null ? golem.sampleGradientNoise01(pos, noiseScale) : 0.0;
+        int idx = (int) Math.floor(u01 * (double) w);
+        if (idx >= w) idx = w - 1;
 
         String blockId = gradientArray[idx];
         if (blockId == null || blockId.isEmpty()) return null;

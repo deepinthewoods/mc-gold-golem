@@ -24,18 +24,23 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private float gradientWindowMain = 1.0f; // 0..9 (server synced)
     private float gradientWindowStep = 1.0f; // 0..9 (server synced)
     private int pathWidth = 3;      // server synced
+    private int gradientNoiseScaleMain = 1; // 1-16 (server synced)
+    private int gradientNoiseScaleStep = 1; // 1-16 (server synced)
     private String[] gradientMainBlocks = new String[9];
     private String[] gradientStepBlocks = new String[9];
 
     private WindowSlider windowSliderMain;
     private WindowSlider windowSliderStep;
     private WidthSlider widthSlider;
+    private GradientNoiseScaleSlider gradientNoiseScaleSliderMain;
+    private GradientNoiseScaleSlider gradientNoiseScaleSliderStep;
     private boolean isDragging = false;
     private int dragButton = -1;
     private java.util.Set<Integer> dragVisited = new java.util.HashSet<>();
     private java.util.List<String> wallUniqueBlocks = java.util.Collections.emptyList();
     private java.util.List<Integer> wallBlockGroups = java.util.Collections.emptyList();
     private java.util.List<Float> wallGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Integer> wallGroupNoiseScales = java.util.Collections.emptyList();
     private java.util.List<String> wallGroupFlatSlots = java.util.Collections.emptyList();
     private String pendingAssignBlockId = null; // click icon then click row to assign
     private int wallScroll = 0; // simple integer rows scrolled
@@ -53,6 +58,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private java.util.Map<String, Integer> towerBlockCounts = new java.util.HashMap<>();
     private java.util.List<Integer> towerBlockGroups = java.util.Collections.emptyList();
     private java.util.List<Float> towerGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Integer> towerGroupNoiseScales = java.util.Collections.emptyList();
     private java.util.List<String> towerGroupFlatSlots = java.util.Collections.emptyList();
     private int towerScroll = 0;
     private final java.util.List<WindowSlider> towerRowSliders = new java.util.ArrayList<>();
@@ -81,18 +87,25 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private int terraformingGradientVerticalWindow = 1; // 0..9
     private int terraformingGradientHorizontalWindow = 1; // 0..9
     private int terraformingGradientSlopedWindow = 1; // 0..9
+    private int terraformingGradientVerticalScale = 1; // 1-16
+    private int terraformingGradientHorizontalScale = 1; // 1-16
+    private int terraformingGradientSlopedScale = 1; // 1-16
     private String[] terraformingGradientVertical = new String[9];
     private String[] terraformingGradientHorizontal = new String[9];
     private String[] terraformingGradientSloped = new String[9];
     private WindowSlider terraformingSliderVertical;
     private WindowSlider terraformingSliderHorizontal;
     private WindowSlider terraformingSliderSloped;
+    private NoiseScaleSlider terraformingScaleVertical;
+    private NoiseScaleSlider terraformingScaleHorizontal;
+    private NoiseScaleSlider terraformingScaleSloped;
     private TerraformingScanRadiusSlider terraformingScanRadiusSlider;
 
     // Tree mode state
     private java.util.List<String> treeUniqueBlocks = java.util.Collections.emptyList();
     private java.util.List<Integer> treeBlockGroups = java.util.Collections.emptyList();
     private java.util.List<Float> treeGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Integer> treeGroupNoiseScales = java.util.Collections.emptyList();
     private java.util.List<String> treeGroupFlatSlots = java.util.Collections.emptyList();
     private int treeScroll = 0;
     private final java.util.List<WindowSlider> treeRowSliders = new java.util.ArrayList<>();
@@ -105,6 +118,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     // Strategy pattern for group-based modes (Wall, Tower, Tree)
     private GroupModeStrategy groupModeStrategy;
     private final java.util.List<WindowSlider> groupRowSliders = new java.util.ArrayList<>();
+    private final java.util.List<NoiseScaleSlider> groupRowScaleSliders = new java.util.ArrayList<>();
     private final int[] groupSliderToGroup = new int[6];
     private final java.util.List<IconHit> groupIconHits = new java.util.ArrayList<>();
 
@@ -138,7 +152,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             float current = (row == 0) ? gradientWindowMain : gradientWindowStep;
             if (Math.abs(w - current) > 0.001f) {
                 if (row == 0) gradientWindowMain = w; else gradientWindowStep = w;
-                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(getEntityId(), row, w));
+                int scale = (row == 0) ? gradientNoiseScaleMain : gradientNoiseScaleStep;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(getEntityId(), row, w, scale));
             }
         }
         public void syncTo(int row, int g, float window) {
@@ -153,6 +168,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if ((w & 1) == 0) w = (w < 9) ? (w + 1) : (w - 1);
         return w;
     }
+
+    private static int clampScale(int s) { return Math.max(1, Math.min(16, s)); }
+    private static double scaleToValueInit(int s) { return (clampScale(s) - 1) / 15.0; }
+    private static int scaleFromValue(double v) { return clampScale(1 + (int)Math.round(v * 15.0)); }
 
     private class WidthSlider extends SliderWidget {
         public WidthSlider(int x, int y, int width, int height, int initialWidth) {
@@ -175,6 +194,48 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
         public void syncTo(int w) {
             this.value = toValueInit(w);
+            updateMessage();
+        }
+    }
+
+    private abstract class NoiseScaleSlider extends SliderWidget {
+        public NoiseScaleSlider(int x, int y, int width, int height, int initialScale) {
+            super(x, y, width, height, Text.literal("Scale"), scaleToValueInit(initialScale));
+        }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Scale: " + scaleFromValue(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            applyScale(scaleFromValue(this.value));
+        }
+        protected abstract void applyScale(int scale);
+        public void syncTo(int s) {
+            this.value = scaleToValueInit(s);
+            updateMessage();
+        }
+    }
+
+    private class GradientNoiseScaleSlider extends NoiseScaleSlider {
+        private final int row;
+        public GradientNoiseScaleSlider(int x, int y, int width, int height, int initialScale, int row) {
+            super(x, y, width, height, initialScale);
+            this.row = row;
+        }
+        @Override
+        protected void applyScale(int scale) {
+            if (row == 0) {
+                if (scale == gradientNoiseScaleMain) return;
+                gradientNoiseScaleMain = scale;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(
+                        getEntityId(), 0, gradientWindowMain, gradientNoiseScaleMain));
+            } else {
+                if (scale == gradientNoiseScaleStep) return;
+                gradientNoiseScaleStep = scale;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(
+                        getEntityId(), 1, gradientWindowStep, gradientNoiseScaleStep));
+            }
             updateMessage();
         }
     }
@@ -304,8 +365,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         this.hasTowerModeData = true;
         ensureTowerLayersSlider();
     }
-    public void setWallGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
+    public void setWallGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
         this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.wallGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
         this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
         // Invalidate strategy cache to force re-initialization with new data
         groupModeStrategy = null;
@@ -338,8 +400,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setTowerBlockGroups(java.util.List<Integer> groups) {
         this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
     }
-    public void setTowerGroupsState(java.util.List<Float> windows, java.util.List<String> flatSlots) {
+    public void setTowerGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
         this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.towerGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
         this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
         // Invalidate strategy cache to force re-initialization with new data
         groupModeStrategy = null;
@@ -385,12 +448,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     // Terraforming mode network sync method
     public void setTerraformingValues(int scanRadius, int verticalWindow, int horizontalWindow, int slopedWindow,
+                                       int verticalScale, int horizontalScale, int slopedScale,
                                        java.util.List<String> verticalGradient, java.util.List<String> horizontalGradient,
                                        java.util.List<String> slopedGradient) {
         this.terraformingScanRadius = scanRadius;
         this.terraformingGradientVerticalWindow = verticalWindow;
         this.terraformingGradientHorizontalWindow = horizontalWindow;
         this.terraformingGradientSlopedWindow = slopedWindow;
+        this.terraformingGradientVerticalScale = verticalScale;
+        this.terraformingGradientHorizontalScale = horizontalScale;
+        this.terraformingGradientSlopedScale = slopedScale;
 
         // Sync gradient arrays
         for (int i = 0; i < 9; i++) {
@@ -414,6 +481,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (this.terraformingSliderSloped != null) {
             int g = effectiveTerraformingG(2);
             this.terraformingSliderSloped.syncTo(0, g, slopedWindow);
+        }
+        if (this.terraformingScaleVertical != null) {
+            this.terraformingScaleVertical.syncTo(verticalScale);
+        }
+        if (this.terraformingScaleHorizontal != null) {
+            this.terraformingScaleHorizontal.syncTo(horizontalScale);
+        }
+        if (this.terraformingScaleSloped != null) {
+            this.terraformingScaleSloped.syncTo(slopedScale);
         }
     }
 
@@ -439,9 +515,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setTreeBlockGroups(java.util.List<Integer> groups) {
         this.treeBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
     }
-    public void setTreeGroupsState(int presetOrdinal, java.util.List<Float> windows, java.util.List<String> flatSlots) {
+    public void setTreeGroupsState(int presetOrdinal, java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
         this.treeTilingPresetOrdinal = presetOrdinal;
         this.treeGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+        this.treeGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
         this.treeGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
         // Invalidate strategy cache to force re-initialization with new data
         groupModeStrategy = null;
@@ -695,18 +772,18 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (groupModeStrategy == null) return;
         if (groupModeStrategy.getMode() == BuildMode.WALL) {
             groupModeStrategy.updateBlocksAndGroups(wallUniqueBlocks, wallBlockGroups);
-            groupModeStrategy.updateGroupState(wallGroupWindows, wallGroupFlatSlots, java.util.Map.of());
+            groupModeStrategy.updateGroupState(wallGroupWindows, wallGroupNoiseScales, wallGroupFlatSlots, java.util.Map.of());
         } else if (groupModeStrategy.getMode() == BuildMode.TOWER) {
             groupModeStrategy.updateBlocksAndGroups(towerUniqueBlocks, towerBlockGroups);
             var extraData = new java.util.HashMap<String, Object>();
             extraData.put("blockCounts", towerBlockCounts);
             extraData.put("height", towerLayers);
-            groupModeStrategy.updateGroupState(towerGroupWindows, towerGroupFlatSlots, extraData);
+            groupModeStrategy.updateGroupState(towerGroupWindows, towerGroupNoiseScales, towerGroupFlatSlots, extraData);
         } else if (groupModeStrategy.getMode() == BuildMode.TREE) {
             groupModeStrategy.updateBlocksAndGroups(treeUniqueBlocks, treeBlockGroups);
             var extraData = new java.util.HashMap<String, Object>();
             extraData.put("tilingPresetOrdinal", treeTilingPresetOrdinal);
-            groupModeStrategy.updateGroupState(treeGroupWindows, treeGroupFlatSlots, extraData);
+            groupModeStrategy.updateGroupState(treeGroupWindows, treeGroupNoiseScales, treeGroupFlatSlots, extraData);
         }
     }
 
@@ -736,13 +813,19 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int group = (idx < rows) ? vis.get(idx) : -1;
             groupSliderToGroup[i] = group;
             WindowSlider s = i < groupRowSliders.size() ? groupRowSliders.get(i) : null;
+            NoiseScaleSlider ns = i < groupRowScaleSliders.size() ? groupRowScaleSliders.get(i) : null;
             if (s == null) continue;
             boolean visible = idx < rows;
             s.visible = visible;
+            if (ns != null) ns.visible = visible;
             if (visible) {
                 int G = mode.effectiveGroupG(group);
                 float w = (group >= 0 && group < mode.getGroupWindows().size()) ? mode.getGroupWindows().get(group) : 0.0f;
                 s.syncTo(0, G, w);
+                if (ns != null) {
+                    int scale = (group >= 0 && group < mode.getGroupNoiseScales().size()) ? mode.getGroupNoiseScales().get(group) : 1;
+                    ns.syncTo(scale);
+                }
             }
         }
     }
@@ -1007,27 +1090,34 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int wx = this.x + 8 + 9 * 18 + 12;
             int wy0 = controlsTop + 18; // align with first gradient row
             int wy1 = wy0 + 18 + 6;     // second row
-            int sliderWidth = 90;
+            int windowW = 70;
+            int scaleW = 50;
+            int sliderGap = 6;
             int sliderHeight = 20;
             int g0 = effectiveG(0);
             double norm0 = g0 <= 0 ? 0.0 : (double) Math.min(gradientWindowMain, g0) / (double) g0;
-            windowSliderMain = new WindowSlider(wx, wy0, sliderWidth, sliderHeight, norm0, 0);
+            windowSliderMain = new WindowSlider(wx, wy0, windowW, sliderHeight, norm0, 0);
             this.addDrawableChild(windowSliderMain);
+            gradientNoiseScaleSliderMain = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy0, scaleW, sliderHeight, gradientNoiseScaleMain, 0);
+            this.addDrawableChild(gradientNoiseScaleSliderMain);
             int g1 = effectiveG(1);
             double norm1 = g1 <= 0 ? 0.0 : (double) Math.min(gradientWindowStep, g1) / (double) g1;
-            windowSliderStep = new WindowSlider(wx, wy1, sliderWidth, sliderHeight, norm1, 1);
+            windowSliderStep = new WindowSlider(wx, wy1, windowW, sliderHeight, norm1, 1);
             this.addDrawableChild(windowSliderStep);
+            gradientNoiseScaleSliderStep = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy1, scaleW, sliderHeight, gradientNoiseScaleStep, 1);
+            this.addDrawableChild(gradientNoiseScaleSliderStep);
 
         }
 
         // Width slider under the gradient row (right-aligned)
         if (this.handler.isSliderEnabled()) {
-            int wsliderW = 90;
+            int wsliderW = 50;
             int wsliderH = 12;
             int slotTop = this.y + 26; // top of first gradient row
             int wsliderY = slotTop + (18 + 6) + 18 + 6; // below second row
-            int wsliderX = this.x + this.backgroundWidth - 8 - wsliderW;
-            widthSlider = new WidthSlider(wsliderX, wsliderY, wsliderW, wsliderH, pathWidth);
+            int right = this.x + this.backgroundWidth - 8;
+            int widthX = right - wsliderW;
+            widthSlider = new WidthSlider(widthX, wsliderY, wsliderW, wsliderH, pathWidth);
             this.addDrawableChild(widthSlider);
         } else if (!this.handler.isSliderEnabled() && (this.handler.getSliderMode() <= 1 || this.handler.getSliderMode() == 5 || this.handler.getSliderMode() == 6)) {
             // Group Mode UI (Wall, Tower, Tree): create per-row sliders and scroll buttons using strategy pattern
@@ -1039,11 +1129,14 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             // Create sliders regardless of whether data has arrived yet
             // They will be synced when network data arrives
             groupRowSliders.clear();
+            groupRowScaleSliders.clear();
             int gridTop = this.y + 26;
             int rowSpacing = 18 + 6;
             int gridX = this.x + 8;
             int wx2 = gridX + 9 * 18 + 12;
-            int w2 = 90;
+            int w2 = 70;
+            int s2 = 50;
+            int gap2 = 6;
             int h2 = 10;
             BuildMode mode = strategy != null ? strategy.getMode() : BuildMode.WALL; // Default to WALL, will be corrected when data arrives
 
@@ -1062,20 +1155,39 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         int G = strat.effectiveGroupG(group);
                         float w = (G <= 0) ? 0.0f : Math.round(this.value * G * 10.0f) / 10.0f;
                         w = Math.max(0.0f, Math.min(G, w));
-                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), strat.getMode(), group, w));
+                        int scale = (group >= 0 && group < strat.getGroupNoiseScales().size()) ? strat.getGroupNoiseScales().get(group) : 1;
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(getEntityId(), strat.getMode(), group, w, scale));
                     }
                 };
                 groupRowSliders.add(s);
                 this.addDrawableChild(s);
+
+                NoiseScaleSlider ns = new NoiseScaleSlider(wx2 + w2 + gap2, sy, s2, h2, 1) {
+                    @Override
+                    protected void applyScale(int scale) {
+                        int sliderIdx = finalR;
+                        if (sliderIdx < 0 || sliderIdx >= 6) return;
+                        int group = groupSliderToGroup[sliderIdx];
+                        if (group < 0) return;
+                        GroupModeStrategy strat = getGroupModeStrategy();
+                        if (strat == null) return;
+                        float window = (group >= 0 && group < strat.getGroupWindows().size()) ? strat.getGroupWindows().get(group) : 0.0f;
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGroupModeWindowC2SPayload(
+                                getEntityId(), strat.getMode(), group, window, scale));
+                        updateMessage();
+                    }
+                };
+                groupRowScaleSliders.add(ns);
+                this.addDrawableChild(ns);
             }
             var upBtn = ButtonWidget.builder(Text.literal("▲"), b -> {
                 GroupModeStrategy strat = getGroupModeStrategy();
                 if (strat != null) scrollGroup(strat, -1);
-            }).dimensions(wx2 + w2 + 4, gridTop, 14, 12).build();
+            }).dimensions(wx2 + w2 + gap2 + s2 + 4, gridTop, 14, 12).build();
             var dnBtn = ButtonWidget.builder(Text.literal("▼"), b -> {
                 GroupModeStrategy strat = getGroupModeStrategy();
                 if (strat != null) scrollGroup(strat, 1);
-            }).dimensions(wx2 + w2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
+            }).dimensions(wx2 + w2 + gap2 + s2 + 4, gridTop + 5 * rowSpacing, 14, 12).build();
             this.addDrawableChild(upBtn);
             this.addDrawableChild(dnBtn);
 
@@ -1157,23 +1269,94 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int wy0 = controlsTop + 18; // First gradient row (vertical)
             int wy1 = wy0 + 18 + 6;     // Second gradient row (horizontal)
             int wy2 = wy1 + 18 + 6;     // Third gradient row (sloped)
-            int sliderWidth = 90;
+            int windowW = 70;
+            int scaleW = 50;
+            int sliderGap = 6;
             int sliderHeight = 12;
 
             int g0 = effectiveTerraformingG(0);
             double norm0 = g0 <= 0 ? 0.0 : (double) Math.min(terraformingGradientVerticalWindow, g0) / (double) g0;
-            terraformingSliderVertical = new WindowSlider(wx, wy0, sliderWidth, sliderHeight, norm0, 0);
+            terraformingSliderVertical = new WindowSlider(wx, wy0, windowW, sliderHeight, norm0, 0) {
+                @Override
+                protected void applyValue() {
+                    int G = effectiveTerraformingG(0);
+                    int w = (G <= 0) ? 0 : (int)Math.round(this.value * G);
+                    w = Math.max(0, Math.min(G, w));
+                    if (w != terraformingGradientVerticalWindow) {
+                        terraformingGradientVerticalWindow = w;
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientWindowC2SPayload(
+                                getEntityId(), 0, w, terraformingGradientVerticalScale));
+                    }
+                }
+            };
             this.addDrawableChild(terraformingSliderVertical);
+            terraformingScaleVertical = new NoiseScaleSlider(wx + windowW + sliderGap, wy0, scaleW, sliderHeight, terraformingGradientVerticalScale) {
+                @Override
+                protected void applyScale(int scale) {
+                    if (scale == terraformingGradientVerticalScale) return;
+                    terraformingGradientVerticalScale = scale;
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientWindowC2SPayload(
+                            getEntityId(), 0, terraformingGradientVerticalWindow, terraformingGradientVerticalScale));
+                    updateMessage();
+                }
+            };
+            this.addDrawableChild(terraformingScaleVertical);
 
             int g1 = effectiveTerraformingG(1);
             double norm1 = g1 <= 0 ? 0.0 : (double) Math.min(terraformingGradientHorizontalWindow, g1) / (double) g1;
-            terraformingSliderHorizontal = new WindowSlider(wx, wy1, sliderWidth, sliderHeight, norm1, 1);
+            terraformingSliderHorizontal = new WindowSlider(wx, wy1, windowW, sliderHeight, norm1, 1) {
+                @Override
+                protected void applyValue() {
+                    int G = effectiveTerraformingG(1);
+                    int w = (G <= 0) ? 0 : (int)Math.round(this.value * G);
+                    w = Math.max(0, Math.min(G, w));
+                    if (w != terraformingGradientHorizontalWindow) {
+                        terraformingGradientHorizontalWindow = w;
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientWindowC2SPayload(
+                                getEntityId(), 1, w, terraformingGradientHorizontalScale));
+                    }
+                }
+            };
             this.addDrawableChild(terraformingSliderHorizontal);
+            terraformingScaleHorizontal = new NoiseScaleSlider(wx + windowW + sliderGap, wy1, scaleW, sliderHeight, terraformingGradientHorizontalScale) {
+                @Override
+                protected void applyScale(int scale) {
+                    if (scale == terraformingGradientHorizontalScale) return;
+                    terraformingGradientHorizontalScale = scale;
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientWindowC2SPayload(
+                            getEntityId(), 1, terraformingGradientHorizontalWindow, terraformingGradientHorizontalScale));
+                    updateMessage();
+                }
+            };
+            this.addDrawableChild(terraformingScaleHorizontal);
 
             int g2 = effectiveTerraformingG(2);
             double norm2 = g2 <= 0 ? 0.0 : (double) Math.min(terraformingGradientSlopedWindow, g2) / (double) g2;
-            terraformingSliderSloped = new WindowSlider(wx, wy2, sliderWidth, sliderHeight, norm2, 2);
+            terraformingSliderSloped = new WindowSlider(wx, wy2, windowW, sliderHeight, norm2, 2) {
+                @Override
+                protected void applyValue() {
+                    int G = effectiveTerraformingG(2);
+                    int w = (G <= 0) ? 0 : (int)Math.round(this.value * G);
+                    w = Math.max(0, Math.min(G, w));
+                    if (w != terraformingGradientSlopedWindow) {
+                        terraformingGradientSlopedWindow = w;
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientWindowC2SPayload(
+                                getEntityId(), 2, w, terraformingGradientSlopedScale));
+                    }
+                }
+            };
             this.addDrawableChild(terraformingSliderSloped);
+            terraformingScaleSloped = new NoiseScaleSlider(wx + windowW + sliderGap, wy2, scaleW, sliderHeight, terraformingGradientSlopedScale) {
+                @Override
+                protected void applyScale(int scale) {
+                    if (scale == terraformingGradientSlopedScale) return;
+                    terraformingGradientSlopedScale = scale;
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientWindowC2SPayload(
+                            getEntityId(), 2, terraformingGradientSlopedWindow, terraformingGradientSlopedScale));
+                    updateMessage();
+                }
+            };
+            this.addDrawableChild(terraformingScaleSloped);
 
             // Scan radius slider at the right
             int scanSliderX = this.x + this.backgroundWidth - 8 - 90;
@@ -1594,6 +1777,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int ly = widthSlider.getY() - this.y - 10;
             context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFFFF, false);
         }
+        if (gradientNoiseScaleSliderMain != null && this.handler.isSliderEnabled()) {
+            int lx = gradientNoiseScaleSliderMain.getX() - this.x;
+            int ly = gradientNoiseScaleSliderMain.getY() - this.y - 10;
+            context.drawText(this.textRenderer, Text.literal("Scale: " + this.gradientNoiseScaleMain), lx, ly, 0xFFFFFFFF, false);
+        }
+        if (gradientNoiseScaleSliderStep != null && this.handler.isSliderEnabled()) {
+            int lx = gradientNoiseScaleSliderStep.getX() - this.x;
+            int ly = gradientNoiseScaleSliderStep.getY() - this.y - 10;
+            context.drawText(this.textRenderer, Text.literal("Scale: " + this.gradientNoiseScaleStep), lx, ly, 0xFFFFFFFF, false);
+        }
 
         // Marker dots above each window slider (path mode)
         if (this.handler.isSliderEnabled()) {
@@ -1716,8 +1909,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return this.handler.getEntityId();
     }
 
-    public void applyServerSync(int width, float windowMain, float windowStep, String[] blocksMain, String[] blocksStep) {
+    public void applyServerSync(int width, int noiseScaleMain, int noiseScaleStep, float windowMain, float windowStep, String[] blocksMain, String[] blocksStep) {
         this.pathWidth = width;
+        this.gradientNoiseScaleMain = noiseScaleMain;
+        this.gradientNoiseScaleStep = noiseScaleStep;
         this.gradientWindowMain = windowMain;
         this.gradientWindowStep = windowStep;
         if (blocksMain != null) {
@@ -1738,6 +1933,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
         if (this.widthSlider != null) {
             this.widthSlider.syncTo(this.pathWidth);
+        }
+        if (this.gradientNoiseScaleSliderMain != null) {
+            this.gradientNoiseScaleSliderMain.syncTo(this.gradientNoiseScaleMain);
+        }
+        if (this.gradientNoiseScaleSliderStep != null) {
+            this.gradientNoiseScaleSliderStep.syncTo(this.gradientNoiseScaleStep);
         }
     }
 

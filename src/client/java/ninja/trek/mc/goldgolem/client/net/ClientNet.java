@@ -17,7 +17,7 @@ public final class ClientNet {
                 String[] mainArr = payload.blocksMain().toArray(new String[0]);
                 String[] stepArr = payload.blocksStep().toArray(new String[0]);
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
-                    screen.applyServerSync(payload.width(), payload.windowMain(), payload.windowStep(), mainArr, stepArr);
+                    screen.applyServerSync(payload.width(), payload.noiseScaleMain(), payload.noiseScaleStep(), payload.windowMain(), payload.windowStep(), mainArr, stepArr);
                 }
             });
         });
@@ -52,16 +52,16 @@ public final class ClientNet {
             mc.execute(() -> {
                 if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     switch (payload.mode()) {
-                        case WALL -> screen.setWallGroupsState(payload.windows(), payload.flatSlots());
+                        case WALL -> screen.setWallGroupsState(payload.windows(), payload.noiseScales(), payload.flatSlots());
                         case TOWER -> {
                             screen.setTowerBlockCounts(
                                     payload.getBlockCounts().keySet().stream().toList(),
                                     payload.getBlockCounts().values().stream().toList(),
                                     payload.getTowerHeight()
                             );
-                            screen.setTowerGroupsState(payload.windows(), payload.flatSlots());
+                            screen.setTowerGroupsState(payload.windows(), payload.noiseScales(), payload.flatSlots());
                         }
-                        case TREE -> screen.setTreeGroupsState(payload.getTilingPresetOrdinal(), payload.windows(), payload.flatSlots());
+                        case TREE -> screen.setTreeGroupsState(payload.getTilingPresetOrdinal(), payload.windows(), payload.noiseScales(), payload.flatSlots());
                         default -> { }
                     }
                 }
@@ -113,6 +113,9 @@ public final class ClientNet {
                             payload.verticalWindow(),
                             payload.horizontalWindow(),
                             payload.slopedWindow(),
+                            payload.verticalScale(),
+                            payload.horizontalScale(),
+                            payload.slopedScale(),
                             payload.verticalGradient(),
                             payload.horizontalGradient(),
                             payload.slopedGradient()

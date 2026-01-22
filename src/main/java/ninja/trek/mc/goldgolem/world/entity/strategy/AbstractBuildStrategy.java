@@ -118,6 +118,13 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * @return Selected block ID or null if no valid blocks
      */
     protected String sampleGradient(String[] gradient, float window, BlockPos pos) {
+        return sampleGradient(gradient, window, 1, pos);
+    }
+
+    /**
+     * Sample a value from a gradient using simplex noise with a specific scale.
+     */
+    protected String sampleGradient(String[] gradient, float window, int noiseScale, BlockPos pos) {
         // Count valid slots
         int validCount = 0;
         for (String s : gradient) {
@@ -125,8 +132,10 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
         }
         if (validCount == 0) return null;
 
-        // Generate deterministic random value based on position
-        float t = deterministic01(pos.getX(), pos.getY(), pos.getZ());
+        // Generate deterministic noise value based on position
+        float t = entity != null
+                ? (float) entity.sampleGradientNoise01(pos, noiseScale)
+                : deterministic01(pos.getX(), pos.getY(), pos.getZ());
 
         // Map to gradient position with window
         float center = t * 9.0f;

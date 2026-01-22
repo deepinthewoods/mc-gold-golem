@@ -53,8 +53,8 @@ public class TowerModeStrategy extends AbstractGroupModeStrategy {
     }
 
     @Override
-    public void updateGroupState(List<Float> windows, List<String> flatSlots, Map<String, Object> extraData) {
-        super.updateGroupState(windows, flatSlots, extraData);
+    public void updateGroupState(List<Float> windows, List<Integer> noiseScales, List<String> flatSlots, Map<String, Object> extraData) {
+        super.updateGroupState(windows, noiseScales, flatSlots, extraData);
         // Update block counts from extra data
         blockCounts.clear();
         if (extraData != null) {

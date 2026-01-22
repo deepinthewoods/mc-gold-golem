@@ -254,7 +254,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         // Sample gradient based on Y position in total tower (not module)
         String[] slots = golem.getTowerGroupSlots().get(groupIdx);
         float window = (groupIdx < golem.getTowerGroupWindows().size()) ? golem.getTowerGroupWindows().get(groupIdx) : 1.0f;
-        int sampledIndex = sampleTowerGradient(golem, slots, window, pos);
+        int noiseScale = (groupIdx < golem.getTowerGroupNoiseScales().size()) ? golem.getTowerGroupNoiseScales().get(groupIdx) : 1;
+        int sampledIndex = sampleTowerGradient(golem, slots, window, noiseScale, pos);
 
         if (sampledIndex >= 0 && sampledIndex < 9) {
             String sampledId = slots[sampledIndex];
@@ -296,7 +297,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         return null;
     }
 
-    private int sampleTowerGradient(GoldGolemEntity golem, String[] slots, float window, BlockPos pos) {
+    private int sampleTowerGradient(GoldGolemEntity golem, String[] slots, float window, int noiseScale, BlockPos pos) {
         int height = golem.getTowerHeight();
         if (height == 0) return -1;
 
@@ -317,7 +318,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         float W = Math.min(window, G);
         if (W > 0) {
             // Deterministic random offset based on position
-            double u = deterministic01(golem.getId(), pos.getX(), pos.getZ(), currentLayerY) * W - (W / 2.0);
+            double u = golem.sampleGradientNoise01(pos, noiseScale) * W - (W / 2.0);
             s += u;
         }
 
@@ -335,17 +336,4 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         return Math.max(0, Math.min(G - 1, index));
     }
 
-    private double deterministic01(int entityId, int bx, int bz, int j) {
-        long v = 0x9E3779B97F4A7C15L;
-        v ^= ((long) entityId * 0x9E3779B97F4A7C15L);
-        v ^= ((long) bx * 0xC2B2AE3D27D4EB4FL);
-        v ^= ((long) bz * 0x165667B19E3779F9L);
-        v ^= ((long) j * 0x85EBCA77C2B2AE63L);
-        v ^= (v >>> 33);
-        v *= 0xff51afd7ed558ccdL;
-        v ^= (v >>> 33);
-        v *= 0xc4ceb9fe1a85ec53L;
-        v ^= (v >>> 33);
-        return (Double.longBitsToDouble((v >>> 12) | 0x3FF0000000000000L) - 1.0);
-    }
 }

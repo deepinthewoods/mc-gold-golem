@@ -445,6 +445,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         String[] gradientSlots = golem.getTreeGroupSlots().get(groupIdx);
         float window = golem.getTreeGroupWindows().get(groupIdx);
+        int noiseScale = (groupIdx < golem.getTreeGroupNoiseScales().size()) ? golem.getTreeGroupNoiseScales().get(groupIdx) : 1;
 
         // Sample from gradient using position hash
         int lastNonEmpty = -1;
@@ -460,7 +461,10 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             return originalState;
         }
 
-        int idx = Math.abs(pos.getX() + pos.getZ() + pos.getY()) % (int) Math.max(1, Math.round(window));
+        int w = (int) Math.max(1, Math.round(window));
+        double u01 = golem.sampleGradientNoise01(pos, noiseScale);
+        int idx = (int) Math.floor(u01 * (double) w);
+        if (idx >= w) idx = w - 1;
         if (idx > lastNonEmpty) idx = lastNonEmpty;
 
         String sampledBlockId = gradientSlots[idx];

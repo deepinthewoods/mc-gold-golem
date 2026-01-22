@@ -14,6 +14,7 @@ public abstract class AbstractGroupModeStrategy implements GroupModeStrategy {
     protected final List<String> uniqueBlocks = new ArrayList<>();
     protected final List<Integer> blockGroups = new ArrayList<>();
     protected final List<Float> groupWindows = new ArrayList<>();
+    protected final List<Integer> groupNoiseScales = new ArrayList<>();
     protected final List<String> groupFlatSlots = new ArrayList<>();
     protected Map<String, Object> extraData = Map.of();
     protected int scroll = 0;
@@ -31,6 +32,11 @@ public abstract class AbstractGroupModeStrategy implements GroupModeStrategy {
     @Override
     public List<Float> getGroupWindows() {
         return groupWindows;
+    }
+
+    @Override
+    public List<Integer> getGroupNoiseScales() {
+        return groupNoiseScales;
     }
 
     @Override
@@ -81,10 +87,14 @@ public abstract class AbstractGroupModeStrategy implements GroupModeStrategy {
     }
 
     @Override
-    public void updateGroupState(List<Float> windows, List<String> flatSlots, Map<String, Object> extraData) {
+    public void updateGroupState(List<Float> windows, List<Integer> noiseScales, List<String> flatSlots, Map<String, Object> extraData) {
         this.groupWindows.clear();
         if (windows != null) {
             this.groupWindows.addAll(windows);
+        }
+        this.groupNoiseScales.clear();
+        if (noiseScales != null) {
+            this.groupNoiseScales.addAll(noiseScales);
         }
         this.groupFlatSlots.clear();
         if (flatSlots != null) {

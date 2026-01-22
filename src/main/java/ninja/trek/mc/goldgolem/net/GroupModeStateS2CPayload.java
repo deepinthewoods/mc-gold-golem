@@ -24,6 +24,7 @@ public record GroupModeStateS2CPayload(
         int entityId,
         BuildMode mode,
         List<Float> windows,
+        List<Integer> noiseScales,
         List<String> flatSlots,
         Map<String, Object> extraData
 ) implements CustomPayload {
@@ -91,6 +92,7 @@ public record GroupModeStateS2CPayload(
             PacketCodecs.VAR_INT, GroupModeStateS2CPayload::entityId,
             BuildMode.PACKET_CODEC, GroupModeStateS2CPayload::mode,
             PacketCodecs.FLOAT.collect(PacketCodecs.toList()), GroupModeStateS2CPayload::windows,
+            PacketCodecs.VAR_INT.collect(PacketCodecs.toList()), GroupModeStateS2CPayload::noiseScales,
             PacketCodecs.STRING.collect(PacketCodecs.toList()), GroupModeStateS2CPayload::flatSlots,
             EXTRA_DATA_CODEC, GroupModeStateS2CPayload::extraData,
             GroupModeStateS2CPayload::new

@@ -48,8 +48,8 @@ public class TreeModeStrategy extends AbstractGroupModeStrategy {
     }
 
     @Override
-    public void updateGroupState(List<Float> windows, List<String> flatSlots, Map<String, Object> extraData) {
-        super.updateGroupState(windows, flatSlots, extraData);
+    public void updateGroupState(List<Float> windows, List<Integer> noiseScales, List<String> flatSlots, Map<String, Object> extraData) {
+        super.updateGroupState(windows, noiseScales, flatSlots, extraData);
         // Update tiling preset from extra data
         if (extraData != null) {
             Object preset = extraData.get("tilingPresetOrdinal");

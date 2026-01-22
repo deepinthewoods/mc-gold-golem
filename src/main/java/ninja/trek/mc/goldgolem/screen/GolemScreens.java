@@ -80,6 +80,8 @@ public final class GolemScreens {
                         new SyncGradientS2CPayload(
                                 entityId,
                                 golem.getPathWidth(),
+                                golem.getGradientNoiseScaleMain(),
+                                golem.getGradientNoiseScaleStep(),
                                 golem.getGradientWindow(),
                                 golem.getStepGradientWindow(),
                                 java.util.Arrays.asList(golem.getGradientCopy()),
@@ -118,6 +120,9 @@ public final class GolemScreens {
                                 golem.getTerraformingGradientVerticalWindow(),
                                 golem.getTerraformingGradientHorizontalWindow(),
                                 golem.getTerraformingGradientSlopedWindow(),
+                                golem.getTerraformingGradientVerticalScale(),
+                                golem.getTerraformingGradientHorizontalScale(),
+                                golem.getTerraformingGradientSlopedScale(),
                                 java.util.Arrays.asList(golem.getTerraformingGradientVerticalCopy()),
                                 java.util.Arrays.asList(golem.getTerraformingGradientHorizontalCopy()),
                                 java.util.Arrays.asList(golem.getTerraformingGradientSlopedCopy())
@@ -148,7 +153,7 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new GroupModeStateS2CPayload(entityId, mode, golem.getWallGroupWindows(), golem.getWallGroupFlatSlots(), extraData));
+                            new GroupModeStateS2CPayload(entityId, mode, golem.getWallGroupWindows(), golem.getWallGroupNoiseScales(), golem.getWallGroupFlatSlots(), extraData));
                 }
             }
             case TOWER -> {
@@ -166,7 +171,7 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new GroupModeStateS2CPayload(entityId, mode, golem.getTowerGroupWindows(), golem.getTowerGroupFlatSlots(), extraData));
+                            new GroupModeStateS2CPayload(entityId, mode, golem.getTowerGroupWindows(), golem.getTowerGroupNoiseScales(), golem.getTowerGroupFlatSlots(), extraData));
                 }
             }
             case TREE -> {
@@ -183,7 +188,7 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
-                            new GroupModeStateS2CPayload(entityId, mode, golem.getTreeGroupWindows(), golem.getTreeGroupFlatSlots(), extraData));
+                            new GroupModeStateS2CPayload(entityId, mode, golem.getTreeGroupWindows(), golem.getTreeGroupNoiseScales(), golem.getTreeGroupFlatSlots(), extraData));
                 }
             }
             default -> { }

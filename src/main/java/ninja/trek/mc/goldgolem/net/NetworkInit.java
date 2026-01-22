@@ -57,9 +57,18 @@ public class NetworkInit {
                 var e = world.getEntityById(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     switch (payload.mode()) {
-                        case WALL -> golem.setWallGroupWindow(payload.group(), payload.window());
-                        case TOWER -> golem.setTowerGroupWindow(payload.group(), payload.window());
-                        case TREE -> golem.setTreeGroupWindow(payload.group(), payload.window());
+                        case WALL -> {
+                            golem.setWallGroupWindow(payload.group(), payload.window());
+                            golem.setWallGroupNoiseScale(payload.group(), payload.scale());
+                        }
+                        case TOWER -> {
+                            golem.setTowerGroupWindow(payload.group(), payload.window());
+                            golem.setTowerGroupNoiseScale(payload.group(), payload.scale());
+                        }
+                        case TREE -> {
+                            golem.setTreeGroupWindow(payload.group(), payload.window());
+                            golem.setTreeGroupNoiseScale(payload.group(), payload.scale());
+                        }
                         default -> { }
                     }
                     sendGroupModeState(player, golem, payload.mode());
@@ -152,8 +161,13 @@ public class NetworkInit {
                 var world = player.getEntityWorld();
                 var e = world.getEntityById(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    if (payload.row() == 0) golem.setGradientWindow(payload.window());
-                    else golem.setStepGradientWindow(payload.window());
+                    if (payload.row() == 0) {
+                        golem.setGradientWindow(payload.window());
+                        golem.setGradientNoiseScaleMain(payload.scale());
+                    } else {
+                        golem.setStepGradientWindow(payload.window());
+                        golem.setGradientNoiseScaleStep(payload.scale());
+                    }
                     sendSync(player, golem);
                 }
             });
@@ -240,9 +254,18 @@ public class NetworkInit {
                 var e = world.getEntityById(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     switch (payload.gradientType()) {
-                        case 0 -> golem.setTerraformingGradientVerticalWindow(payload.window());
-                        case 1 -> golem.setTerraformingGradientHorizontalWindow(payload.window());
-                        case 2 -> golem.setTerraformingGradientSlopedWindow(payload.window());
+                        case 0 -> {
+                            golem.setTerraformingGradientVerticalWindow(payload.window());
+                            golem.setTerraformingGradientVerticalScale(payload.scale());
+                        }
+                        case 1 -> {
+                            golem.setTerraformingGradientHorizontalWindow(payload.window());
+                            golem.setTerraformingGradientHorizontalScale(payload.scale());
+                        }
+                        case 2 -> {
+                            golem.setTerraformingGradientSlopedWindow(payload.window());
+                            golem.setTerraformingGradientSlopedScale(payload.scale());
+                        }
                     }
                     sendTerraformingSync(player, golem);
                 }
@@ -258,6 +281,7 @@ public class NetworkInit {
 
         java.util.List<Integer> groups;
         java.util.List<Float> windows;
+        java.util.List<Integer> scales;
         java.util.List<String> slots;
         java.util.Map<String, Object> extraData;
 
@@ -266,6 +290,7 @@ public class NetworkInit {
                 var ids = golem.getWallUniqueBlockIds();
                 groups = golem.getWallBlockGroupMap(ids);
                 windows = golem.getWallGroupWindows();
+                scales = golem.getWallGroupNoiseScales();
                 slots = golem.getWallGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createWallExtraData();
             }
@@ -273,6 +298,7 @@ public class NetworkInit {
                 var ids = golem.getTowerUniqueBlockIds();
                 groups = golem.getTowerBlockGroupMap(ids);
                 windows = golem.getTowerGroupWindows();
+                scales = golem.getTowerGroupNoiseScales();
                 slots = golem.getTowerGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createTowerExtraData(golem.getTowerBlockCounts(), golem.getTowerHeight());
             }
@@ -280,6 +306,7 @@ public class NetworkInit {
                 var ids = golem.getTreeUniqueBlockIds();
                 groups = golem.getTreeBlockGroupMap(ids);
                 windows = golem.getTreeGroupWindows();
+                scales = golem.getTreeGroupNoiseScales();
                 slots = golem.getTreeGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
             }
@@ -291,7 +318,7 @@ public class NetworkInit {
         // Send generic block groups payload
         ServerPlayNetworking.send(player, new GroupModeBlockGroupsS2CPayload(golem.getId(), mode, groups));
         // Send generic group mode state payload
-        ServerPlayNetworking.send(player, new GroupModeStateS2CPayload(golem.getId(), mode, windows, slots, extraData));
+        ServerPlayNetworking.send(player, new GroupModeStateS2CPayload(golem.getId(), mode, windows, scales, slots, extraData));
     }
 
     /**
@@ -310,6 +337,8 @@ public class NetworkInit {
         var payload = new SyncGradientS2CPayload(
                 golem.getId(),
                 golem.getPathWidth(),
+                golem.getGradientNoiseScaleMain(),
+                golem.getGradientNoiseScaleStep(),
                 golem.getGradientWindow(),
                 golem.getStepGradientWindow(),
                 java.util.Arrays.asList(golem.getGradientCopy()),
@@ -325,6 +354,9 @@ public class NetworkInit {
                 golem.getTerraformingGradientVerticalWindow(),
                 golem.getTerraformingGradientHorizontalWindow(),
                 golem.getTerraformingGradientSlopedWindow(),
+                golem.getTerraformingGradientVerticalScale(),
+                golem.getTerraformingGradientHorizontalScale(),
+                golem.getTerraformingGradientSlopedScale(),
                 java.util.Arrays.asList(golem.getTerraformingGradientVerticalCopy()),
                 java.util.Arrays.asList(golem.getTerraformingGradientHorizontalCopy()),
                 java.util.Arrays.asList(golem.getTerraformingGradientSlopedCopy())

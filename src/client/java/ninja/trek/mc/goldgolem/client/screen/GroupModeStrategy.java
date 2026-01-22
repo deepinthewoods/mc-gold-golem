@@ -46,6 +46,11 @@ public interface GroupModeStrategy {
     List<Float> getGroupWindows();
 
     /**
+     * Get the noise scale for each group.
+     */
+    List<Integer> getGroupNoiseScales();
+
+    /**
      * Get the flat slot list (group * 9 + col -> block ID).
      */
     List<String> getGroupFlatSlots();
@@ -79,7 +84,7 @@ public interface GroupModeStrategy {
     /**
      * Update the strategy with new group state from server.
      */
-    void updateGroupState(List<Float> windows, List<String> flatSlots, Map<String, Object> extraData);
+    void updateGroupState(List<Float> windows, List<Integer> noiseScales, List<String> flatSlots, Map<String, Object> extraData);
 
     /**
      * Update the strategy with new unique blocks and group assignments.
