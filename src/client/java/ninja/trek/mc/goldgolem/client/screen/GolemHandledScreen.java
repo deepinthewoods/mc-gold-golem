@@ -7,6 +7,7 @@ import net.minecraft.client.gui.Click;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
@@ -66,8 +67,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private final java.util.List<IconHit> towerIconHits = new java.util.ArrayList<>();
     private String towerDraggingBlockId = null;
     private String towerPendingAssignBlockId = null;
-    private int towerLayers = 1; // 1-256 layers (synced from server)
-    private TowerLayersSlider towerLayersSlider;
+    private int towerLayers = 2; // 1-256 layers (synced from server)
+    private TowerLayersRangeSlider towerLayersSlider;
+    private TextFieldWidget towerLayersField;
+    private boolean updatingTowerLayersField = false;
     private boolean hasTowerModeData = false;
 
     // Excavation mode state
@@ -320,12 +323,24 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
-    private class TowerLayersSlider extends SliderWidget {
-        public TowerLayersSlider(int x, int y, int width, int height, int initialLayers) {
+    private static int clampTowerLayers(int layers) {
+        return Math.max(1, Math.min(256, layers));
+    }
+
+    private static int clampTowerLayersSlider(int layers) {
+        return Math.max(2, Math.min(24, layers));
+    }
+
+    private class TowerLayersRangeSlider extends SliderWidget {
+        public TowerLayersRangeSlider(int x, int y, int width, int height, int initialLayers) {
             super(x, y, width, height, Text.literal("Layers"), toValueInit(initialLayers));
         }
-        private static double toValueInit(int l) { return (l - 1) / 255.0; } // 1-256 range
-        private static int toLayers(double v) { return Math.max(1, Math.min(256, 1 + (int)Math.round(v * 255.0))); }
+        private static double toValueInit(int l) {
+            return (clampTowerLayersSlider(l) - 2) / 22.0;
+        }
+        private static int toLayers(double v) {
+            return clampTowerLayersSlider(2 + (int)Math.round(v * 22.0));
+        }
         @Override
         protected void updateMessage() {
             this.setMessage(Text.literal("Layers: " + toLayers(this.value)));
@@ -335,6 +350,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int l = toLayers(this.value);
             if (l != towerLayers) {
                 towerLayers = l;
+                setTowerLayersFieldText(l);
                 ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTowerHeightC2SPayload(getEntityId(), towerLayers));
                 updateMessage();
             }
@@ -342,6 +358,40 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         public void syncTo(int l) {
             this.value = toValueInit(l);
             updateMessage();
+        }
+    }
+
+    private void setTowerLayersFieldText(int layers) {
+        if (towerLayersField == null) return;
+        String text = Integer.toString(clampTowerLayers(layers));
+        if (text.equals(towerLayersField.getText())) return;
+        updatingTowerLayersField = true;
+        towerLayersField.setText(text);
+        updatingTowerLayersField = false;
+    }
+
+    private void setTowerLayersSliderValue(int layers) {
+        if (towerLayersSlider == null) return;
+        towerLayersSlider.syncTo(clampTowerLayersSlider(layers));
+    }
+
+    private void onTowerLayersChanged(String text) {
+        if (updatingTowerLayersField) return;
+        if (text == null || text.isEmpty()) return;
+        int parsed;
+        try {
+            parsed = Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            return;
+        }
+        int clamped = clampTowerLayers(parsed);
+        if (clamped != parsed) {
+            setTowerLayersFieldText(clamped);
+        }
+        if (clamped != towerLayers) {
+            towerLayers = clamped;
+            setTowerLayersSliderValue(clamped);
+            ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTowerHeightC2SPayload(getEntityId(), towerLayers));
         }
     }
 
@@ -363,7 +413,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void setTowerUniqueBlocks(java.util.List<String> ids) {
         this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
         this.hasTowerModeData = true;
-        ensureTowerLayersSlider();
+        ensureTowerLayersField();
     }
     public void setWallGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
         this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
@@ -391,11 +441,10 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             }
         }
         this.towerLayers = Math.max(1, height);
-        if (this.towerLayersSlider != null) {
-            this.towerLayersSlider.syncTo(this.towerLayers);
-        }
+        setTowerLayersFieldText(this.towerLayers);
+        setTowerLayersSliderValue(this.towerLayers);
         this.hasTowerModeData = true;
-        ensureTowerLayersSlider();
+        ensureTowerLayersField();
     }
     public void setTowerBlockGroups(java.util.List<Integer> groups) {
         this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
@@ -410,7 +459,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (strategy != null) {
             syncGroupSliders(strategy);
         }
-        ensureTowerLayersSlider();
+        ensureTowerLayersField();
     }
 
     // Excavation mode network sync method
@@ -610,7 +659,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return !this.handler.isSliderEnabled() && !towerUniqueBlocks.isEmpty();
     }
 
-    private int getTowerLayersSliderY() {
+    private int getTowerLayersFieldY() {
         int startY = this.y + 26;
         int rowSpacing = 18 + 6;
         int rows = 0;
@@ -627,23 +676,41 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return startY + rows * rowSpacing;
     }
 
-    private void ensureTowerLayersSlider() {
+    private void ensureTowerLayersField() {
         if (this.handler.isSliderEnabled()) return;
         int sliderMode = this.handler.getSliderMode();
         if (sliderMode != 0 && sliderMode != 6) return;
         if (!this.hasTowerModeData) return;
         if (this.client == null || this.width <= 0) return;
-        int layersSliderW = 90;
-        int layersSliderH = 12;
-        int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
-        int layersSliderY = getTowerLayersSliderY();
+        int layersFieldW = 36;
+        int layersGap = 6;
+        int layersFieldH = 12;
+        int left = this.x + 8;
+        int totalW = this.backgroundWidth - 16;
+        int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap);
+        int layersSliderX = left;
+        int layersFieldX = left + layersSliderW + layersGap;
+        int layersFieldY = getTowerLayersFieldY();
         if (towerLayersSlider == null) {
-            towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
+            towerLayersSlider = new TowerLayersRangeSlider(layersSliderX, layersFieldY, layersSliderW, layersFieldH, towerLayers);
             this.addDrawableChild(towerLayersSlider);
         } else {
-            towerLayersSlider.setDimensions(layersSliderW, layersSliderH);
+            towerLayersSlider.setDimensions(layersSliderW, layersFieldH);
             towerLayersSlider.setX(layersSliderX);
-            towerLayersSlider.setY(layersSliderY);
+            towerLayersSlider.setY(layersFieldY);
+        }
+        if (towerLayersField == null) {
+            towerLayersField = new TextFieldWidget(this.textRenderer, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Text.literal("Layers"));
+            towerLayersField.setMaxLength(3);
+            towerLayersField.setTextPredicate(input -> input.isEmpty() || input.chars().allMatch(Character::isDigit));
+            towerLayersField.setChangedListener(this::onTowerLayersChanged);
+            setTowerLayersFieldText(towerLayers);
+            setTowerLayersSliderValue(towerLayers);
+            this.addDrawableChild(towerLayersField);
+        } else {
+            towerLayersField.setDimensions(layersFieldW, layersFieldH);
+            towerLayersField.setX(layersFieldX);
+            towerLayersField.setY(layersFieldY);
         }
     }
 
@@ -1193,12 +1260,24 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
             // Tower mode: add layers slider on the right side
             if (mode == BuildMode.TOWER) {
-                int layersSliderW = 90;
-                int layersSliderH = 12;
-                int layersSliderX = this.x + this.backgroundWidth - 8 - layersSliderW;
-                int layersSliderY = getTowerLayersSliderY();
-                towerLayersSlider = new TowerLayersSlider(layersSliderX, layersSliderY, layersSliderW, layersSliderH, towerLayers);
+                int layersFieldW = 36;
+                int layersGap = 6;
+                int layersFieldH = 12;
+                int left = this.x + 8;
+                int totalW = this.backgroundWidth - 16;
+                int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap);
+                int layersSliderX = left;
+                int layersFieldX = left + layersSliderW + layersGap;
+                int layersFieldY = getTowerLayersFieldY();
+                towerLayersSlider = new TowerLayersRangeSlider(layersSliderX, layersFieldY, layersSliderW, layersFieldH, towerLayers);
                 this.addDrawableChild(towerLayersSlider);
+                towerLayersField = new TextFieldWidget(this.textRenderer, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Text.literal("Layers"));
+                towerLayersField.setMaxLength(3);
+                towerLayersField.setTextPredicate(input -> input.isEmpty() || input.chars().allMatch(Character::isDigit));
+                towerLayersField.setChangedListener(this::onTowerLayersChanged);
+                setTowerLayersFieldText(towerLayers);
+                setTowerLayersSliderValue(towerLayers);
+                this.addDrawableChild(towerLayersField);
             }
 
             // Tree mode: add tiling preset button
@@ -1218,7 +1297,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 syncGroupSliders(strategy);
             }
             if (hasTowerModeData) {
-                ensureTowerLayersSlider();
+                ensureTowerLayersField();
             }
         } else if (isExcavationMode()) {
             // Excavation Mode UI: simple sliders for height and depth + ore mode button

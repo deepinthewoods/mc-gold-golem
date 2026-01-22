@@ -16,7 +16,7 @@
 
 search the javadocs for correct api usage: https://maven.fabricmc.net/docs/fabric-api-0.135.0+1.21.10/ https://maven.fabricmc.net/docs/fabric-loader-0.17.3/ https://maven.fabricmc.net/docs/yarn-25w41a+build.2/
 
-Always run gradlew build via cmd, and use search to look up api methods.
+Always run gradlew build via cmd after every code modification, and use search to look up api methods.
 
 ## Coding Style & Naming Conventions
 - Language: Java 21 (see `build.gradle`).
@@ -42,4 +42,3 @@ Long-running tooling (tests, docker compose, migrations, etc.) must always be in
 - Do not commit secrets or local paths.
 - Update versions in `gradle.properties`; keep Loader/Fabric API compatible with `minecraft_version`.
 - If adding data generation, keep outputs versioned and deterministic under `src/generated` or excluded from VCS as appropriate.
-

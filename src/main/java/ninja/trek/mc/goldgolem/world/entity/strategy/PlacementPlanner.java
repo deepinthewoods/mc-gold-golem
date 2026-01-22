@@ -20,6 +20,7 @@ public class PlacementPlanner {
     private static final double MAX_REACH = 4.5;  // Similar to player reach
     private static final int MAX_DEFER_ATTEMPTS = 3;
     private static final int STUCK_THRESHOLD_TICKS = 20;
+    private static final int SUFFOCATION_TELEPORT_RADIUS = 6;
 
     // Reference to golem
     private final GoldGolemEntity golem;
@@ -133,6 +134,10 @@ public class PlacementPlanner {
      * @return The result of this tick
      */
     public TickResult tick(BlockPlacer blockPlacer) {
+        if (tryTeleportIfSuffocating()) {
+            return TickResult.WORKING;
+        }
+
         // Select next block if needed
         if (currentTarget == null) {
             currentTarget = selectNextBlock();
@@ -293,6 +298,43 @@ public class PlacementPlanner {
         }
     }
 
+    private boolean tryTeleportIfSuffocating() {
+        if (!golem.isInsideWall()) {
+            return false;
+        }
+        if (golem.getEntityWorld().isClient()) {
+            return false;
+        }
+
+        BlockPos safePos = null;
+        if (currentStandPos != null && canStandAt(currentStandPos)) {
+            safePos = currentStandPos;
+        } else if (currentTarget != null) {
+            PlacementPosition placement = findPlacementPosition(currentTarget);
+            if (placement != null) {
+                safePos = placement.standPosition;
+            }
+        }
+
+        if (safePos == null) {
+            safePos = findNearestSafeStandPosition(golem.getBlockPos(), SUFFOCATION_TELEPORT_RADIUS);
+        }
+
+        if (safePos == null) {
+            return false;
+        }
+
+        teleportToStandPosition(safePos);
+        navigatingToStandPos = false;
+        stuckTicks = 0;
+        currentStandPos = null;
+        if (currentTarget != null) {
+            remainingBlocks.addFirst(currentTarget);
+            currentTarget = null;
+        }
+        return true;
+    }
+
     /**
      * Find a valid position to stand at to place the target block.
      */
@@ -368,6 +410,29 @@ public class PlacementPlanner {
                 golemPos.squaredDistanceTo(p.getX() + 0.5, p.getY(), p.getZ() + 0.5)));
 
         return positions;
+    }
+
+    private BlockPos findNearestSafeStandPosition(BlockPos origin, int radius) {
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    BlockPos pos = origin.add(dx, dy, dz);
+                    if (!canStandAt(pos)) {
+                        continue;
+                    }
+                    double dist = dx * dx + dy * dy + dz * dz;
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = pos;
+                    }
+                }
+            }
+        }
+
+        return best;
     }
 
     /**
