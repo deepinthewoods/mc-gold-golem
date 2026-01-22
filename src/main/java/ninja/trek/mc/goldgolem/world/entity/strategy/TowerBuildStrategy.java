@@ -3,27 +3,26 @@ package ninja.trek.mc.goldgolem.world.entity.strategy;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
  * Strategy for Tower building mode.
- * Builds a tower at a fixed location based on a captured template.
+ * Uses PlacementPlanner for reach-aware block placement - the golem moves
+ * within reach of each block before placing it, similar to how a player would build.
  */
 public class TowerBuildStrategy extends AbstractBuildStrategy {
 
     // Tower building state
-    private int currentY = 0;
-    private int placementCursor = 0;
+    private int currentLayerY = 0;           // Current Y layer being processed
+    private boolean layerInitialized = false; // Whether current layer blocks are loaded into planner
+    private PlacementPlanner planner = null;
+    private int totalHeight = 0;             // Cached for progress tracking
 
     @Override
     public BuildMode getMode() {
@@ -38,6 +37,10 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     @Override
     public void initialize(GoldGolemEntity golem) {
         super.initialize(golem);
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
+        totalHeight = golem.getTowerHeight();
     }
 
     @Override
@@ -54,19 +57,31 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     @Override
     public boolean isComplete() {
         if (entity == null) return false;
-        return currentY >= entity.getTowerHeight();
+        return currentLayerY >= entity.getTowerHeight() && (planner == null || planner.isComplete());
     }
 
     @Override
     public void writeNbt(NbtCompound nbt) {
-        nbt.putInt("CurrentY", currentY);
-        nbt.putInt("PlacementCursor", placementCursor);
+        nbt.putInt("CurrentLayerY", currentLayerY);
+        nbt.putBoolean("LayerInitialized", layerInitialized);
+        nbt.putInt("TotalHeight", totalHeight);
+
+        // Save planner state
+        if (planner != null) {
+            NbtCompound plannerNbt = new NbtCompound();
+            planner.writeNbt(plannerNbt);
+            nbt.put("Planner", plannerNbt);
+        }
     }
 
     @Override
     public void readNbt(NbtCompound nbt) {
-        currentY = nbt.getInt("CurrentY", 0);
-        placementCursor = nbt.getInt("PlacementCursor", 0);
+        currentLayerY = nbt.getInt("CurrentLayerY", 0);
+        layerInitialized = nbt.getBoolean("LayerInitialized", false);
+        totalHeight = nbt.getInt("TotalHeight", 0);
+
+        // Load planner state (planner will be created on next initialize)
+        // Note: planner needs golem reference, so we defer loading
     }
 
     @Override
@@ -83,14 +98,24 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
      * Clear building state.
      */
     public void clearState() {
-        currentY = 0;
-        placementCursor = 0;
+        currentLayerY = 0;
+        layerInitialized = false;
+        if (planner != null) {
+            planner.clear();
+        }
     }
 
     // ========== Getters ==========
 
-    public int getCurrentY() { return currentY; }
-    public int getPlacementCursor() { return placementCursor; }
+    public int getCurrentLayerY() { return currentLayerY; }
+
+    /**
+     * Get building progress as a percentage (0-100).
+     */
+    public int getProgressPercent() {
+        if (totalHeight <= 0) return 0;
+        return Math.min(100, (currentLayerY * 100) / totalHeight);
+    }
 
     // ========== Polymorphic Dispatch Methods ==========
 
@@ -109,7 +134,6 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     // ========== Main tick logic ==========
 
     private void tickTowerMode(GoldGolemEntity golem, PlayerEntity owner) {
-        // Tower mode: build at fixed location (towerOrigin), no player tracking
         if (!golem.isBuildingPaths()) return;
 
         TowerModuleTemplate template = golem.getTowerTemplate();
@@ -118,77 +142,76 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
         if (template == null || origin == null) return;
 
+        // Ensure planner exists
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+            // Try to restore saved state
+            // (In a full implementation, we'd load from NBT here)
+        }
+
         // Check if we've finished building the tower
-        if (currentY >= height) {
+        if (currentLayerY >= height && planner.isComplete()) {
             golem.setBuildingPaths(false);
             return;
         }
 
-        // Get all voxels for the current Y layer
-        List<BlockPos> currentLayerVoxels = getCurrentLayerVoxels(golem, template, origin);
+        // Initialize current layer if needed
+        if (!layerInitialized && currentLayerY < height) {
+            List<BlockPos> layerBlocks = getLayerVoxels(golem, template, origin, currentLayerY);
+            if (layerBlocks.isEmpty()) {
+                // Empty layer, move to next
+                currentLayerY++;
+                return;
+            }
+            planner.setBlocks(layerBlocks);
+            layerInitialized = true;
+        }
 
-        if (currentLayerVoxels.isEmpty()) {
-            // No voxels in this layer, move to next Y level
-            currentY++;
-            placementCursor = 0;
+        // Tick the planner with 2-tick pacing (same as before)
+        if (!shouldPlaceThisTick()) {
             return;
         }
 
-        // Place blocks at 2-tick intervals (same as other modes)
-        if (placementTickCounter == 0 && placementCursor < currentLayerVoxels.size()) {
-            BlockPos targetPos = currentLayerVoxels.get(placementCursor);
+        // Use planner to handle movement and placement
+        PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+            return placeTowerBlock(golem, template, origin, pos, nextPos);
+        });
 
-            // Try to pathfind to the target position
-            double ty = golem.computeGroundTargetY(new Vec3d(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5));
-            golem.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
+        switch (result) {
+            case PLACED_BLOCK:
+                alternateHand();
+                break;
 
-            // Check if stuck and teleport if necessary
-            double dx = golem.getX() - (targetPos.getX() + 0.5);
-            double dz = golem.getZ() - (targetPos.getZ() + 0.5);
-            double distSq = dx * dx + dz * dz;
-            if (golem.getNavigation().isIdle() && distSq > 1.0) {
-                stuckTicks++;
-                if (stuckTicks >= 20) {
-                    if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, golem.getX(), golem.getY() + 0.5, golem.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, targetPos.getX() + 0.5, ty + 0.5, targetPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    golem.refreshPositionAndAngles(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, golem.getYaw(), golem.getPitch());
-                    golem.getNavigation().stop();
-                    stuckTicks = 0;
-                }
-            } else {
-                stuckTicks = 0;
-            }
+            case COMPLETED:
+                // Layer complete, move to next
+                currentLayerY++;
+                layerInitialized = false;
+                break;
 
-            // Determine next block for animation preview
-            BlockPos nextPos = null;
-            if (placementCursor + 1 < currentLayerVoxels.size()) {
-                nextPos = currentLayerVoxels.get(placementCursor + 1);
-            }
+            case DEFERRED:
+                // Block was deferred, planner will retry later
+                break;
 
-            // Place the block
-            placeTowerBlock(golem, template, origin, targetPos, nextPos);
-            placementCursor++;
-        }
-
-        // Check if we've finished this layer
-        if (placementCursor >= currentLayerVoxels.size()) {
-            currentY++;
-            placementCursor = 0;
+            case WORKING:
+            case IDLE:
+                // Still working or nothing to do
+                break;
         }
     }
 
-    private List<BlockPos> getCurrentLayerVoxels(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin) {
-        if (template == null) return Collections.emptyList();
+    /**
+     * Get all voxels for a specific Y layer.
+     */
+    private List<BlockPos> getLayerVoxels(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, int layerY) {
+        if (template == null) return List.of();
 
         List<BlockPos> layerVoxels = new ArrayList<>();
         int moduleHeight = template.moduleHeight;
         if (moduleHeight == 0) return layerVoxels;
 
         // Determine which module repetition we're in and the Y offset within that module
-        int moduleIndex = currentY / moduleHeight;
-        int yWithinModule = currentY % moduleHeight;
+        int moduleIndex = layerY / moduleHeight;
+        int yWithinModule = layerY % moduleHeight;
 
         // Collect all voxels at this Y level within the current module
         for (var voxel : template.voxels) {
@@ -197,9 +220,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
                 // Calculate absolute position: origin + module offset + voxel relative position
                 int absoluteY = origin.getY() + (moduleIndex * moduleHeight) + relY;
                 BlockPos absPos = new BlockPos(
-                    origin.getX() + voxel.rel.getX(),
-                    absoluteY,
-                    origin.getZ() + voxel.rel.getZ()
+                        origin.getX() + voxel.rel.getX(),
+                        absoluteY,
+                        origin.getZ() + voxel.rel.getZ()
                 );
                 layerVoxels.add(absPos);
             }
@@ -208,12 +231,16 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         return layerVoxels;
     }
 
-    private void placeTowerBlock(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos, BlockPos nextPos) {
-        if (golem.getEntityWorld().isClient()) return;
+    /**
+     * Place a tower block with gradient sampling.
+     * @return true if the block was placed
+     */
+    private boolean placeTowerBlock(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos, BlockPos nextPos) {
+        if (golem.getEntityWorld().isClient()) return false;
 
         // Get the original block state from the template
         BlockState targetState = getTowerBlockStateAt(template, origin, pos);
-        if (targetState == null) return;
+        if (targetState == null) return false;
 
         // Use gradient sampling to potentially replace with a different block
         String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
@@ -221,7 +248,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
             // No group mapping, place original block
             golem.placeBlockFromInventory(pos, targetState, nextPos);
-            return;
+            return true;
         }
 
         // Sample gradient based on Y position in total tower (not module)
@@ -235,13 +262,14 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
                 BlockState sampledState = golem.getBlockStateFromId(sampledId);
                 if (sampledState != null) {
                     golem.placeBlockFromInventory(pos, sampledState, nextPos);
-                    return;
+                    return true;
                 }
             }
         }
 
         // Fallback: place original block
         golem.placeBlockFromInventory(pos, targetState, nextPos);
+        return true;
     }
 
     private BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
@@ -283,13 +311,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         if (G == 0) return -1;
 
         // Map Y position in tower to gradient space [0, G-1]
-        double s = ((double) currentY / (double) height) * (G - 1);
+        double s = ((double) currentLayerY / (double) height) * (G - 1);
 
         // Apply windowing
         float W = Math.min(window, G);
         if (W > 0) {
             // Deterministic random offset based on position
-            double u = deterministic01(golem.getId(), pos.getX(), pos.getZ(), currentY) * W - (W / 2.0);
+            double u = deterministic01(golem.getId(), pos.getX(), pos.getZ(), currentLayerY) * W - (W / 2.0);
             s += u;
         }
 

@@ -3,10 +3,8 @@ package ninja.trek.mc.goldgolem.world.entity.strategy;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
@@ -20,7 +18,8 @@ import java.util.*;
 
 /**
  * Strategy for Wall building mode.
- * Tracks the player's movement and builds wall modules following them.
+ * Uses PlacementPlanner for reach-aware block placement - the golem moves
+ * within reach of each block before placing it.
  */
 public class WallBuildStrategy extends AbstractBuildStrategy {
 
@@ -42,8 +41,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private ModulePlacement currentModulePlacement = null;
     private final ArrayDeque<ModulePlacement> pendingModules = new ArrayDeque<>();
 
-    // UI state - these are shared with entity for UI access
-    // Entity holds the actual lists, strategy provides accessors
+    // PlacementPlanner for reach-aware building
+    private PlacementPlanner planner = null;
+    private boolean moduleBlocksLoaded = false;
 
     @Override
     public BuildMode getMode() {
@@ -58,6 +58,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     @Override
     public void initialize(GoldGolemEntity golem) {
         super.initialize(golem);
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
     }
 
     @Override
@@ -120,6 +123,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Save direction
         nbt.putInt("LastDirX", wallLastDirX);
         nbt.putInt("LastDirZ", wallLastDirZ);
+
+        // Save planner state
+        if (planner != null) {
+            NbtCompound plannerNbt = new NbtCompound();
+            planner.writeNbt(plannerNbt);
+            nbt.put("Planner", plannerNbt);
+        }
     }
 
     @Override
@@ -184,9 +194,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Load direction
         wallLastDirX = nbt.getInt("LastDirX", 1);
         wallLastDirZ = nbt.getInt("LastDirZ", 0);
-
-        // Note: wallTemplates needs to be rebuilt from JSON file if available
-        // This is typically done by the entity's setWallConfig method
     }
 
     @Override
@@ -234,6 +241,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     public void clearState() {
         currentModulePlacement = null;
         pendingModules.clear();
+        moduleBlocksLoaded = false;
+        if (planner != null) {
+            planner.clear();
+        }
         if (entity != null) {
             entity.setTrackStart(null);
         }
@@ -291,6 +302,11 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private void tickWallMode(GoldGolemEntity golem, PlayerEntity owner) {
         Vec3d trackStart = golem.getTrackStart();
 
+        // Ensure planner exists
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
+
         // Track anchors and enqueue modules based on movement
         if (owner != null && owner.isOnGround()) {
             Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
@@ -323,47 +339,62 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             }
         }
 
+        // Start new module if needed
         if (currentModulePlacement == null) {
             currentModulePlacement = pendingModules.pollFirst();
             if (currentModulePlacement != null) {
                 currentModulePlacement.begin(golem, this);
-                Vec3d end = currentModulePlacement.end();
-                double ty = golem.computeGroundTargetY(end);
-                golem.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
+                moduleBlocksLoaded = false;
             }
         }
 
+        // Process current module with PlacementPlanner
         if (currentModulePlacement != null) {
-            // Place 1 block every 2 ticks
-            if (placementTickCounter == 0) {
-                currentModulePlacement.placeSome(golem, this, 1);
-            }
-            Vec3d end = currentModulePlacement.end();
-            double ty = golem.computeGroundTargetY(end);
-            golem.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
-
-            double dx = golem.getX() - end.x;
-            double dz = golem.getZ() - end.z;
-            double distSq = dx * dx + dz * dz;
-
-            // Stuck detection
-            if (golem.getNavigation().isIdle() && distSq > 1.0) {
-                stuckTicks++;
-                if (stuckTicks >= 20) {
-                    if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, golem.getX(), golem.getY() + 0.5, golem.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z, 40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    golem.refreshPositionAndAngles(end.x, ty, end.z, golem.getYaw(), golem.getPitch());
-                    golem.getNavigation().stop();
-                    stuckTicks = 0;
+            // Load module blocks into planner if not done
+            if (!moduleBlocksLoaded) {
+                List<BlockPos> moduleBlocks = currentModulePlacement.getRemainingBlockPositions(golem, this);
+                if (!moduleBlocks.isEmpty()) {
+                    planner.setBlocks(moduleBlocks);
                 }
-            } else {
-                stuckTicks = 0;
+                moduleBlocksLoaded = true;
             }
 
-            if (currentModulePlacement.done()) {
+            // Tick with 2-tick pacing
+            if (!shouldPlaceThisTick()) {
+                return;
+            }
+
+            // Use planner to handle movement and placement
+            PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+                return placeWallBlockAt(golem, pos, nextPos);
+            });
+
+            switch (result) {
+                case PLACED_BLOCK:
+                    alternateHand();
+                    currentModulePlacement.incrementProgress();
+                    break;
+
+                case COMPLETED:
+                    // Module complete, move to next
+                    currentModulePlacement = null;
+                    moduleBlocksLoaded = false;
+                    break;
+
+                case DEFERRED:
+                    // Block was deferred, planner will retry later
+                    break;
+
+                case WORKING:
+                case IDLE:
+                    // Still working or nothing to do
+                    break;
+            }
+
+            // Check if module is done (backup check)
+            if (currentModulePlacement != null && currentModulePlacement.done()) {
                 currentModulePlacement = null;
+                moduleBlocksLoaded = false;
             }
         }
     }
@@ -430,6 +461,15 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     // ========== Block placement helper ==========
+
+    /**
+     * Place a wall block at the given position using the current module's context.
+     * @return true if the block was placed successfully
+     */
+    private boolean placeWallBlockAt(GoldGolemEntity golem, BlockPos pos, BlockPos nextPos) {
+        if (currentModulePlacement == null) return false;
+        return currentModulePlacement.placeBlockAt(golem, this, pos, nextPos);
+    }
 
     public void placeBlockStateAt(GoldGolemEntity golem, int wx, int wy, int wz, BlockState baseState, int rot, boolean mirror) {
         var world = golem.getEntityWorld();

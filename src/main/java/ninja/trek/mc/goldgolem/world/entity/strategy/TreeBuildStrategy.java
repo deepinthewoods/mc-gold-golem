@@ -22,15 +22,12 @@ import ninja.trek.mc.goldgolem.tree.TreeWFCBuilder;
 import ninja.trek.mc.goldgolem.tree.TilingPreset;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Optional;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Strategy for Tree building mode.
- * Builds tree structures using Wave Function Collapse tiling.
+ * Uses PlacementPlanner for reach-aware block placement - the golem moves
+ * within reach of each block before placing it.
  */
 public class TreeBuildStrategy extends AbstractBuildStrategy {
 
@@ -39,6 +36,14 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     private TreeWFCBuilder treeWFCBuilder = null;
     private boolean treeTilesCached = false;
     private boolean treeWaitingForInventory = false;
+
+    // PlacementPlanner for reach-aware building
+    private PlacementPlanner planner = null;
+    private boolean tileBlocksLoaded = false;
+
+    // Current tile being placed
+    private BlockPos currentTileOrigin = null;
+    private Map<BlockPos, BlockState> currentTileBlocks = new HashMap<>();
 
     @Override
     public BuildMode getMode() {
@@ -53,6 +58,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     @Override
     public void initialize(GoldGolemEntity golem) {
         super.initialize(golem);
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
     }
 
     @Override
@@ -76,14 +84,37 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     public void writeNbt(NbtCompound nbt) {
         nbt.putBoolean("TilesCached", treeTilesCached);
         nbt.putBoolean("WaitingForInventory", treeWaitingForInventory);
-        // Note: treeTileCache and treeWFCBuilder are transient (rebuilt on load)
+        nbt.putBoolean("TileBlocksLoaded", tileBlocksLoaded);
+
+        // Save current tile origin
+        if (currentTileOrigin != null) {
+            nbt.putInt("TileOriginX", currentTileOrigin.getX());
+            nbt.putInt("TileOriginY", currentTileOrigin.getY());
+            nbt.putInt("TileOriginZ", currentTileOrigin.getZ());
+        }
+
+        // Save planner state
+        if (planner != null) {
+            NbtCompound plannerNbt = new NbtCompound();
+            planner.writeNbt(plannerNbt);
+            nbt.put("Planner", plannerNbt);
+        }
     }
 
     @Override
     public void readNbt(NbtCompound nbt) {
         treeTilesCached = nbt.getBoolean("TilesCached", false);
         treeWaitingForInventory = nbt.getBoolean("WaitingForInventory", false);
-        // Note: treeTileCache and treeWFCBuilder will be rebuilt when tick resumes
+        tileBlocksLoaded = nbt.getBoolean("TileBlocksLoaded", false);
+
+        // Load current tile origin
+        if (nbt.contains("TileOriginX")) {
+            currentTileOrigin = new BlockPos(
+                nbt.getInt("TileOriginX", 0),
+                nbt.getInt("TileOriginY", 0),
+                nbt.getInt("TileOriginZ", 0)
+            );
+        }
     }
 
     @Override
@@ -104,6 +135,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         treeTilesCached = false;
         treeTileCache = null;
         treeWaitingForInventory = false;
+        tileBlocksLoaded = false;
+        currentTileOrigin = null;
+        currentTileBlocks.clear();
+        if (planner != null) {
+            planner.clear();
+        }
     }
 
     // ========== Getters ==========
@@ -175,6 +212,11 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     private void tickTreeMode(GoldGolemEntity golem, PlayerEntity owner) {
         // Tree mode: WFC-based building that follows player with nuggets
         if (!golem.isBuildingPaths()) return;
+
+        // Ensure planner exists
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
 
         List<TreeModule> treeModules = golem.getTreeModules();
         BlockPos treeOrigin = golem.getTreeOrigin();
@@ -250,75 +292,82 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             }
         }
 
-        // Place blocks from WFC output at 2-tick intervals
-        if (placementTickCounter == 0 && treeWFCBuilder != null && treeWFCBuilder.hasPendingBlocks()) {
-            BlockPos buildPos = treeWFCBuilder.getNextBuildPosition();
-            if (buildPos != null) {
-                // Try to pathfind to the build position
-                double ty = golem.computeGroundTargetY(new Vec3d(buildPos.getX() + 0.5, buildPos.getY(), buildPos.getZ() + 0.5));
-                golem.getNavigation().startMovingTo(buildPos.getX() + 0.5, ty, buildPos.getZ() + 0.5, 1.1);
-
-                // Check if stuck and teleport if necessary
-                double dx = golem.getX() - (buildPos.getX() + 0.5);
-                double dz = golem.getZ() - (buildPos.getZ() + 0.5);
-                double distSq = dx * dx + dz * dz;
-                if (golem.getNavigation().isIdle() && distSq > 1.0) {
-                    stuckTicks++;
-                    if (stuckTicks >= 20) {
-                        if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                            sw.spawnParticles(ParticleTypes.PORTAL, golem.getX(), golem.getY() + 0.5, golem.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                            sw.spawnParticles(ParticleTypes.PORTAL, buildPos.getX() + 0.5, ty + 0.5, buildPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-                        }
-                        golem.refreshPositionAndAngles(buildPos.getX() + 0.5, ty, buildPos.getZ() + 0.5, golem.getYaw(), golem.getPitch());
-                        golem.getNavigation().stop();
-                        stuckTicks = 0;
-                    }
-                } else {
-                    stuckTicks = 0;
-                }
-
-                // Place the blocks from the tile - returns false if inventory depleted
-                boolean success = placeTreeTile(golem, buildPos);
-                if (!success) {
-                    // Out of inventory - stop building and wait for restock
-                    golem.setBuildingPaths(false);
-                    treeWaitingForInventory = true;
-
-                    // Show angry villager particles
-                    if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
-                            golem.getX(), golem.getY() + 2.0, golem.getZ(),
-                            5, 0.3, 0.3, 0.3, 0.0);
-                    }
-
-                    // Note: getNextBuildPosition already removed the position from queue
-                    // The next tile will be attempted when resumed
-                    return;
+        // Process current tile with PlacementPlanner
+        if (currentTileOrigin == null || (planner.isComplete() && currentTileBlocks.isEmpty())) {
+            // Get next tile from WFC
+            if (treeWFCBuilder != null && treeWFCBuilder.hasPendingBlocks()) {
+                currentTileOrigin = treeWFCBuilder.getNextBuildPosition();
+                if (currentTileOrigin != null) {
+                    // Load tile blocks
+                    loadTileBlocks(golem, currentTileOrigin);
+                    tileBlocksLoaded = false;
                 }
             }
         }
 
-        // Check if finished building (no more pending blocks and WFC is done)
-        if (treeWFCBuilder != null && treeWFCBuilder.isFinished() && !treeWFCBuilder.hasPendingBlocks()) {
-            golem.setBuildingPaths(false);
+        // Load tile blocks into planner if needed
+        if (currentTileOrigin != null && !tileBlocksLoaded && !currentTileBlocks.isEmpty()) {
+            planner.setBlocks(new ArrayList<>(currentTileBlocks.keySet()));
+            tileBlocksLoaded = true;
+        }
+
+        // No current tile, check if done
+        if (currentTileOrigin == null) {
+            if (treeWFCBuilder != null && treeWFCBuilder.isFinished() && !treeWFCBuilder.hasPendingBlocks()) {
+                golem.setBuildingPaths(false);
+            }
+            return;
+        }
+
+        // Tick with 2-tick pacing
+        if (!shouldPlaceThisTick()) {
+            return;
+        }
+
+        // Use planner to handle movement and placement
+        PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+            return placeTreeBlock(golem, pos, nextPos);
+        });
+
+        switch (result) {
+            case PLACED_BLOCK:
+                alternateHand();
+                break;
+
+            case COMPLETED:
+                // Tile complete, move to next
+                currentTileOrigin = null;
+                currentTileBlocks.clear();
+                tileBlocksLoaded = false;
+                break;
+
+            case DEFERRED:
+                // Block was deferred - check if it was due to inventory
+                // If so, mark waiting for resources
+                break;
+
+            case WORKING:
+            case IDLE:
+                // Still working or nothing to do
+                break;
         }
     }
 
-    private boolean placeTreeTile(GoldGolemEntity golem, BlockPos tileOriginPos) {
-        if (golem.getEntityWorld().isClient()) return true;
-        if (treeWFCBuilder == null) return true;
+    /**
+     * Load all blocks for a tile into the currentTileBlocks map.
+     */
+    private void loadTileBlocks(GoldGolemEntity golem, BlockPos tileOriginPos) {
+        currentTileBlocks.clear();
+
+        if (treeWFCBuilder == null) return;
 
         String tileId = treeWFCBuilder.getCollapsedTile(tileOriginPos);
-        if (tileId == null) return true;
+        if (tileId == null) return;
 
         TreeTile tile = treeWFCBuilder.getTile(tileId);
-        if (tile == null) return true;
+        if (tile == null) return;
 
-        // Track if we successfully placed at least one block, and if we failed due to inventory
-        boolean placedAny = false;
-        boolean inventoryDepleted = false;
-
-        // Place all blocks in the tile
+        // Collect all blocks in the tile
         int tileSize = tile.size;
         for (int dx = 0; dx < tileSize; dx++) {
             for (int dy = 0; dy < tileSize; dy++) {
@@ -334,42 +383,53 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
                     // Sample from gradient for this block type
                     BlockState finalState = sampleTreeGradient(golem, targetState, placePos);
-
-                    // Consume from inventory
-                    String blockIdToConsume = Registries.BLOCK.getId(finalState.getBlock()).toString();
-                    if (!golem.consumeBlockFromInventory(blockIdToConsume)) {
-                        // No blocks in inventory - mark as depleted
-                        inventoryDepleted = true;
-                        continue;
-                    }
-
-                    // Place the block
-                    golem.getEntityWorld().setBlockState(placePos, finalState, 3);
-                    placedAny = true;
-
-                    // Spawn particles
-                    if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.HAPPY_VILLAGER,
-                            placePos.getX() + 0.5, placePos.getY() + 0.5, placePos.getZ() + 0.5,
-                            3, 0.3, 0.3, 0.3, 0.0);
-                    }
+                    currentTileBlocks.put(placePos, finalState);
                 }
             }
         }
+    }
 
-        // If we depleted inventory and couldn't place anything this tile, fail
-        if (inventoryDepleted && !placedAny) {
-            return false; // Signal inventory depletion
+    /**
+     * Place a single tree block.
+     * @return true if the block was placed successfully
+     */
+    private boolean placeTreeBlock(GoldGolemEntity golem, BlockPos pos, BlockPos nextPos) {
+        BlockState stateToPlace = currentTileBlocks.get(pos);
+        if (stateToPlace == null) return false;
+
+        // Consume from inventory
+        String blockIdToConsume = Registries.BLOCK.getId(stateToPlace.getBlock()).toString();
+        if (!golem.consumeBlockFromInventory(blockIdToConsume)) {
+            // No blocks in inventory - mark as depleted and waiting
+            golem.setBuildingPaths(false);
+            treeWaitingForInventory = true;
+
+            // Show angry villager particles
+            if (golem.getEntityWorld() instanceof ServerWorld sw) {
+                sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
+                    golem.getX(), golem.getY() + 2.0, golem.getZ(),
+                    5, 0.3, 0.3, 0.3, 0.0);
+            }
+            return false;
         }
 
-        // Update hand animations (use first block of tile for visual)
-        if (placedAny) {
-            golem.setLeftHandTargetPos(Optional.of(tileOriginPos));
-            golem.setLeftArmHasTarget(true);
-            golem.setLeftHandAnimationTick(0);
+        // Place the block
+        golem.getEntityWorld().setBlockState(pos, stateToPlace, 3);
+        currentTileBlocks.remove(pos);
+
+        // Spawn particles
+        if (golem.getEntityWorld() instanceof ServerWorld sw) {
+            sw.spawnParticles(ParticleTypes.HAPPY_VILLAGER,
+                pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                3, 0.3, 0.3, 0.3, 0.0);
         }
 
-        return true; // Success (or partial success is okay)
+        // Update hand animations
+        golem.setLeftHandTargetPos(Optional.of(pos));
+        golem.setLeftArmHasTarget(true);
+        golem.setLeftHandAnimationTick(0);
+
+        return true;
     }
 
     private BlockState sampleTreeGradient(GoldGolemEntity golem, BlockState originalState, BlockPos pos) {

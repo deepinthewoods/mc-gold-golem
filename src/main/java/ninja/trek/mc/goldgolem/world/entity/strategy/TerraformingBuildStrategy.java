@@ -16,7 +16,8 @@ import java.util.*;
 
 /**
  * Strategy for Terraforming mode.
- * Fills in a shell around skeleton blocks using alpha shape detection.
+ * Uses PlacementPlanner for reach-aware block placement - the golem moves
+ * within reach of each block before placing it.
  */
 public class TerraformingBuildStrategy extends AbstractBuildStrategy {
 
@@ -26,10 +27,16 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     private Set<Block> skeletonTypes = null;
     private Map<Integer, List<BlockPos>> shellByLayer = null;
     private int currentY = 0;
-    private int layerProgress = 0;
     private BlockPos startPos = null;
     private int minY = 0;
     private int maxY = 0;
+
+    // PlacementPlanner for reach-aware building
+    private PlacementPlanner planner = null;
+    private boolean layerLoaded = false;
+
+    // Cache for block states (position -> state to place)
+    private Map<BlockPos, BlockState> layerBlockStates = new HashMap<>();
 
     @Override
     public BuildMode getMode() {
@@ -44,6 +51,9 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     @Override
     public void initialize(GoldGolemEntity golem) {
         super.initialize(golem);
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
     }
 
     @Override
@@ -83,7 +93,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("MinY", minY);
         nbt.putInt("MaxY", maxY);
         nbt.putInt("CurrentY", currentY);
-        nbt.putInt("LayerProgress", layerProgress);
+        nbt.putBoolean("LayerLoaded", layerLoaded);
 
         // Save skeleton blocks
         if (skeletonBlocks != null && !skeletonBlocks.isEmpty()) {
@@ -109,6 +119,13 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             }
         } else {
             nbt.putInt("SkelTypesCount", 0);
+        }
+
+        // Save planner state
+        if (planner != null) {
+            NbtCompound plannerNbt = new NbtCompound();
+            planner.writeNbt(plannerNbt);
+            nbt.put("Planner", plannerNbt);
         }
     }
 
@@ -140,7 +157,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         minY = nbt.getInt("MinY", 0);
         maxY = nbt.getInt("MaxY", 0);
         currentY = nbt.getInt("CurrentY", 0);
-        layerProgress = nbt.getInt("LayerProgress", 0);
+        layerLoaded = nbt.getBoolean("LayerLoaded", false);
 
         // Load skeleton blocks
         int skelCount = nbt.getInt("SkeletonCount", 0);
@@ -203,7 +220,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         rebuildShell();
 
         this.currentY = minY;
-        this.layerProgress = 0;
+        this.layerLoaded = false;
     }
 
     /**
@@ -236,7 +253,11 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
      */
     public void clearState() {
         currentY = 0;
-        layerProgress = 0;
+        layerLoaded = false;
+        layerBlockStates.clear();
+        if (planner != null) {
+            planner.clear();
+        }
     }
 
     // ========== Getters ==========
@@ -247,7 +268,6 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     public Set<Block> getSkeletonTypes() { return skeletonTypes; }
     public Map<Integer, List<BlockPos>> getShellByLayer() { return shellByLayer; }
     public int getCurrentY() { return currentY; }
-    public int getLayerProgress() { return layerProgress; }
     public int getMinY() { return minY; }
     public int getMaxY() { return maxY; }
 
@@ -268,7 +288,6 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         view.putInt("TFormMinY", minY);
         view.putInt("TFormMaxY", maxY);
         view.putInt("TFormCurrentY", currentY);
-        view.putInt("TFormLayerProgress", layerProgress);
 
         // Skeleton blocks
         if (skeletonBlocks != null && !skeletonBlocks.isEmpty()) {
@@ -325,7 +344,6 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         minY = view.getInt("TFormMinY", 0);
         maxY = view.getInt("TFormMaxY", 0);
         currentY = view.getInt("TFormCurrentY", 0);
-        layerProgress = view.getInt("TFormLayerProgress", 0);
 
         // Load skeleton blocks
         int skelCount = view.getInt("TFormSkeletonCount", 0);
@@ -382,6 +400,11 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             return;
         }
 
+        // Ensure planner exists
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
+
         // STATE: WAITING - idle at start position until activated with gold nugget
         if (!golem.isBuildingPaths()) {
             if (startPos != null) {
@@ -404,7 +427,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         // If no shell at this Y level, move to next level
         if (currentLayer == null || currentLayer.isEmpty()) {
             currentY++;
-            layerProgress = 0;
+            layerLoaded = false;
 
             // Check if all layers are complete
             if (currentY > maxY) {
@@ -413,62 +436,74 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             return;
         }
 
-        // If layer is complete, move to next layer
-        if (layerProgress >= currentLayer.size()) {
-            layerProgress = 0;
-            currentY++;
-
-            if (currentY > maxY) {
-                golem.setBuildingPaths(false);
-            }
-            return;
-        }
-
-        // Get current target position
-        BlockPos targetPos = currentLayer.get(layerProgress);
-
-        // Navigate to position
-        double distSq = golem.getBlockPos().getSquaredDistance(targetPos);
-        if (distSq > 16.0) {
-            golem.getNavigation().startMovingTo(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5, 1.0);
-
-            // Stuck detection
-            if (golem.getNavigation().isIdle()) {
-                stuckTicks++;
-                if (stuckTicks >= 20) {
-                    // Teleport
-                    golem.refreshPositionAndAngles(targetPos.getX() + 0.5, targetPos.getY(), targetPos.getZ() + 0.5,
-                            golem.getYaw(), golem.getPitch());
-                    if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, golem.getX(), golem.getY() + 1.0, golem.getZ(),
-                                20, 0.5, 0.5, 0.5, 0.1);
-                    }
-                    stuckTicks = 0;
+        // Load layer into planner if not done
+        if (!layerLoaded) {
+            // Pre-compute block states for this layer
+            layerBlockStates.clear();
+            for (BlockPos pos : currentLayer) {
+                BlockState toPlace = sampleTerraformingGradient(golem, pos);
+                if (toPlace != null) {
+                    layerBlockStates.put(pos, toPlace);
                 }
-            } else {
-                stuckTicks = 0;
             }
+
+            planner.setBlocks(new ArrayList<>(layerBlockStates.keySet()));
+            layerLoaded = true;
+        }
+
+        // Tick with 2-tick pacing
+        if (!shouldPlaceThisTick()) {
             return;
         }
 
-        stuckTicks = 0;
+        // Use planner to handle movement and placement
+        PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+            return placeTerraformBlock(golem, pos, nextPos);
+        });
 
-        // At position - place block every 2 ticks
-        if (placementTickCounter % 2 == 0) {
-            // Remove skeleton block if present
-            BlockState currentState = golem.getEntityWorld().getBlockState(targetPos);
-            if (skeletonTypes != null && skeletonTypes.contains(currentState.getBlock())) {
-                golem.getEntityWorld().breakBlock(targetPos, false);
-            }
+        switch (result) {
+            case PLACED_BLOCK:
+                alternateHand();
+                break;
 
-            // Place shell block using slope-based gradient sampling
-            BlockState toPlace = sampleTerraformingGradient(golem, targetPos);
-            if (toPlace != null) {
-                golem.placeBlockFromInventory(targetPos, toPlace, targetPos.up());
-            }
+            case COMPLETED:
+                // Layer complete, move to next
+                currentY++;
+                layerLoaded = false;
 
-            layerProgress++;
+                if (currentY > maxY) {
+                    golem.setBuildingPaths(false);
+                }
+                break;
+
+            case DEFERRED:
+                // Block was deferred, planner will retry later
+                break;
+
+            case WORKING:
+            case IDLE:
+                // Still working or nothing to do
+                break;
         }
+    }
+
+    /**
+     * Place a terraforming block at the given position.
+     * @return true if the block was placed successfully
+     */
+    private boolean placeTerraformBlock(GoldGolemEntity golem, BlockPos pos, BlockPos nextPos) {
+        BlockState toPlace = layerBlockStates.get(pos);
+        if (toPlace == null) return false;
+
+        // Remove skeleton block if present
+        BlockState currentState = golem.getEntityWorld().getBlockState(pos);
+        if (skeletonTypes != null && skeletonTypes.contains(currentState.getBlock())) {
+            golem.getEntityWorld().breakBlock(pos, false);
+        }
+
+        golem.placeBlockFromInventory(pos, toPlace, nextPos);
+        layerBlockStates.remove(pos);
+        return true;
     }
 
     /**
