@@ -18,6 +18,7 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
     protected int stuckTicks = 0;
     protected int placementTickCounter = 0;
     protected boolean leftHandActive = true;
+    protected boolean waitingForResources = false;
 
     @Override
     public void setEntity(GoldGolemEntity entity) {
@@ -93,6 +94,16 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      */
     protected boolean isLeftHandActive() {
         return leftHandActive;
+    }
+
+    @Override
+    public boolean isWaitingForResources() {
+        return waitingForResources;
+    }
+
+    @Override
+    public void setWaitingForResources(boolean waiting) {
+        waitingForResources = waiting;
     }
 
     /**
@@ -182,12 +193,14 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
         this.entity = golem;
         stuckTicks = 0;
         placementTickCounter = 0;
+        waitingForResources = false;
     }
 
     @Override
     public void cleanup(GoldGolemEntity golem) {
         stuckTicks = 0;
         placementTickCounter = 0;
+        waitingForResources = false;
     }
 
     @Override

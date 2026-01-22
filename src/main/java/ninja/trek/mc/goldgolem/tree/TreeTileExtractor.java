@@ -20,6 +20,14 @@ public final class TreeTileExtractor {
      * Returns a TreeTileCache containing all tiles and adjacency rules.
      */
     public static TreeTileCache extract(World world, TreeDefinition def, TilingPreset preset, BlockPos origin) {
+        return extract(world, def, preset, origin, null);
+    }
+
+    /**
+     * Extracts tiles using stored block states when available (for resurrection snapshots).
+     */
+    public static TreeTileCache extract(World world, TreeDefinition def, TilingPreset preset, BlockPos origin,
+                                        List<Map<BlockPos, BlockState>> storedModuleBlocks) {
         int tileSize = preset.getSize();
         List<TreeTile> allTiles = new ArrayList<>();
         Map<Long, Set<String>> adjacencyRules = new HashMap<>();
@@ -32,10 +40,18 @@ public final class TreeTileExtractor {
 
             // Build a map of relative positions to block states for quick lookup
             Map<BlockPos, BlockState> moduleBlocks = new HashMap<>();
-            for (BlockPos relPos : module.voxels) {
-                BlockPos absPos = origin.add(relPos);
-                BlockState state = world.getBlockState(absPos);
-                moduleBlocks.put(relPos, state);
+            if (storedModuleBlocks != null && moduleIdx < storedModuleBlocks.size()) {
+                Map<BlockPos, BlockState> stored = storedModuleBlocks.get(moduleIdx);
+                if (stored != null && !stored.isEmpty()) {
+                    moduleBlocks.putAll(stored);
+                }
+            }
+            if (moduleBlocks.isEmpty()) {
+                for (BlockPos relPos : module.voxels) {
+                    BlockPos absPos = origin.add(relPos);
+                    BlockState state = world.getBlockState(absPos);
+                    moduleBlocks.put(relPos, state);
+                }
             }
 
             // Find bounds of this module

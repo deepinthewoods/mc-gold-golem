@@ -17,6 +17,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     private final int golemRows;
     private final boolean sliderEnabled;
     private final int sliderMode; // 0=none, 1=path, 2=excavation, 3=mining
+    private final String jsonName;
 
     // Client-side constructor (from ExtendedScreenHandlerType buffer)
     public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, GolemOpenData data) {
@@ -28,6 +29,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.slider(), titleLine);
         this.sliderEnabled = data.sliderEnabled();
         this.sliderMode = data.slider();
+        this.jsonName = data.jsonName() == null ? "" : data.jsonName();
         this.golemInventory = new SimpleInventory(this.golemSlotCount);
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -42,6 +44,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.slider(), 10);
         this.sliderEnabled = data.sliderEnabled();
         this.sliderMode = data.slider();
+        this.jsonName = data.jsonName() == null ? "" : data.jsonName();
         this.golemInventory = golemInventory;
         this.golemInventory.onOpen(playerInventory.player);
         setupSlots(playerInventory);
@@ -85,6 +88,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     public int getGolemRows() { return golemRows; }
     public boolean isSliderEnabled() { return sliderEnabled; }
     public int getSliderMode() { return sliderMode; }
+    public String getJsonName() { return jsonName; }
 
     @Override
     public void onClosed(PlayerEntity player) {

@@ -387,6 +387,10 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
+            return FeedResult.RESUMED;
+        }
         // Terraforming mode: always starts when nugget is fed
         return FeedResult.STARTED;
     }
@@ -501,7 +505,10 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             golem.getEntityWorld().breakBlock(pos, false);
         }
 
-        golem.placeBlockFromInventory(pos, toPlace, nextPos);
+        boolean placed = golem.placeBlockFromInventory(pos, toPlace, nextPos, isLeftHandActive());
+        if (!placed) {
+            return false;
+        }
         layerBlockStates.remove(pos);
         return true;
     }

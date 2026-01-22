@@ -70,6 +70,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private int towerLayers = 2; // 1-256 layers (synced from server)
     private TowerLayersRangeSlider towerLayersSlider;
     private TextFieldWidget towerLayersField;
+    private ButtonWidget towerOriginResetButton;
     private boolean updatingTowerLayersField = false;
     private boolean hasTowerModeData = false;
 
@@ -685,12 +686,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         int layersFieldW = 36;
         int layersGap = 6;
         int layersFieldH = 12;
+        int resetButtonW = 12;
+        int resetButtonGap = 4;
         int left = this.x + 8;
         int totalW = this.backgroundWidth - 16;
-        int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap);
-        int layersSliderX = left;
+        int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap - resetButtonW - resetButtonGap);
+        int layersSliderX = left + resetButtonW + resetButtonGap;
         int layersFieldX = left + layersSliderW + layersGap;
         int layersFieldY = getTowerLayersFieldY();
+        int resetButtonX = left;
         if (towerLayersSlider == null) {
             towerLayersSlider = new TowerLayersRangeSlider(layersSliderX, layersFieldY, layersSliderW, layersFieldH, towerLayers);
             this.addDrawableChild(towerLayersSlider);
@@ -711,6 +715,17 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             towerLayersField.setDimensions(layersFieldW, layersFieldH);
             towerLayersField.setX(layersFieldX);
             towerLayersField.setY(layersFieldY);
+        }
+        if (towerOriginResetButton == null) {
+            towerOriginResetButton = ButtonWidget.builder(Text.literal("R"), b ->
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.ResetTowerOriginC2SPayload(getEntityId())))
+                .dimensions(resetButtonX, layersFieldY, resetButtonW, layersFieldH)
+                .build();
+            this.addDrawableChild(towerOriginResetButton);
+        } else {
+            towerOriginResetButton.setDimensions(resetButtonW, layersFieldH);
+            towerOriginResetButton.setX(resetButtonX);
+            towerOriginResetButton.setY(layersFieldY);
         }
     }
 
@@ -1263,12 +1278,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 int layersFieldW = 36;
                 int layersGap = 6;
                 int layersFieldH = 12;
+                int resetButtonW = 12;
+                int resetButtonGap = 4;
                 int left = this.x + 8;
                 int totalW = this.backgroundWidth - 16;
-                int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap);
-                int layersSliderX = left;
+                int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap - resetButtonW - resetButtonGap);
+                int layersSliderX = left + resetButtonW + resetButtonGap;
                 int layersFieldX = left + layersSliderW + layersGap;
                 int layersFieldY = getTowerLayersFieldY();
+                int resetButtonX = left;
                 towerLayersSlider = new TowerLayersRangeSlider(layersSliderX, layersFieldY, layersSliderW, layersFieldH, towerLayers);
                 this.addDrawableChild(towerLayersSlider);
                 towerLayersField = new TextFieldWidget(this.textRenderer, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Text.literal("Layers"));
@@ -1278,6 +1296,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 setTowerLayersFieldText(towerLayers);
                 setTowerLayersSliderValue(towerLayers);
                 this.addDrawableChild(towerLayersField);
+                towerOriginResetButton = ButtonWidget.builder(Text.literal("R"), b ->
+                        ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.ResetTowerOriginC2SPayload(getEntityId())))
+                    .dimensions(resetButtonX, layersFieldY, resetButtonW, layersFieldH)
+                    .build();
+                this.addDrawableChild(towerOriginResetButton);
             }
 
             // Tree mode: add tiling preset button
@@ -1459,6 +1482,13 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         int labelX = Math.max(2, Math.min(this.x + 8, this.width - labelWidth - 2));
         int labelY = Math.max(2, this.y + 6);
         context.drawText(this.textRenderer, Text.literal(modeName), labelX, labelY, 0xFF404040, false);
+
+        String jsonName = this.handler.getJsonName();
+        if (jsonName != null && !jsonName.isBlank()) {
+            int nameWidth = this.textRenderer.getWidth(jsonName);
+            int nameX = Math.max(2, Math.min(this.x + this.backgroundWidth - 8 - nameWidth, this.width - nameWidth - 2));
+            context.drawText(this.textRenderer, Text.literal(jsonName), nameX, labelY, 0xFF404040, false);
+        }
     }
 
     @Override

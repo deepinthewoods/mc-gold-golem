@@ -316,6 +316,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
+            return FeedResult.RESUMED;
+        }
         if (isIdleAtStart()) {
             startFromIdle();
             return FeedResult.STARTED;
@@ -547,6 +551,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
                     break;
                 }
             }
+            if (buildingBlockType == null) {
+                entity.handleMissingBuildingBlock();
+                return;
+            }
         }
 
         if (buildingBlockType != null) {
@@ -558,10 +566,13 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
                 if (blockId.equals(buildingBlockType)) {
                     BlockState state = blockItem.getBlock().getDefaultState();
                     entity.getEntityWorld().setBlockState(below, state);
+                    entity.beginHandAnimation(isLeftHandActive(), below, null);
+                    alternateHand();
                     stack.decrement(1);
                     return;
                 }
             }
+            entity.handleMissingBuildingBlock();
         }
     }
 

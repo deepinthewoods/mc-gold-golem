@@ -6,6 +6,8 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
@@ -15,12 +17,14 @@ import java.util.*;
  * handles deferred blocks, and teleportation as last resort.
  */
 public class PlacementPlanner {
+    private static final Logger LOGGER = LoggerFactory.getLogger(PlacementPlanner.class);
 
     // Configuration
-    private static final double MAX_REACH = 4.5;  // Similar to player reach
+    private static final double MAX_REACH = 6.0;  // Extended reach for golem building
     private static final int MAX_DEFER_ATTEMPTS = 3;
     private static final int STUCK_THRESHOLD_TICKS = 20;
     private static final int SUFFOCATION_TELEPORT_RADIUS = 6;
+    private static final double MIN_MOVE_DIST_SQ = 0.0004;
 
     // Reference to golem
     private final GoldGolemEntity golem;
@@ -35,6 +39,7 @@ public class PlacementPlanner {
     private BlockPos currentStandPos = null;
     private int stuckTicks = 0;
     private boolean navigatingToStandPos = false;
+    private Vec3d lastNavPos = null;
 
     /**
      * Represents a block that was deferred because it couldn't be reached.
@@ -87,6 +92,7 @@ public class PlacementPlanner {
         currentStandPos = null;
         stuckTicks = 0;
         navigatingToStandPos = false;
+        lastNavPos = null;
 
         // Sort blocks by Y level (bottom to top), then by distance from golem
         List<BlockPos> sorted = new ArrayList<>(blocks);
@@ -152,18 +158,30 @@ public class PlacementPlanner {
                 return TickResult.COMPLETED;
             }
 
-            // Find where to stand to place this block
-            PlacementPosition placement = findPlacementPosition(currentTarget);
-            if (placement == null) {
-                // Can't reach this block, defer it
-                defer(currentTarget);
-                currentTarget = null;
-                return TickResult.DEFERRED;
-            }
+            // If already in reach, place without moving.
+            Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
+            if (isWithinReach(golemPos, currentTarget)) {
+                currentStandPos = golem.getBlockPos();
+                navigatingToStandPos = false;
+                stuckTicks = 0;
+                lastNavPos = null;
+            } else {
+                // Find where to stand to place this block
+                PlacementPosition placement = findPlacementPosition(currentTarget);
+                if (placement == null) {
+                    // Can't reach this block, defer it
+                    LOGGER.warn("Placement deferred: no stand positions for target={} golemPos={}",
+                            currentTarget, golem.getBlockPos());
+                    defer(currentTarget);
+                    currentTarget = null;
+                    return TickResult.DEFERRED;
+                }
 
-            currentStandPos = placement.standPosition;
-            navigatingToStandPos = true;
-            stuckTicks = 0;
+                currentStandPos = placement.standPosition;
+                navigatingToStandPos = true;
+                stuckTicks = 0;
+                lastNavPos = null;
+            }
         }
 
         // Navigate to stand position
@@ -175,33 +193,58 @@ public class PlacementPlanner {
             double distY = Math.abs(dy);
 
             // Check if we're close enough to place
-            if (distSq < 1.5 && distY < 2.0) {
+            Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
+            boolean inReach = currentTarget != null && isWithinReach(golemPos, currentTarget);
+            if (inReach) {
                 navigatingToStandPos = false;
                 stuckTicks = 0;
+                golem.getNavigation().stop();
             } else {
                 // Keep navigating
-                double ty = golem.computeGroundTargetY(new Vec3d(currentStandPos.getX() + 0.5, currentStandPos.getY(), currentStandPos.getZ() + 0.5));
-                golem.getNavigation().startMovingTo(currentStandPos.getX() + 0.5, ty, currentStandPos.getZ() + 0.5, 1.1);
+                boolean started = golem.getNavigation().startMovingTo(
+                        currentStandPos.getX() + 0.5, currentStandPos.getY(), currentStandPos.getZ() + 0.5, 1.1);
+                if (!started) {
+                    if (currentStandPos != null && currentStandPos.equals(golem.getBlockPos())) {
+                        LOGGER.warn("Placement navigation failed: already at standPos={} target={}",
+                                currentStandPos, currentTarget);
+                        navigatingToStandPos = false;
+                        stuckTicks = 0;
+                        lastNavPos = null;
+                        return TickResult.WORKING;
+                    }
+                    LOGGER.warn("Placement teleport: navigation start failed for standPos={} target={}",
+                            currentStandPos, currentTarget);
+                    teleportToStandPosition(currentStandPos);
+                    stuckTicks = 0;
+                    navigatingToStandPos = false;
+                    lastNavPos = null;
+                    return TickResult.WORKING;
+                }
 
                 // Check if stuck
-                if (golem.getNavigation().isIdle() && distSq > 1.5) {
+                Vec3d now = new Vec3d(golem.getX(), golem.getY(), golem.getZ());
+                double movedSq = lastNavPos == null ? Double.POSITIVE_INFINITY : now.squaredDistanceTo(lastNavPos);
+                boolean idle = golem.getNavigation().isIdle();
+                if ((!started || idle || movedSq < MIN_MOVE_DIST_SQ) && !inReach) {
                     stuckTicks++;
                     if (stuckTicks >= STUCK_THRESHOLD_TICKS) {
                         // Try to teleport to stand position
                         teleportToStandPosition(currentStandPos);
                         stuckTicks = 0;
                         navigatingToStandPos = false;
+                        lastNavPos = null;
                     }
                 } else {
                     stuckTicks = 0;
                 }
+                lastNavPos = now;
 
                 return TickResult.WORKING;
             }
         }
 
         // We're at the stand position, place the block if within reach
-        Vec3d golemPos = new Vec3d(golem.getX(), golem.getY(), golem.getZ());
+        Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
         if (currentTarget != null && isWithinReach(golemPos, currentTarget)) {
             // Place the block
             BlockPos nextTarget = peekNextTarget();
@@ -214,17 +257,24 @@ public class PlacementPlanner {
                 return TickResult.PLACED_BLOCK;
             } else {
                 // Couldn't place (maybe no inventory), defer
+                LOGGER.warn("Placement deferred: blockPlacer rejected target={} standPos={}",
+                        currentTarget, currentStandPos);
                 defer(currentTarget);
                 currentTarget = null;
                 currentStandPos = null;
                 return TickResult.DEFERRED;
             }
         } else if (currentTarget != null) {
-            // Not within reach even though we thought we would be - defer
-            defer(currentTarget);
-            currentTarget = null;
-            currentStandPos = null;
-            return TickResult.DEFERRED;
+            // Not within reach even though we thought we would be - teleport and retry
+            LOGGER.warn("Placement teleport: target out of reach target={} standPos={} golemPos={}",
+                    currentTarget, currentStandPos, golem.getBlockPos());
+            if (currentStandPos != null && !currentStandPos.equals(golem.getBlockPos())) {
+                teleportToStandPosition(currentStandPos);
+            }
+            navigatingToStandPos = false;
+            stuckTicks = 0;
+            lastNavPos = null;
+            return TickResult.WORKING;
         }
 
         return TickResult.IDLE;
@@ -253,8 +303,12 @@ public class PlacementPlanner {
 
         BlockPos best = null;
         double bestScore = Double.MAX_VALUE;
+        BlockPos fallback = null;
 
         for (BlockPos pos : remainingBlocks) {
+            if (fallback == null) {
+                fallback = pos;
+            }
             // Skip if we can't possibly reach it (quick check)
             PlacementPosition placement = findPlacementPosition(pos);
             if (placement == null) continue;
@@ -272,8 +326,13 @@ public class PlacementPlanner {
 
         if (best != null) {
             remainingBlocks.remove(best);
+            return best;
         }
-        return best;
+        if (fallback != null) {
+            remainingBlocks.remove(fallback);
+            return fallback;
+        }
+        return null;
     }
 
     private BlockPos peekNextTarget() {
@@ -328,6 +387,7 @@ public class PlacementPlanner {
         navigatingToStandPos = false;
         stuckTicks = 0;
         currentStandPos = null;
+        lastNavPos = null;
         if (currentTarget != null) {
             remainingBlocks.addFirst(currentTarget);
             currentTarget = null;
@@ -559,6 +619,7 @@ public class PlacementPlanner {
         currentStandPos = null;
         stuckTicks = 0;
         navigatingToStandPos = false;
+        lastNavPos = null;
     }
 
     /**

@@ -175,6 +175,10 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
+            return FeedResult.RESUMED;
+        }
         // Path mode: always starts when nugget is fed
         return FeedResult.STARTED;
     }

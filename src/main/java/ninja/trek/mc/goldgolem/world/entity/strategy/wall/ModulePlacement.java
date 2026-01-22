@@ -174,7 +174,10 @@ public class ModulePlacement {
         BlockState stateToPlace = blockStatesMap.get(pos);
         if (stateToPlace == null) return false;
 
-        strategy.placeBlockStateAt(golem, pos.getX(), pos.getY(), pos.getZ(), stateToPlace, rot, mirror);
+        boolean placed = strategy.placeBlockStateAt(golem, pos.getX(), pos.getY(), pos.getZ(), stateToPlace, rot, mirror, nextPos);
+        if (!placed) {
+            return false;
+        }
 
         // Remove from map so we don't place again
         blockStatesMap.remove(pos);
@@ -232,7 +235,7 @@ public class ModulePlacement {
                 }
             }
 
-            strategy.placeBlockStateAt(golem, wx, wy, wz, stateToPlace, rot, mirror);
+            strategy.placeBlockStateAt(golem, wx, wy, wz, stateToPlace, rot, mirror, null);
             ops++;
         }
     }
@@ -272,7 +275,7 @@ public class ModulePlacement {
             if (ident == null) continue;
             var block = net.minecraft.registry.Registries.BLOCK.get(ident);
             if (block == null) continue;
-            strategy.placeBlockStateAt(golem, wx, wy, wz, block.getDefaultState(), rot, mirror);
+            strategy.placeBlockStateAt(golem, wx, wy, wz, block.getDefaultState(), rot, mirror, null);
         }
     }
 

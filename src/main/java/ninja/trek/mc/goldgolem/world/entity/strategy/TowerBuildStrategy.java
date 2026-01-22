@@ -7,6 +7,8 @@ import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,6 +19,7 @@ import java.util.List;
  * within reach of each block before placing it, similar to how a player would build.
  */
 public class TowerBuildStrategy extends AbstractBuildStrategy {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TowerBuildStrategy.class);
 
     // Tower building state
     private int currentLayerY = 0;           // Current Y layer being processed
@@ -121,6 +124,10 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
+            return FeedResult.RESUMED;
+        }
         // Tower mode: always starts when nugget is fed
         return FeedResult.STARTED;
     }
@@ -129,6 +136,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     public void handleOwnerDamage() {
         // Clear tower mode state
         clearState();
+    }
+
+    @Override
+    public void onConfigurationChanged(String configKey) {
+        if ("towerOrigin".equals(configKey)) {
+            clearState();
+        }
     }
 
     // ========== Main tick logic ==========
@@ -140,7 +154,11 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         BlockPos origin = golem.getTowerOrigin();
         int height = golem.getTowerHeight();
 
-        if (template == null || origin == null) return;
+        if (template == null || origin == null) {
+            LOGGER.warn("Tower build halted: missing template or origin (template={}, origin={})",
+                    template != null, origin);
+            return;
+        }
 
         // Ensure planner exists
         if (planner == null) {
@@ -212,11 +230,12 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         // Determine which module repetition we're in and the Y offset within that module
         int moduleIndex = layerY / moduleHeight;
         int yWithinModule = layerY % moduleHeight;
+        int relYTarget = template.minY + yWithinModule;
 
         // Collect all voxels at this Y level within the current module
         for (var voxel : template.voxels) {
             int relY = voxel.rel.getY();
-            if (relY == yWithinModule) {
+            if (relY == relYTarget) {
                 // Calculate absolute position: origin + module offset + voxel relative position
                 int absoluteY = origin.getY() + (moduleIndex * moduleHeight) + relY;
                 BlockPos absPos = new BlockPos(
@@ -240,15 +259,17 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
         // Get the original block state from the template
         BlockState targetState = getTowerBlockStateAt(template, origin, pos);
-        if (targetState == null) return false;
+        if (targetState == null) {
+            LOGGER.warn("Tower placement failed: missing target state at pos={} origin={}", pos, origin);
+            return false;
+        }
 
         // Use gradient sampling to potentially replace with a different block
         String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
         Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
         if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
             // No group mapping, place original block
-            golem.placeBlockFromInventory(pos, targetState, nextPos);
-            return true;
+            return golem.placeBlockFromInventory(pos, targetState, nextPos, isLeftHandActive());
         }
 
         // Sample gradient based on Y position in total tower (not module)
@@ -262,15 +283,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             if (sampledId != null && !sampledId.isEmpty()) {
                 BlockState sampledState = golem.getBlockStateFromId(sampledId);
                 if (sampledState != null) {
-                    golem.placeBlockFromInventory(pos, sampledState, nextPos);
-                    return true;
+                    return golem.placeBlockFromInventory(pos, sampledState, nextPos, isLeftHandActive());
                 }
             }
         }
 
         // Fallback: place original block
-        golem.placeBlockFromInventory(pos, targetState, nextPos);
-        return true;
+        return golem.placeBlockFromInventory(pos, targetState, nextPos, isLeftHandActive());
     }
 
     private BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
@@ -285,7 +304,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         int relZ = pos.getZ() - origin.getZ();
 
         // Determine Y within module
-        int yWithinModule = relY % moduleHeight;
+        int yWithinModule = Math.floorMod(relY - template.minY, moduleHeight) + template.minY;
 
         // Find matching voxel in template
         for (var voxel : template.voxels) {

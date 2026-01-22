@@ -1,13 +1,16 @@
 package ninja.trek.mc.goldgolem.summon;
 
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.SnowBlock;
 import net.minecraft.block.CarvedPumpkinBlock;
+import net.minecraft.component.DataComponentTypes;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -32,6 +35,27 @@ public class PumpkinSummoning {
         if (!world.getBlockState(below).isOf(Blocks.GOLD_BLOCK)) return ActionResult.PASS;
 
         if (world.isClient()) return ActionResult.SUCCESS;
+
+        String desiredName = null;
+        Text customName = stack.get(DataComponentTypes.CUSTOM_NAME);
+        if (customName != null) {
+            desiredName = customName.getString();
+        }
+        if (desiredName != null && !desiredName.isBlank()) {
+            java.nio.file.Path snapshotPath = GoldGolemEntity.findSnapshotPath(desiredName);
+            if (snapshotPath != null) {
+                GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+                golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
+                golem.setOwner(player);
+                boolean applied = golem.applySnapshotFromPath((ServerWorld) world, snapshotPath, below, player, desiredName);
+                if (applied) {
+                    world.breakBlock(below, false, player);
+                    ((ServerWorld) world).spawnEntity(golem);
+                    if (!player.isCreative()) stack.decrement(1);
+                    return ActionResult.SUCCESS;
+                }
+            }
+        }
 
         // Check for Mining/Excavation Mode: check chest placement
         net.minecraft.util.math.Direction chestDirection1 = null;
@@ -233,6 +257,18 @@ public class PumpkinSummoning {
                 // Non-fatal; continue without external snapshot
                 jsonRel = null;
             }
+
+            // Capture module block states for resurrection snapshots
+            java.util.List<java.util.Map<BlockPos, BlockState>> moduleStates = new java.util.ArrayList<>();
+            for (var module : def.modules) {
+                java.util.Map<BlockPos, BlockState> blocks = new java.util.HashMap<>();
+                for (BlockPos rel : module.voxels) {
+                    BlockPos abs = secondGoldPos.add(rel);
+                    blocks.put(rel, world.getBlockState(abs));
+                }
+                moduleStates.add(blocks);
+            }
+            golem.setTreeModuleBlockStates(moduleStates);
 
             // Set tree capture data on golem
             golem.setTreeCapture(def.modules, def.uniqueBlockIds, secondGoldPos, jsonRel);

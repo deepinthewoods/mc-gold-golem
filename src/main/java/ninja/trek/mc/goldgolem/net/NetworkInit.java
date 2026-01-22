@@ -18,6 +18,7 @@ public class NetworkInit {
         PayloadTypeRegistry.playC2S().register(SetGroupModeSlotC2SPayload.ID, SetGroupModeSlotC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
         PayloadTypeRegistry.playC2S().register(SetTowerHeightC2SPayload.ID, SetTowerHeightC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(ResetTowerOriginC2SPayload.ID, ResetTowerOriginC2SPayload.CODEC);
         PayloadTypeRegistry.playS2C().register(GroupModeBlockGroupsS2CPayload.ID, GroupModeBlockGroupsS2CPayload.CODEC);
 
         // === PATH/GRADIENT MODE PAYLOADS ===
@@ -120,6 +121,17 @@ public class NetworkInit {
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setTowerHeight(payload.height());
                     sendGroupModeState(player, golem, BuildMode.TOWER);
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(ResetTowerOriginC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTowerOrigin(golem.getBlockPos());
                 }
             });
         });

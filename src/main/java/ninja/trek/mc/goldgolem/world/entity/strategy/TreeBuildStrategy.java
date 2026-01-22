@@ -195,8 +195,8 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
-        if (treeWaitingForInventory) {
-            treeWaitingForInventory = false;
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
             return FeedResult.RESUMED;
         }
         return FeedResult.STARTED;
@@ -226,13 +226,13 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         if (treeModules.isEmpty() || treeOrigin == null) return;
 
         // If waiting for inventory, show angry particles and don't build
-        if (treeWaitingForInventory) {
-            // Show angry villager particles periodically
+        if (isWaitingForResources()) {
+            // Show thunder cloud particles periodically
             if (golem.age % 20 == 0) {
                 if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                    sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
+                    sw.spawnParticles(ParticleTypes.CLOUD,
                         golem.getX(), golem.getY() + 2.0, golem.getZ(),
-                        1, 0.2, 0.2, 0.2, 0.0);
+                        6, 0.4, 0.2, 0.4, 0.02);
                 }
             }
             // Don't do any building work while waiting
@@ -260,8 +260,10 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
                 // Extract tiles using current preset
                 TreeDefinition def = new TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds);
+                var stored = golem.getTreeModuleBlockStates();
                 treeTileCache = TreeTileExtractor.extract(
-                    golem.getEntityWorld(), def, treeTilingPreset, treeOrigin);
+                    golem.getEntityWorld(), def, treeTilingPreset, treeOrigin,
+                    (stored != null && !stored.isEmpty()) ? stored : null);
                 treeTilesCached = true;
 
                 if (treeTileCache.isEmpty()) {
@@ -401,15 +403,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         String blockIdToConsume = Registries.BLOCK.getId(stateToPlace.getBlock()).toString();
         if (!golem.consumeBlockFromInventory(blockIdToConsume)) {
             // No blocks in inventory - mark as depleted and waiting
-            golem.setBuildingPaths(false);
-            treeWaitingForInventory = true;
-
-            // Show angry villager particles
-            if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER,
-                    golem.getX(), golem.getY() + 2.0, golem.getZ(),
-                    5, 0.3, 0.3, 0.3, 0.0);
-            }
+            golem.handleMissingBuildingBlock();
             return false;
         }
 
@@ -425,9 +419,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Update hand animations
-        golem.setLeftHandTargetPos(Optional.of(pos));
-        golem.setLeftArmHasTarget(true);
-        golem.setLeftHandAnimationTick(0);
+        golem.beginHandAnimation(isLeftHandActive(), pos, nextPos);
 
         return true;
     }

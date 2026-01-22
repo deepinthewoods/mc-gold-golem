@@ -297,6 +297,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
+            return FeedResult.RESUMED;
+        }
         if (isIdleAtChest()) {
             startFromIdle();
             return FeedResult.STARTED;
@@ -528,6 +532,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
                     break;
                 }
             }
+            if (buildingBlockType == null) {
+                entity.handleMissingBuildingBlock();
+                return;
+            }
         }
 
         if (buildingBlockType != null) {
@@ -539,11 +547,14 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
                 if (blockId.equals(buildingBlockType)) {
                     BlockState state = blockItem.getBlock().getDefaultState();
                     entity.getEntityWorld().setBlockState(below, state);
+                    entity.beginHandAnimation(isLeftHandActive(), below, null);
+                    alternateHand();
                     stack.decrement(1);
                     inventory.setStack(i, stack);
                     return;
                 }
             }
+            entity.handleMissingBuildingBlock();
         }
     }
 

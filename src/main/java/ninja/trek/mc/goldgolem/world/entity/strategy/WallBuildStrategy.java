@@ -291,6 +291,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public FeedResult handleFeedInteraction(PlayerEntity player) {
+        if (isWaitingForResources()) {
+            setWaitingForResources(false);
+            return FeedResult.RESUMED;
+        }
         // Wall mode: always starts when nugget is fed
         return FeedResult.STARTED;
     }
@@ -475,20 +479,25 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return currentModulePlacement.placeBlockAt(golem, this, pos, nextPos);
     }
 
-    public void placeBlockStateAt(GoldGolemEntity golem, int wx, int wy, int wz, BlockState baseState, int rot, boolean mirror) {
+    public boolean placeBlockStateAt(GoldGolemEntity golem, int wx, int wy, int wz, BlockState baseState, int rot, boolean mirror) {
+        return placeBlockStateAt(golem, wx, wy, wz, baseState, rot, mirror, null);
+    }
+
+    public boolean placeBlockStateAt(GoldGolemEntity golem, int wx, int wy, int wz, BlockState baseState, int rot, boolean mirror, BlockPos nextPos) {
         var world = golem.getEntityWorld();
         BlockPos pos = new BlockPos(wx, wy, wz);
         net.minecraft.block.Block block = baseState.getBlock();
         var current = world.getBlockState(pos);
-        if (!current.isAir() && current.isOf(block)) return;
+        if (!current.isAir() && current.isOf(block)) return true;
 
         long key = pos.asLong();
-        if (!golem.recordPlaced(key)) return;
+        if (!golem.recordPlaced(key)) return false;
 
         int invSlot = golem.findItem(block.asItem());
         if (invSlot < 0) {
             golem.unrecordPlaced(key);
-            return;
+            golem.handleMissingBuildingBlock();
+            return false;
         }
 
         net.minecraft.util.BlockRotation rotation = switch (rot & 3) {
@@ -509,5 +518,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
         world.setBlockState(pos, place, 3);
         golem.decrementInventorySlot(invSlot);
+        golem.beginHandAnimation(isLeftHandActive(), pos, nextPos);
+        return true;
     }
 }

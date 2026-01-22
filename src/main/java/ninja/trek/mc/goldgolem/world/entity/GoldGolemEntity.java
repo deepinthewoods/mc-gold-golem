@@ -1,6 +1,8 @@
 package ninja.trek.mc.goldgolem.world.entity;
 
 import net.minecraft.block.BlockState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.SpawnGroup;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
@@ -19,7 +21,9 @@ import net.minecraft.storage.WriteView;
 import net.minecraft.inventory.Inventory;
 import net.minecraft.inventory.SimpleInventory;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtHelper;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
@@ -38,14 +42,36 @@ import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.block.ShulkerBoxBlock;
 import net.minecraft.component.DataComponentTypes;
 import net.minecraft.component.type.ContainerComponent;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.registry.Registries;
+import net.minecraft.state.property.Property;
+import net.minecraft.storage.NbtReadView;
+import net.minecraft.storage.NbtWriteView;
+import net.minecraft.storage.ReadView;
+import net.minecraft.util.ErrorReporter;
+import net.minecraft.util.Identifier;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Optional;
+import java.util.Objects;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategy;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategyRegistry;
 
 public class GoldGolemEntity extends PathAwareEntity {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GoldGolemEntity.class);
     public static final int INVENTORY_SIZE = 27;
+    private static final String SNAPSHOT_FOLDER = "GoldGolemModules";
+    private static final int SNAPSHOT_VERSION = 2;
 
     // Data trackers for client-server sync
     private static final TrackedData<Integer> LEFT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
@@ -190,6 +216,10 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // GUI viewer tracking - golem stays in place when a player has GUI open
     private java.util.UUID guiViewerUuid = null;
+    private boolean suppressSnapshotWrite = false;
+
+    // Tree-mode stored block states for resurrection (per module, relative positions)
+    private java.util.List<java.util.Map<BlockPos, BlockState>> treeModuleBlockStates = new java.util.ArrayList<>();
 
     public boolean hasGuiViewer() { return guiViewerUuid != null; }
     public void setGuiViewer(java.util.UUID uuid) { this.guiViewerUuid = uuid; }
@@ -393,7 +423,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.towerBlockCounts = counts == null ? java.util.Collections.emptyMap() : new java.util.HashMap<>(counts);
         this.towerOrigin = origin;
         this.towerJsonFile = jsonPath;
-        this.towerHeight = height;
+        int minHeight = (template != null) ? template.moduleHeight : 1;
+        this.towerHeight = Math.max(height, minHeight);
         this.towerTemplate = template;
         // Initialize tower groups
         initTowerGroups(uniqueIds);
@@ -427,6 +458,12 @@ public class GoldGolemEntity extends PathAwareEntity {
     public java.util.List<String[]> getTowerGroupSlots() { return towerGroupSlots; }
     public java.util.Map<String, Integer> getTowerBlockGroup() { return towerBlockGroup; }
     public BlockPos getTowerOrigin() { return towerOrigin; }
+    public void setTowerOrigin(BlockPos origin) {
+        this.towerOrigin = origin;
+        if (activeStrategy != null) {
+            activeStrategy.onConfigurationChanged("towerOrigin");
+        }
+    }
     public java.util.List<String> getTowerGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(towerGroupSlots.size() * 9);
         for (String[] arr : towerGroupSlots) {
@@ -470,6 +507,376 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Initialize tree groups
         initTreeGroups(uniqueIds);
     }
+
+    public void setTreeModuleBlockStates(java.util.List<java.util.Map<BlockPos, BlockState>> states) {
+        this.treeModuleBlockStates = states == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(states);
+    }
+
+    public java.util.List<java.util.Map<BlockPos, BlockState>> getTreeModuleBlockStates() {
+        return treeModuleBlockStates;
+    }
+
+    public String getCurrentJsonName() {
+        String jsonRel = getJsonFileForMode(getBuildMode());
+        if (jsonRel == null || jsonRel.isBlank()) return "";
+        try {
+            Path fileName = Path.of(jsonRel).getFileName();
+            return fileName == null ? jsonRel : fileName.toString();
+        } catch (Exception ignored) {
+            return jsonRel;
+        }
+    }
+
+    private String getJsonFileForMode(BuildMode mode) {
+        if (mode == null) return null;
+        return switch (mode) {
+            case WALL -> wallJsonFile;
+            case TOWER -> towerJsonFile;
+            case TREE -> treeJsonFile;
+            default -> null;
+        };
+    }
+
+    private void setJsonFileForMode(BuildMode mode, String jsonRel) {
+        if (mode == null) return;
+        switch (mode) {
+            case WALL -> this.wallJsonFile = jsonRel;
+            case TOWER -> this.towerJsonFile = jsonRel;
+            case TREE -> this.treeJsonFile = jsonRel;
+            default -> {
+            }
+        }
+    }
+
+    private static String sanitizeJsonBaseName(String name) {
+        if (name == null) return null;
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder(trimmed.length());
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+                sb.append('_');
+            } else {
+                sb.append(c);
+            }
+        }
+        String out = sb.toString().trim();
+        while (!out.isEmpty() && (out.endsWith(".") || out.endsWith(" "))) {
+            out = out.substring(0, out.length() - 1).trim();
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    private static Path resolveSnapshotPath(Path folder, String baseName) throws IOException {
+        Files.createDirectories(folder);
+        Path targetPath = folder.resolve(baseName + ".json");
+        int suffix = 2;
+        while (Files.exists(targetPath)) {
+            targetPath = folder.resolve(baseName + "_" + suffix + ".json");
+            suffix++;
+        }
+        return targetPath;
+    }
+
+    public static Path findSnapshotPath(String desiredName) {
+        String baseName = sanitizeJsonBaseName(desiredName);
+        if (baseName == null) return null;
+        Path folder = FabricLoader.getInstance().getGameDir().resolve(SNAPSHOT_FOLDER);
+        Path direct = folder.resolve(baseName + ".json");
+        if (Files.exists(direct)) return direct;
+        if (!Files.isDirectory(folder)) return null;
+        long bestTime = Long.MIN_VALUE;
+        Path best = null;
+        try (var stream = Files.list(folder)) {
+            for (Path p : stream.filter(f -> f.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".json")).toList()) {
+                try {
+                    String json = Files.readString(p);
+                    JsonElement parsed = JsonParser.parseString(json);
+                    if (!parsed.isJsonObject()) continue;
+                    JsonObject root = parsed.getAsJsonObject();
+                    String name = root.has("golemName") ? root.get("golemName").getAsString() : "";
+                    if (!baseName.equals(sanitizeJsonBaseName(name))) continue;
+                    long savedAt = root.has("savedAt") ? root.get("savedAt").getAsLong() : 0L;
+                    if (savedAt > bestTime) {
+                        bestTime = savedAt;
+                        best = p;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (IOException ignored) {
+        }
+        return best;
+    }
+
+    private static JsonObject serializeBlockState(BlockState state) {
+        JsonObject out = new JsonObject();
+        String id = Registries.BLOCK.getId(state.getBlock()).toString();
+        out.addProperty("id", id);
+        JsonObject props = new JsonObject();
+        for (Property<?> prop : state.getProperties()) {
+            Comparable<?> value = state.get(prop);
+            @SuppressWarnings({"rawtypes", "unchecked"})
+            Property raw = (Property) prop;
+            props.addProperty(prop.getName(), raw.name(value));
+        }
+        out.add("props", props);
+        return out;
+    }
+
+    private static BlockState deserializeBlockState(JsonObject obj) {
+        if (obj == null) return null;
+        String id = obj.has("id") ? obj.get("id").getAsString() : "";
+        if (id.isEmpty()) return null;
+        var block = Registries.BLOCK.get(Identifier.of(id));
+        BlockState state = block.getDefaultState();
+        if (obj.has("props") && obj.get("props").isJsonObject()) {
+            JsonObject props = obj.getAsJsonObject("props");
+            for (var entry : props.entrySet()) {
+                String propName = entry.getKey();
+                String propValue = entry.getValue().getAsString();
+                Property<?> prop = block.getStateManager().getProperty(propName);
+                if (prop == null) continue;
+                @SuppressWarnings({"rawtypes", "unchecked"})
+                Property raw = (Property) prop;
+                Optional parsed = raw.parse(propValue);
+                if (parsed.isPresent()) {
+                    state = state.with(raw, (Comparable) parsed.get());
+                }
+            }
+        }
+        return state;
+    }
+
+    private static JsonArray serializeVec(BlockPos pos) {
+        JsonArray arr = new JsonArray();
+        arr.add(pos.getX());
+        arr.add(pos.getY());
+        arr.add(pos.getZ());
+        return arr;
+    }
+
+    private static BlockPos deserializeVec(JsonArray arr) {
+        if (arr == null || arr.size() < 3) return BlockPos.ORIGIN;
+        return new BlockPos(arr.get(0).getAsInt(), arr.get(1).getAsInt(), arr.get(2).getAsInt());
+    }
+
+    private NbtCompound buildSnapshotNbt(ServerWorld world) {
+        NbtWriteView view = NbtWriteView.create(ErrorReporter.EMPTY, world.getRegistryManager());
+        writeCustomData(view);
+        view.remove("Owner");
+        DefaultedList<ItemStack> empty = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
+        Inventories.writeData(view.get("Inventory"), empty, true);
+        return view.getNbt();
+    }
+
+    private JsonObject buildSnapshotJson(ServerWorld world, String desiredName, NbtCompound nbt) {
+        JsonObject root = new JsonObject();
+        root.addProperty("version", SNAPSHOT_VERSION);
+        root.addProperty("savedAt", System.currentTimeMillis());
+        root.addProperty("golemName", desiredName == null ? "" : desiredName);
+        root.addProperty("mode", getBuildMode().name());
+        root.addProperty("nbt", NbtHelper.toNbtProviderString(nbt));
+
+        JsonArray wallTemplatesJson = new JsonArray();
+        for (var tpl : wallTemplates) {
+            JsonObject t = new JsonObject();
+            t.add("a", serializeVec(tpl.aMarker));
+            t.add("b", serializeVec(tpl.bMarker));
+            t.addProperty("minY", tpl.minY);
+            JsonArray voxels = new JsonArray();
+            for (var v : tpl.voxels) {
+                JsonObject vj = new JsonObject();
+                vj.add("rel", serializeVec(v.rel));
+                vj.add("state", serializeBlockState(v.state));
+                voxels.add(vj);
+            }
+            t.add("voxels", voxels);
+            wallTemplatesJson.add(t);
+        }
+        root.add("wallTemplates", wallTemplatesJson);
+
+        if (towerTemplate != null) {
+            JsonObject tower = new JsonObject();
+            tower.addProperty("minY", towerTemplate.minY);
+            tower.addProperty("maxY", towerTemplate.maxY);
+            JsonArray voxels = new JsonArray();
+            for (var v : towerTemplate.voxels) {
+                JsonObject vj = new JsonObject();
+                vj.add("rel", serializeVec(v.rel));
+                vj.add("state", serializeBlockState(v.state));
+                voxels.add(vj);
+            }
+            tower.add("voxels", voxels);
+            root.add("towerTemplate", tower);
+        }
+
+        JsonArray treeModulesJson = new JsonArray();
+        for (var module : treeModuleBlockStates) {
+            JsonArray voxels = new JsonArray();
+            for (var entry : module.entrySet()) {
+                JsonObject vj = new JsonObject();
+                vj.add("rel", serializeVec(entry.getKey()));
+                vj.add("state", serializeBlockState(entry.getValue()));
+                voxels.add(vj);
+            }
+            treeModulesJson.add(voxels);
+        }
+        root.add("treeModuleStates", treeModulesJson);
+
+        return root;
+    }
+
+    private static SnapshotData readSnapshot(ServerWorld world, Path path) throws IOException {
+        String json = Files.readString(path);
+        JsonElement parsed = JsonParser.parseString(json);
+        if (!parsed.isJsonObject()) return null;
+        JsonObject root = parsed.getAsJsonObject();
+        String nbtStr = root.has("nbt") ? root.get("nbt").getAsString() : "";
+        if (nbtStr.isEmpty()) return null;
+        NbtCompound nbt;
+        try {
+            nbt = NbtHelper.fromNbtProviderString(nbtStr);
+        } catch (Exception e) {
+            return null;
+        }
+
+        java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates = new java.util.ArrayList<>();
+        if (root.has("wallTemplates") && root.get("wallTemplates").isJsonArray()) {
+            JsonArray arr = root.getAsJsonArray("wallTemplates");
+            for (JsonElement el : arr) {
+                if (!el.isJsonObject()) continue;
+                JsonObject t = el.getAsJsonObject();
+                BlockPos a = deserializeVec(t.getAsJsonArray("a"));
+                BlockPos b = deserializeVec(t.getAsJsonArray("b"));
+                int minY = t.has("minY") ? t.get("minY").getAsInt() : 0;
+                java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> voxels = new java.util.ArrayList<>();
+                if (t.has("voxels") && t.get("voxels").isJsonArray()) {
+                    for (JsonElement ve : t.getAsJsonArray("voxels")) {
+                        if (!ve.isJsonObject()) continue;
+                        JsonObject vj = ve.getAsJsonObject();
+                        BlockPos rel = deserializeVec(vj.getAsJsonArray("rel"));
+                        BlockState state = deserializeBlockState(vj.getAsJsonObject("state"));
+                        if (state != null) {
+                            voxels.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(rel, state));
+                        }
+                    }
+                }
+                wallTemplates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(a, b, voxels, minY));
+            }
+        }
+
+        ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate = null;
+        if (root.has("towerTemplate") && root.get("towerTemplate").isJsonObject()) {
+            JsonObject tower = root.getAsJsonObject("towerTemplate");
+            int minY = tower.has("minY") ? tower.get("minY").getAsInt() : 0;
+            int maxY = tower.has("maxY") ? tower.get("maxY").getAsInt() : 0;
+            java.util.List<ninja.trek.mc.goldgolem.tower.TowerModuleTemplate.Voxel> voxels = new java.util.ArrayList<>();
+            if (tower.has("voxels") && tower.get("voxels").isJsonArray()) {
+                for (JsonElement ve : tower.getAsJsonArray("voxels")) {
+                    if (!ve.isJsonObject()) continue;
+                    JsonObject vj = ve.getAsJsonObject();
+                    BlockPos rel = deserializeVec(vj.getAsJsonArray("rel"));
+                    BlockState state = deserializeBlockState(vj.getAsJsonObject("state"));
+                    if (state != null) {
+                        voxels.add(new ninja.trek.mc.goldgolem.tower.TowerModuleTemplate.Voxel(rel, state));
+                    }
+                }
+            }
+            towerTemplate = new ninja.trek.mc.goldgolem.tower.TowerModuleTemplate(voxels, minY, maxY);
+        }
+
+        java.util.List<java.util.Map<BlockPos, BlockState>> treeModuleStates = new java.util.ArrayList<>();
+        if (root.has("treeModuleStates") && root.get("treeModuleStates").isJsonArray()) {
+            for (JsonElement moduleEl : root.getAsJsonArray("treeModuleStates")) {
+                if (!moduleEl.isJsonArray()) continue;
+                java.util.Map<BlockPos, BlockState> module = new java.util.HashMap<>();
+                for (JsonElement ve : moduleEl.getAsJsonArray()) {
+                    if (!ve.isJsonObject()) continue;
+                    JsonObject vj = ve.getAsJsonObject();
+                    BlockPos rel = deserializeVec(vj.getAsJsonArray("rel"));
+                    BlockState state = deserializeBlockState(vj.getAsJsonObject("state"));
+                    if (state != null) {
+                        module.put(rel, state);
+                    }
+                }
+                treeModuleStates.add(module);
+            }
+        }
+
+        return new SnapshotData(nbt, wallTemplates, towerTemplate, treeModuleStates);
+    }
+
+    private Path writeSnapshotForName(String desiredName) {
+        String baseName = sanitizeJsonBaseName(desiredName);
+        if (baseName == null) return null;
+        if (!(getEntityWorld() instanceof ServerWorld world)) return null;
+        Path folder = FabricLoader.getInstance().getGameDir().resolve(SNAPSHOT_FOLDER);
+        try {
+            NbtCompound nbt = buildSnapshotNbt(world);
+            JsonObject root = buildSnapshotJson(world, desiredName, nbt);
+            Path out = resolveSnapshotPath(folder, baseName);
+            Gson gson = new GsonBuilder().setPrettyPrinting().create();
+            Files.writeString(out, gson.toJson(root));
+            String rel = FabricLoader.getInstance().getGameDir().relativize(out).toString();
+            setJsonFileForMode(getBuildMode(), rel);
+            return out;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public boolean applySnapshotFromPath(ServerWorld world, Path path, BlockPos summonOrigin, PlayerEntity owner, String displayName) {
+        SnapshotData data;
+        try {
+            data = readSnapshot(world, path);
+        } catch (IOException e) {
+            return false;
+        }
+        if (data == null) return false;
+        ReadView view = NbtReadView.create(ErrorReporter.EMPTY, world.getRegistryManager(), data.nbt());
+        readCustomData(view);
+        setOwner(owner);
+        if (displayName != null && !displayName.isBlank()) {
+            setCustomNameNoSnapshot(Text.literal(displayName));
+        }
+        setJsonFileForMode(getBuildMode(), FabricLoader.getInstance().getGameDir().relativize(path).toString());
+        if (data.wallTemplates() != null && !data.wallTemplates().isEmpty()) {
+            setWallTemplates(data.wallTemplates());
+            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
+                java.util.List<ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry> joinTpl = new java.util.ArrayList<>();
+                for (JoinEntry e : wallJoinTemplate) {
+                    joinTpl.add(new ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry(e.dy, e.du, e.id));
+                }
+                wall.setConfig(wallOrigin, getJsonFileForMode(BuildMode.WALL), wallUniqueBlockIds, wallJoinSignature,
+                        wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, data.wallTemplates(), joinTpl);
+            }
+        }
+        if (data.towerTemplate() != null) {
+            this.towerTemplate = data.towerTemplate();
+        }
+        if (data.treeModuleStates() != null) {
+            setTreeModuleBlockStates(data.treeModuleStates());
+        }
+        if (getBuildMode() == BuildMode.TREE) {
+            this.treeOrigin = summonOrigin;
+        } else if (getBuildMode() == BuildMode.TOWER) {
+            if (this.towerOrigin == null) {
+                this.towerOrigin = summonOrigin;
+            }
+        } else if (getBuildMode() == BuildMode.WALL) {
+            this.wallOrigin = summonOrigin;
+        }
+        return true;
+    }
+
+    private record SnapshotData(
+            NbtCompound nbt,
+            java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates,
+            ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate,
+            java.util.List<java.util.Map<BlockPos, BlockState>> treeModuleStates
+    ) {}
     public java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> getTreeModules() { return java.util.Collections.unmodifiableList(this.treeModules); }
     public java.util.List<String> getTreeUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.treeUniqueBlockIds); }
     public ninja.trek.mc.goldgolem.tree.TilingPreset getTreeTilingPreset() { return treeTilingPreset; }
@@ -720,6 +1127,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.SAFE_FALL_DISTANCE, 3.0)
                 .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 1.0)
                 .add(EntityAttributes.JUMP_STRENGTH, 0.42)
+                .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.5)
                 .add(EntityAttributes.SCALE, 1.0);
     }
 
@@ -1243,18 +1651,30 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    public void placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
+    public boolean placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos) {
+        boolean placed = placeBlockFromInventory(pos, state, nextPos, leftHandActive);
+        if (placed) {
+            leftHandActive = !leftHandActive;
+        }
+        return placed;
+    }
+
+    public boolean placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos, boolean isLeft) {
         // Check if block already exists at position
-        if (this.getEntityWorld().getBlockState(pos).equals(state)) return;
+        if (this.getEntityWorld().getBlockState(pos).equals(state)) return true;
 
         // Try to consume block from inventory
         String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
-        if (consumeBlockFromInventory(blockId)) {
-            this.getEntityWorld().setBlockState(pos, state);
-            // Set hand animation with current and next block positions
-            beginHandAnimation(leftHandActive, pos, nextPos);
-            leftHandActive = !leftHandActive;
+        if (!consumeBlockFromInventory(blockId)) {
+            LOGGER.warn("GoldGolem placement failed: missing blockId={} at pos={}", blockId, pos);
+            handleMissingBuildingBlock();
+            return false;
         }
+
+        this.getEntityWorld().setBlockState(pos, state);
+        // Set hand animation with current and next block positions
+        beginHandAnimation(isLeft, pos, nextPos);
+        return true;
     }
 
     private boolean consumeFromShulkerBox(ItemStack shulkerBox, String blockId) {
@@ -1964,6 +2384,32 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
+    public void setCustomName(Text name) {
+        Text prev = this.getCustomName();
+        super.setCustomName(name);
+        if (suppressSnapshotWrite) {
+            return;
+        }
+        World world = this.getEntityWorld();
+        if (world != null && !world.isClient()) {
+            String prevText = prev != null ? prev.getString() : null;
+            String nextText = name != null ? name.getString() : null;
+            if (!Objects.equals(prevText, nextText)) {
+                writeSnapshotForName(nextText);
+            }
+        }
+    }
+
+    public void setCustomNameNoSnapshot(Text name) {
+        suppressSnapshotWrite = true;
+        try {
+            super.setCustomName(name);
+        } finally {
+            suppressSnapshotWrite = false;
+        }
+    }
+
+    @Override
     public ActionResult interactMob(PlayerEntity player, net.minecraft.util.Hand hand) {
         if (!(player instanceof net.minecraft.server.network.ServerPlayerEntity sp)) {
             return ActionResult.SUCCESS;
@@ -2048,7 +2494,9 @@ public class GoldGolemEntity extends PathAwareEntity {
     public boolean damage(net.minecraft.server.world.ServerWorld world, net.minecraft.entity.damage.DamageSource source, float amount) {
         var attacker = source.getAttacker();
         if (attacker instanceof PlayerEntity p && isOwner(p)) {
-            // Stop building on owner hit; show angry particles; ignore damage
+            boolean ignoreOwnerDamage = source.isOf(net.minecraft.entity.damage.DamageTypes.PLAYER_ATTACK)
+                && amount <= 1.0F;
+            // Stop building on owner hit; show angry particles; ignore only low (fist) damage
             this.buildingPaths = false;
             this.dataTracker.set(BUILDING_PATHS, false);
 
@@ -2069,9 +2517,42 @@ public class GoldGolemEntity extends PathAwareEntity {
             spawnAngry();
             recentPlaced.clear();
             placedHead = placedSize = 0;
-            return false; // cancel damage
+            if (ignoreOwnerDamage) {
+                return false; // cancel low (fist) damage
+            }
         }
         return super.damage(world, source, amount);
+    }
+
+    @Override
+    public void onDeath(net.minecraft.entity.damage.DamageSource source) {
+        super.onDeath(source);
+        if (!(this.getEntityWorld() instanceof ServerWorld world)) return;
+        String dropName = "";
+        Text custom = getCustomName();
+        if (custom != null) {
+            dropName = custom.getString();
+        }
+        if (dropName == null || dropName.isBlank()) {
+            String jsonName = getCurrentJsonName();
+            if (jsonName != null && !jsonName.isBlank()) {
+                dropName = jsonName.endsWith(".json") ? jsonName.substring(0, jsonName.length() - 5) : jsonName;
+            }
+        }
+        if (dropName == null || dropName.isBlank()) {
+            dropName = "gold_golem";
+        }
+        Path snapshot = writeSnapshotForName(dropName);
+        if (snapshot == null) return;
+        String fname = snapshot.getFileName().toString();
+        if (fname.toLowerCase(java.util.Locale.ROOT).endsWith(".json")) {
+            dropName = fname.substring(0, fname.length() - 5);
+        } else {
+            dropName = fname;
+        }
+        ItemStack pumpkin = new ItemStack(Items.CARVED_PUMPKIN);
+        pumpkin.set(DataComponentTypes.CUSTOM_NAME, Text.literal(dropName));
+        this.dropStack(world, pumpkin);
     }
 
     private void spawnHearts() {
@@ -2082,6 +2563,31 @@ public class GoldGolemEntity extends PathAwareEntity {
     private void spawnAngry() {
         if (this.getEntityWorld() instanceof ServerWorld sw) {
             sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER, this.getX(), this.getY() + 1.0, this.getZ(), 6, 0.3, 0.3, 0.3, 0.02);
+        }
+    }
+    private void spawnThunderClouds() {
+        if (this.getEntityWorld() instanceof ServerWorld sw) {
+            sw.spawnParticles(ParticleTypes.CLOUD, this.getX(), this.getY() + 1.0, this.getZ(), 12, 0.4, 0.2, 0.4, 0.02);
+        }
+    }
+
+    public void handleMissingBuildingBlock() {
+        if (this.getEntityWorld().isClient()) return;
+        this.buildingPaths = false;
+        this.dataTracker.set(BUILDING_PATHS, false);
+        if (activeStrategy != null) {
+            activeStrategy.setWaitingForResources(true);
+        }
+        this.getNavigation().stop();
+        spawnThunderClouds();
+        if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
+            this.trackStart = null;
+            this.pendingLines.clear();
+            this.currentLine = null;
+            PlayerEntity owner = getOwnerPlayer();
+            if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
+            }
         }
     }
 
@@ -2138,7 +2644,11 @@ public class GoldGolemEntity extends PathAwareEntity {
             long key = rp.asLong();
             if (!recordPlaced(key)) break;
             int invSlot = findItem(block.asItem());
-            if (invSlot < 0) { unrecordPlaced(key); break; }
+            if (invSlot < 0) {
+                unrecordPlaced(key);
+                handleMissingBuildingBlock();
+                return;
+            }
             world.setBlockState(rp, block.getDefaultState(), 3);
             var stInv = inventory.getStack(invSlot);
             stInv.decrement(1);
@@ -2201,6 +2711,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                                             
                                         } else {
                                             unrecordPlaced(key2);
+                                            handleMissingBuildingBlock();
+                                            return;
                                         }
                                     }
                                 }
@@ -2249,7 +2761,11 @@ public class GoldGolemEntity extends PathAwareEntity {
                 long key2 = rp2.asLong();
                 if (!recordPlaced(key2)) break;
                 int invSlot = findItem(block.asItem());
-                if (invSlot < 0) { unrecordPlaced(key2); break; }
+                if (invSlot < 0) {
+                    unrecordPlaced(key2);
+                    handleMissingBuildingBlock();
+                    return;
+                }
                 world.setBlockState(rp2, block.getDefaultState(), 3);
                 var stInv = inventory.getStack(invSlot);
                 stInv.decrement(1);
@@ -2442,7 +2958,11 @@ public class GoldGolemEntity extends PathAwareEntity {
         long key = pos.asLong();
         if (!recordPlaced(key)) return;
         int invSlot = findItem(block.asItem());
-        if (invSlot < 0) { unrecordPlaced(key); return; }
+        if (invSlot < 0) {
+            unrecordPlaced(key);
+            handleMissingBuildingBlock();
+            return;
+        }
         net.minecraft.util.BlockRotation rotation = switch (rot & 3) {
             case 1 -> net.minecraft.util.BlockRotation.CLOCKWISE_90;
             case 2 -> net.minecraft.util.BlockRotation.CLOCKWISE_180;
