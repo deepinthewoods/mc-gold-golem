@@ -1132,7 +1132,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public static DefaultAttributeContainer.Builder createAttributes() {
         return DefaultAttributeContainer.builder()
-                .add(EntityAttributes.MAX_HEALTH, 10.0)
+                .add(EntityAttributes.MAX_HEALTH, 20.0)
                 .add(EntityAttributes.MAX_ABSORPTION, 0.0)
                 .add(EntityAttributes.MOVEMENT_SPEED, 0.28)
                 .add(EntityAttributes.FOLLOW_RANGE, 32.0)
@@ -1143,7 +1143,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.WATER_MOVEMENT_EFFICIENCY, 1.0)
                 .add(EntityAttributes.MOVEMENT_EFFICIENCY, 1.0)
                 .add(EntityAttributes.GRAVITY, 0.08)
-                .add(EntityAttributes.SAFE_FALL_DISTANCE, 3.0)
+                .add(EntityAttributes.SAFE_FALL_DISTANCE, 128.0)
                 .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 1.0)
                 .add(EntityAttributes.JUMP_STRENGTH, 0.42)
                 .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.15)
@@ -1603,6 +1603,20 @@ public class GoldGolemEntity extends PathAwareEntity {
         return !state.isAir() && state.getHardness(this.getEntityWorld(), pos) >= 0;
     }
 
+    /**
+     * Check if placing a block at the given position would overlap with this golem's bounding box.
+     * This prevents the golem from placing blocks inside itself and taking suffocation damage.
+     */
+    private boolean wouldBlockOverlapSelf(BlockPos pos) {
+        var golemBox = this.getBoundingBox();
+        // Create a box for the block position (1x1x1 cube)
+        var blockBox = new net.minecraft.util.math.Box(
+            pos.getX(), pos.getY(), pos.getZ(),
+            pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0
+        );
+        return golemBox.intersects(blockBox);
+    }
+
     private boolean isOreBlock(String blockId) {
         return blockId.contains("_ore") || blockId.contains("ancient_debris") ||
                blockId.equals("minecraft:gilded_blackstone");
@@ -1682,6 +1696,9 @@ public class GoldGolemEntity extends PathAwareEntity {
     public boolean placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos, boolean isLeft) {
         // Check if block already exists at position
         if (this.getEntityWorld().getBlockState(pos).equals(state)) return true;
+
+        // Prevent placing blocks inside self to avoid suffocation damage
+        if (wouldBlockOverlapSelf(pos)) return false;
 
         // Try to consume block from inventory
         String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
@@ -2520,6 +2537,10 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     @Override
     public boolean damage(net.minecraft.server.world.ServerWorld world, net.minecraft.entity.damage.DamageSource source, float amount) {
+        // Immune to suffocation damage (being inside blocks)
+        if (source.isOf(net.minecraft.entity.damage.DamageTypes.IN_WALL)) {
+            return false;
+        }
         var attacker = source.getAttacker();
         if (attacker instanceof PlayerEntity p && isOwner(p)) {
             boolean ignoreOwnerDamage = source.isOf(net.minecraft.entity.damage.DamageTypes.PLAYER_ATTACK)
@@ -2677,11 +2698,16 @@ public class GoldGolemEntity extends PathAwareEntity {
                 handleMissingBuildingBlock();
                 return;
             }
+            // Prevent placing blocks inside self to avoid suffocation damage
+            if (wouldBlockOverlapSelf(rp)) {
+                unrecordPlaced(key);
+                break;
+            }
             world.setBlockState(rp, block.getDefaultState(), 3);
             var stInv = inventory.getStack(invSlot);
             stInv.decrement(1);
             inventory.setStack(invSlot, stInv);
-            
+
             break; // only one placement per column
         }
 
@@ -2732,11 +2758,16 @@ public class GoldGolemEntity extends PathAwareEntity {
                                                 try { placeState = placeState.with(net.minecraft.state.property.Properties.SLAB_TYPE, net.minecraft.block.enums.SlabType.BOTTOM); } catch (IllegalArgumentException ignored) {}
                                                 try { placeState = placeState.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
                                             }
+                                            // Prevent placing blocks inside self to avoid suffocation damage
+                                            if (wouldBlockOverlapSelf(stepPos)) {
+                                                unrecordPlaced(key2);
+                                                return;
+                                            }
                                             world.setBlockState(stepPos, placeState, 3);
                                             var st2 = inventory.getStack(invSlot2);
                                             st2.decrement(1);
                                             inventory.setStack(invSlot2, st2);
-                                            
+
                                         } else {
                                             unrecordPlaced(key2);
                                             handleMissingBuildingBlock();
@@ -2794,11 +2825,16 @@ public class GoldGolemEntity extends PathAwareEntity {
                     handleMissingBuildingBlock();
                     return;
                 }
+                // Prevent placing blocks inside self to avoid suffocation damage
+                if (wouldBlockOverlapSelf(rp2)) {
+                    unrecordPlaced(key2);
+                    break;
+                }
                 world.setBlockState(rp2, block.getDefaultState(), 3);
                 var stInv = inventory.getStack(invSlot);
                 stInv.decrement(1);
                 inventory.setStack(invSlot, stInv);
-                
+
                 break; // one placement per column
             }
         }
@@ -3006,6 +3042,11 @@ public class GoldGolemEntity extends PathAwareEntity {
                 place = place.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE);
             }
         } catch (Throwable ignored) {}
+        // Prevent placing blocks inside self to avoid suffocation damage
+        if (wouldBlockOverlapSelf(pos)) {
+            unrecordPlaced(key);
+            return;
+        }
         world.setBlockState(pos, place, 3);
         var st = inventory.getStack(invSlot);
         st.decrement(1);
