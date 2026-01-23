@@ -177,6 +177,20 @@ public class ModulePlacement {
     }
 
     /**
+     * Check if the correct block is already at the given position.
+     * Used to skip blocks when resuming a build.
+     */
+    public boolean isBlockAlreadyCorrect(GoldGolemEntity golem, BlockPos pos) {
+        if (blockStatesMap == null) return true;
+
+        BlockState expected = blockStatesMap.get(pos);
+        if (expected == null) return true; // Not in our map, skip it
+
+        BlockState current = golem.getEntityWorld().getBlockState(pos);
+        return current.getBlock() == expected.getBlock();
+    }
+
+    /**
      * Place a single block at the given position.
      * Used by PlacementPlanner for reach-aware placement.
      * @return true if the block was placed successfully

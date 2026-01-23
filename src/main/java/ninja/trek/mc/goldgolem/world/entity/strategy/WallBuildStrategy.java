@@ -384,7 +384,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             if (!moduleBlocksLoaded) {
                 List<BlockPos> moduleBlocks = currentModulePlacement.getRemainingBlockPositions(golem, this);
                 if (!moduleBlocks.isEmpty()) {
-                    planner.setBlocks(moduleBlocks);
+                    // Use block checker to skip already-correct blocks
+                    planner.setBlocks(moduleBlocks, pos -> currentModulePlacement.isBlockAlreadyCorrect(golem, pos));
                 }
                 moduleBlocksLoaded = true;
             }

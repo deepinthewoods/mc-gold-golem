@@ -464,7 +464,13 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
                 }
             }
 
-            planner.setBlocks(new ArrayList<>(layerBlockStates.keySet()));
+            // Use block checker to skip already-correct blocks
+            planner.setBlocks(new ArrayList<>(layerBlockStates.keySet()), pos -> {
+                BlockState expected = layerBlockStates.get(pos);
+                if (expected == null) return true; // Skip if no expected state
+                BlockState current = golem.getEntityWorld().getBlockState(pos);
+                return current.getBlock() == expected.getBlock();
+            });
             layerLoaded = true;
         }
 

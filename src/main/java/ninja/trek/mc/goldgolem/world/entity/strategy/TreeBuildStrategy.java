@@ -321,7 +321,13 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         // Load tile blocks into planner if needed
         if (currentTileOrigin != null && !tileBlocksLoaded && !currentTileBlocks.isEmpty()) {
-            planner.setBlocks(new ArrayList<>(currentTileBlocks.keySet()));
+            // Use block checker to skip already-correct blocks
+            planner.setBlocks(new ArrayList<>(currentTileBlocks.keySet()), pos -> {
+                BlockState expected = currentTileBlocks.get(pos);
+                if (expected == null) return true; // Skip if no expected state
+                BlockState current = golem.getEntityWorld().getBlockState(pos);
+                return current.getBlock() == expected.getBlock();
+            });
             tileBlocksLoaded = true;
         }
 

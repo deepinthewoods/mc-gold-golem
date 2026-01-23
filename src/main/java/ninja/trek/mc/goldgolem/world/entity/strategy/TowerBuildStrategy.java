@@ -205,7 +205,10 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
                 currentLayerY++;
                 return;
             }
-            planner.setBlocks(layerBlocks);
+            // Use block checker to skip already-correct blocks
+            TowerModuleTemplate templateFinal = template;
+            BlockPos originFinal = origin;
+            planner.setBlocks(layerBlocks, pos -> isBlockAlreadyCorrect(golem, templateFinal, originFinal, pos));
             layerInitialized = true;
         }
 
@@ -339,6 +342,62 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             }
         }
 
+        return null;
+    }
+
+    /**
+     * Check if the correct block is already at the given position.
+     * Used to skip blocks when resuming a build.
+     */
+    private boolean isBlockAlreadyCorrect(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
+        BlockState expectedState = getExpectedBlockState(golem, template, origin, pos);
+        if (expectedState == null) {
+            // No expected state means this position should be skipped anyway
+            return true;
+        }
+
+        BlockState currentState = golem.getEntityWorld().getBlockState(pos);
+        return currentState.getBlock() == expectedState.getBlock();
+    }
+
+    /**
+     * Get the expected block state at a position, applying gradient sampling.
+     * Returns null if the position should be skipped (empty gradient slot).
+     */
+    private BlockState getExpectedBlockState(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
+        // Get the original block state from the template
+        BlockState targetState = getTowerBlockStateAt(template, origin, pos);
+        if (targetState == null) {
+            return null;
+        }
+
+        // Check if gradient sampling applies
+        String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
+        Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
+        if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
+            // No group mapping, use original block
+            return targetState;
+        }
+
+        // Sample gradient based on Y position in total tower
+        String[] slots = golem.getTowerGroupSlots().get(groupIdx);
+        float window = (groupIdx < golem.getTowerGroupWindows().size()) ? golem.getTowerGroupWindows().get(groupIdx) : 1.0f;
+        int noiseScale = (groupIdx < golem.getTowerGroupNoiseScales().size()) ? golem.getTowerGroupNoiseScales().get(groupIdx) : 1;
+        int sampledIndex = sampleTowerGradient(golem, slots, window, noiseScale, pos);
+
+        if (sampledIndex >= 0 && sampledIndex < 9) {
+            String sampledId = slots[sampledIndex];
+            if (sampledId != null && !sampledId.isEmpty()) {
+                BlockState sampledState = golem.getBlockStateFromId(sampledId);
+                if (sampledState != null) {
+                    return sampledState;
+                }
+            }
+            // Sampled slot is empty - this position should be skipped
+            return null;
+        }
+
+        // No valid sample index (G == 0, all slots empty) - should be skipped
         return null;
     }
 

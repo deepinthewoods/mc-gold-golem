@@ -129,6 +129,16 @@ public class PlacementPlanner {
      * Blocks are sorted by Y (bottom-up) for proper build order.
      */
     public void setBlocks(List<BlockPos> blocks) {
+        setBlocks(blocks, null);
+    }
+
+    /**
+     * Set the blocks to place with a checker to skip already-correct blocks.
+     * Clears any existing state. Blocks are sorted by Y (bottom-up) for proper build order.
+     * @param blocks The blocks to place
+     * @param checker Optional checker to skip blocks that are already correctly placed
+     */
+    public void setBlocks(List<BlockPos> blocks, BlockChecker checker) {
         remainingBlocks.clear();
         deferredBlocks.clear();
         deferAttempts.clear();
@@ -147,8 +157,25 @@ public class PlacementPlanner {
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
 
+        // Filter out blocks that are already correctly placed
+        List<BlockPos> toPlace = blocks;
+        if (checker != null) {
+            toPlace = new ArrayList<>();
+            int skipped = 0;
+            for (BlockPos pos : blocks) {
+                if (checker.isAlreadyCorrect(pos)) {
+                    skipped++;
+                } else {
+                    toPlace.add(pos);
+                }
+            }
+            if (skipped > 0) {
+                LOGGER.info("Skipped {} already-correct blocks, {} remaining to place", skipped, toPlace.size());
+            }
+        }
+
         // Sort blocks by Y level (bottom to top), then by distance from golem
-        List<BlockPos> sorted = new ArrayList<>(blocks);
+        List<BlockPos> sorted = new ArrayList<>(toPlace);
         Vec3d golemPos = new Vec3d(golem.getX(), golem.getY(), golem.getZ());
         sorted.sort(Comparator
                 .comparingInt(BlockPos::getY)
@@ -160,7 +187,37 @@ public class PlacementPlanner {
      * Add more blocks to place (appends to existing queue).
      */
     public void addBlocks(List<BlockPos> blocks) {
+        addBlocks(blocks, null);
+    }
+
+    /**
+     * Add more blocks to place with a checker to skip already-correct blocks.
+     * @param blocks The blocks to add
+     * @param checker Optional checker to skip blocks that are already correctly placed
+     */
+    public void addBlocks(List<BlockPos> blocks, BlockChecker checker) {
         if (blocks.isEmpty()) {
+            return;
+        }
+
+        // Filter out blocks that are already correctly placed
+        List<BlockPos> toAdd = blocks;
+        if (checker != null) {
+            toAdd = new ArrayList<>();
+            int skipped = 0;
+            for (BlockPos pos : blocks) {
+                if (checker.isAlreadyCorrect(pos)) {
+                    skipped++;
+                } else {
+                    toAdd.add(pos);
+                }
+            }
+            if (skipped > 0) {
+                LOGGER.info("Skipped {} already-correct blocks when adding, {} remaining to add", skipped, toAdd.size());
+            }
+        }
+
+        if (toAdd.isEmpty()) {
             return;
         }
 
@@ -170,7 +227,7 @@ public class PlacementPlanner {
                 .thenComparingDouble(b -> golemPos.squaredDistanceTo(b.getX(), b.getY(), b.getZ()));
 
         List<BlockPos> existing = new ArrayList<>(remainingBlocks);
-        List<BlockPos> incoming = new ArrayList<>(blocks);
+        List<BlockPos> incoming = new ArrayList<>(toAdd);
         existing.sort(comparator);
         incoming.sort(comparator);
 
@@ -376,6 +433,15 @@ public class PlacementPlanner {
                 LOGGER.info("Force placing out of range: target={}", currentTarget);
             }
 
+            // Check if placing would cause golem to overlap with the block (suffocation)
+            if (wouldOverlapGolem(currentTarget)) {
+                LOGGER.info("Target {} overlaps golem, deferring", currentTarget);
+                defer(currentTarget);
+                currentTarget = null;
+                currentStandPos = null;
+                return TickResult.DEFERRED;
+            }
+
             // Place the block (even if slightly out of range)
             BlockPos nextTarget = peekNextTarget();
             LOGGER.info("Attempting to place block at target={} golemPos={} nextTarget={}",
@@ -413,6 +479,20 @@ public class PlacementPlanner {
          * @return true if the block was placed successfully
          */
         boolean placeBlock(BlockPos pos, BlockPos nextPos);
+    }
+
+    /**
+     * Callback interface for checking if a block is already correctly placed.
+     * Used to skip blocks that don't need to be placed (e.g., when resuming a build).
+     */
+    @FunctionalInterface
+    public interface BlockChecker {
+        /**
+         * Check if the correct block is already at the given position.
+         * @param pos The position to check
+         * @return true if the block is already correctly placed and should be skipped
+         */
+        boolean isAlreadyCorrect(BlockPos pos);
     }
 
     // ========== Private Methods ==========
@@ -548,6 +628,18 @@ public class PlacementPlanner {
             return deferredBlocks.peek().pos;
         }
         return null;
+    }
+
+    /**
+     * Check if placing a block at the given position would overlap with the golem's bounding box.
+     */
+    private boolean wouldOverlapGolem(BlockPos pos) {
+        var golemBox = golem.getBoundingBox();
+        var blockBox = new net.minecraft.util.math.Box(
+            pos.getX(), pos.getY(), pos.getZ(),
+            pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0
+        );
+        return golemBox.intersects(blockBox);
     }
 
     private void defer(BlockPos pos) {
