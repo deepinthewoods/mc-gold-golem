@@ -26,9 +26,10 @@ public class PlacementPlanner {
 
     // Configuration
     private static final double MAX_REACH = 6.0;  // Extended reach for golem building
+    private static final double MAX_VERTICAL_REACH = 3.0;  // Vertical reach limit
     private static final double PLANNING_REACH_BUFFER = 0.5;
     private static final int MAX_DEFER_ATTEMPTS = 3;
-    private static final int STUCK_THRESHOLD_TICKS = 20;
+    private static final int STUCK_THRESHOLD_TICKS = 40;  // Try pathfinding longer before giving up
     private static final int SUFFOCATION_TELEPORT_RADIUS = 6;
     private static final double MIN_MOVE_DIST_SQ = 0.0004;
     private static final int DEFERRED_RETRY_INTERVAL = 4;
@@ -37,8 +38,9 @@ public class PlacementPlanner {
     private static final int MAX_PATHFINDS_PER_TICK = 4;
     private static final int PATH_CACHE_TTL_TICKS = 60;
     private static final int MIN_NAV_FAILURES_FOR_TELEPORT = 2;
-    private static final int PATH_FAILURE_WINDOW_TICKS = 30;
+    private static final int PATH_FAILURE_WINDOW_TICKS = 20;
     private static final boolean DEBUG_COUNTERS = false;
+    private static final int MAX_CONSECUTIVE_OVERLAP_DEFERRALS = 3;  // Teleport if we defer this many blocks in a row due to overlap
 
     // Reference to golem
     private final GoldGolemEntity golem;
@@ -63,6 +65,7 @@ public class PlacementPlanner {
     private long lastPathFailureTick = Long.MIN_VALUE;
     private long lastPathBudgetTick = Long.MIN_VALUE;
     private int remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
+    private int consecutiveOverlapDeferrals = 0;  // Track when golem is trapped by its own builds
 
     private long debugLastTick = Long.MIN_VALUE;
     private int debugPathfindCalls = 0;
@@ -156,6 +159,7 @@ public class PlacementPlanner {
         lastPathFailureTick = Long.MIN_VALUE;
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
+        consecutiveOverlapDeferrals = 0;
 
         // Filter out blocks that are already correctly placed
         List<BlockPos> toPlace = blocks;
@@ -380,15 +384,21 @@ public class PlacementPlanner {
                 boolean started = golem.getNavigation().startMovingTo(
                         currentStandPos.getX() + 0.5, currentStandPos.getY(), currentStandPos.getZ() + 0.5, 1.1);
                 if (!started) {
-                    // Navigation failed to start - teleport immediately
-                    if (currentStandPos != null && !currentStandPos.equals(golem.getBlockPos())) {
-                        LOGGER.info("Navigation failed, teleporting: standPos={} target={}",
-                                currentStandPos, currentTarget);
-                        teleportToStandPosition(currentStandPos);
+                    navigationFailures++;
+                    // Give navigation a few attempts before teleporting
+                    if (navigationFailures >= 3) {
+                        if (currentStandPos != null && !currentStandPos.equals(golem.getBlockPos())) {
+                            LOGGER.info("Navigation failed {} times, teleporting: standPos={} target={}",
+                                    navigationFailures, currentStandPos, currentTarget);
+                            teleportToStandPosition(currentStandPos);
+                        }
+                        navigatingToStandPos = false;
+                        stuckTicks = 0;
+                        lastNavPos = null;
+                        navigationFailures = 0;
+                    } else {
+                        LOGGER.debug("Navigation failed to start (attempt {}), will retry", navigationFailures);
                     }
-                    navigatingToStandPos = false;
-                    stuckTicks = 0;
-                    lastNavPos = null;
                     return TickResult.WORKING;
                 }
                 navigationFailures = 0;
@@ -399,8 +409,15 @@ public class PlacementPlanner {
                 boolean idle = golem.getNavigation().isIdle();
                 if ((!started || idle || movedSq < MIN_MOVE_DIST_SQ) && !inReach) {
                     stuckTicks++;
+                    // At half the threshold, try to re-calculate the path
+                    if (stuckTicks == STUCK_THRESHOLD_TICKS / 2) {
+                        LOGGER.debug("Stuck halfway, attempting re-path: standPos={}", currentStandPos);
+                        golem.getNavigation().stop();
+                        golem.getNavigation().startMovingTo(
+                                currentStandPos.getX() + 0.5, currentStandPos.getY(), currentStandPos.getZ() + 0.5, 1.1);
+                    }
                     if (stuckTicks >= STUCK_THRESHOLD_TICKS) {
-                        // Stuck - teleport immediately
+                        // Stuck - teleport as last resort
                         LOGGER.info("Stuck, teleporting: standPos={} target={}", currentStandPos, currentTarget);
                         teleportToStandPosition(currentStandPos);
                         stuckTicks = 0;
@@ -435,7 +452,21 @@ public class PlacementPlanner {
 
             // Check if placing would cause golem to overlap with the block (suffocation)
             if (wouldOverlapGolem(currentTarget)) {
-                LOGGER.info("Target {} overlaps golem, deferring", currentTarget);
+                consecutiveOverlapDeferrals++;
+                LOGGER.info("Target {} overlaps golem, deferring (consecutive: {})", currentTarget, consecutiveOverlapDeferrals);
+
+                // If we've been deferring due to overlap repeatedly, we're trapped - teleport out
+                if (consecutiveOverlapDeferrals >= MAX_CONSECUTIVE_OVERLAP_DEFERRALS) {
+                    LOGGER.info("Golem trapped by own builds after {} deferrals, teleporting out", consecutiveOverlapDeferrals);
+                    BlockPos escapePos = findEscapePosition();
+                    if (escapePos != null) {
+                        teleportToStandPosition(escapePos);
+                        consecutiveOverlapDeferrals = 0;
+                    } else {
+                        LOGGER.warn("Could not find escape position for trapped golem!");
+                    }
+                }
+
                 defer(currentTarget);
                 currentTarget = null;
                 currentStandPos = null;
@@ -455,6 +486,7 @@ public class PlacementPlanner {
                 currentTarget = null;
                 currentStandPos = null;
                 navigationFailures = 0;
+                consecutiveOverlapDeferrals = 0;  // Reset since we made progress
                 return TickResult.PLACED_BLOCK;
             } else {
                 // Couldn't place (missing inventory) - keep target and return IDLE to stop building
@@ -866,6 +898,75 @@ public class PlacementPlanner {
     }
 
     /**
+     * Find a safe escape position when the golem has trapped itself.
+     * Searches for a position where:
+     * 1. The golem can stand (solid ground, air at feet/head)
+     * 2. The position doesn't overlap with any pending blocks to place
+     * 3. Prefers positions further from the build area
+     */
+    private BlockPos findEscapePosition() {
+        BlockPos golemPos = golem.getBlockPos();
+        int searchRadius = 8;
+
+        // Collect all pending block positions for overlap checking
+        Set<BlockPos> pendingBlocks = new HashSet<>();
+        pendingBlocks.addAll(remainingBlocks);
+        for (DeferredBlock db : deferredBlocks) {
+            pendingBlocks.add(db.pos);
+        }
+        if (currentTarget != null) {
+            pendingBlocks.add(currentTarget);
+        }
+
+        BlockPos bestEscape = null;
+        double bestScore = Double.NEGATIVE_INFINITY;
+
+        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
+            for (int dy = -searchRadius; dy <= searchRadius; dy++) {
+                for (int dz = -searchRadius; dz <= searchRadius; dz++) {
+                    BlockPos pos = golemPos.add(dx, dy, dz);
+
+                    if (!canStandAt(pos)) {
+                        continue;
+                    }
+
+                    // Check if this position would overlap with the golem's bounding box if standing here
+                    // (feet position and head position shouldn't be pending blocks)
+                    if (pendingBlocks.contains(pos) || pendingBlocks.contains(pos.up())) {
+                        continue;
+                    }
+
+                    // Score: prefer positions further from pending blocks (escape the build area)
+                    double minDistToPending = Double.MAX_VALUE;
+                    for (BlockPos pending : pendingBlocks) {
+                        double dist = pos.getSquaredDistance(pending);
+                        if (dist < minDistToPending) {
+                            minDistToPending = dist;
+                        }
+                    }
+
+                    // Also factor in distance from current position (don't teleport too far if not needed)
+                    double distFromGolem = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+                    // Score: maximize distance from pending blocks, but penalize very far teleports
+                    double score = minDistToPending - (distFromGolem * 0.5);
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestEscape = pos;
+                    }
+                }
+            }
+        }
+
+        if (bestEscape != null) {
+            LOGGER.info("Found escape position: {} (score: {})", bestEscape, bestScore);
+        }
+
+        return bestEscape;
+    }
+
+    /**
      * Check if a position is within reach to place a block.
      */
     private boolean isWithinReach(Vec3d from, BlockPos target, double maxReach) {
@@ -873,7 +974,8 @@ public class PlacementPlanner {
         double dy = from.y - (target.getY() + 0.5);
         double dz = from.z - (target.getZ() + 0.5);
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        return dist <= maxReach;
+        // Check both overall reach and vertical reach separately
+        return dist <= maxReach && Math.abs(dy) <= MAX_VERTICAL_REACH;
     }
 
     /**
@@ -1037,13 +1139,16 @@ public class PlacementPlanner {
                     40, 0.5, 0.5, 0.5, 0.2);
         }
 
+        // Add small Y offset (0.1) to ensure golem spawns clearly above the floor
+        // and doesn't clip into the ground block causing brief suffocation
         golem.refreshPositionAndAngles(
                 standPos.getX() + 0.5,
-                standPos.getY(),
+                standPos.getY() + 0.1,
                 standPos.getZ() + 0.5,
                 golem.getYaw(),
                 golem.getPitch()
         );
+        golem.setVelocity(0, 0, 0);  // Clear velocity to prevent unexpected movement
         golem.getNavigation().stop();
     }
 
@@ -1068,6 +1173,7 @@ public class PlacementPlanner {
         lastPathFailureTick = Long.MIN_VALUE;
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
+        consecutiveOverlapDeferrals = 0;
     }
 
     /**
@@ -1132,6 +1238,7 @@ public class PlacementPlanner {
         lastPathFailureTick = Long.MIN_VALUE;
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
+        consecutiveOverlapDeferrals = 0;
 
         int[] remaining = nbt.getIntArray("RemainingBlocks").orElseGet(() -> new int[0]);
         int[] deferred = nbt.getIntArray("DeferredBlocks").orElseGet(() -> new int[0]);
@@ -1196,6 +1303,7 @@ public class PlacementPlanner {
         lastPathFailureTick = Long.MIN_VALUE;
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
+        consecutiveOverlapDeferrals = 0;
 
         int[] remaining = view.getOptionalIntArray("RemainingBlocks").orElseGet(() -> new int[0]);
         int[] deferred = view.getOptionalIntArray("DeferredBlocks").orElseGet(() -> new int[0]);
