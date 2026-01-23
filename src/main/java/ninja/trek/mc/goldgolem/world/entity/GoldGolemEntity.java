@@ -433,7 +433,26 @@ public class GoldGolemEntity extends PathAwareEntity {
     public java.util.Map<String, Integer> getTowerBlockCounts() { return java.util.Collections.unmodifiableMap(this.towerBlockCounts); }
     public int getTowerHeight() { return towerHeight; }
     public void setTowerHeight(int height) { this.towerHeight = Math.max(1, Math.min(256, height)); }
-    public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() { return towerTemplate; }
+    public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() {
+        // Lazy load from JSON file if template is null but file path is set
+        if (towerTemplate == null && towerJsonFile != null && !towerJsonFile.isEmpty()) {
+            if (this.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld serverWorld) {
+                try {
+                    java.nio.file.Path path = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve(towerJsonFile);
+                    if (java.nio.file.Files.exists(path)) {
+                        SnapshotData data = readSnapshot(serverWorld, path);
+                        if (data != null && data.towerTemplate() != null) {
+                            this.towerTemplate = data.towerTemplate();
+                            LOGGER.info("Lazy-loaded tower template from {}", towerJsonFile);
+                        }
+                    }
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to lazy-load tower template from {}: {}", towerJsonFile, e.getMessage());
+                }
+            }
+        }
+        return towerTemplate;
+    }
 
     public void initTowerGroups(java.util.List<String> uniqueBlocks) {
         towerGroupSlots.clear(); towerGroupWindows.clear(); towerGroupNoiseScales.clear(); towerBlockGroup.clear();
@@ -1113,7 +1132,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public static DefaultAttributeContainer.Builder createAttributes() {
         return DefaultAttributeContainer.builder()
-                .add(EntityAttributes.MAX_HEALTH, 40.0)
+                .add(EntityAttributes.MAX_HEALTH, 10.0)
                 .add(EntityAttributes.MAX_ABSORPTION, 0.0)
                 .add(EntityAttributes.MOVEMENT_SPEED, 0.28)
                 .add(EntityAttributes.FOLLOW_RANGE, 32.0)
@@ -1127,7 +1146,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.SAFE_FALL_DISTANCE, 3.0)
                 .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 1.0)
                 .add(EntityAttributes.JUMP_STRENGTH, 0.42)
-                .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.5)
+                .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.15)
                 .add(EntityAttributes.SCALE, 1.0);
     }
 
@@ -1756,6 +1775,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     @Override
     protected void writeCustomData(WriteView view) {
         view.putString("Mode", getBuildMode().name());
+        view.putBoolean("BuildingPaths", isBuildingPaths());
         view.putInt("PathWidth", this.pathWidth);
         view.putFloat("GradWindow", this.gradientWindow);
         view.putFloat("StepWindow", this.stepGradientWindow);
@@ -1962,6 +1982,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         } catch (IllegalArgumentException ex) {
             setBuildMode(BuildMode.PATH);
         }
+        // Restore building state (after mode is set)
+        boolean wasBuildingPaths = view.getBoolean("BuildingPaths", false);
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("GradWindow", this.gradientWindow)));
         this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("StepWindow", this.stepGradientWindow)));
@@ -2185,6 +2207,11 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         // Note: treeTileCache and treeWFCBuilder are NOT persisted - they will be regenerated when building resumes
+
+        // Restore building state (do this at the end, after all strategy state is loaded)
+        if (wasBuildingPaths) {
+            setBuildingPaths(true);
+        }
     }
 
     public Inventory getInventory() { return inventory; }

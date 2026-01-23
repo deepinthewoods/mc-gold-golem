@@ -158,6 +158,95 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
         return true;
     }
 
+    @Override
+    public void writeLegacyNbt(WriteView view) {
+        if (entity == null) return;
+
+        // Save trackStart
+        Vec3d trackStart = entity.getTrackStart();
+        if (trackStart != null) {
+            view.putDouble("PathTrackStartX", trackStart.x);
+            view.putDouble("PathTrackStartY", trackStart.y);
+            view.putDouble("PathTrackStartZ", trackStart.z);
+        }
+
+        // Save pending lines count and data (flat format)
+        var pendingLines = entity.getPendingLines();
+        view.putInt("PathPendingLinesCount", pendingLines.size());
+        int idx = 0;
+        for (LineSeg seg : pendingLines) {
+            view.putDouble("PathPL" + idx + "AX", seg.a.x);
+            view.putDouble("PathPL" + idx + "AY", seg.a.y);
+            view.putDouble("PathPL" + idx + "AZ", seg.a.z);
+            view.putDouble("PathPL" + idx + "BX", seg.b.x);
+            view.putDouble("PathPL" + idx + "BY", seg.b.y);
+            view.putDouble("PathPL" + idx + "BZ", seg.b.z);
+            idx++;
+        }
+
+        // Save current line
+        LineSeg currentLine = entity.getCurrentLine();
+        if (currentLine != null) {
+            view.putDouble("PathCurrentLineAX", currentLine.a.x);
+            view.putDouble("PathCurrentLineAY", currentLine.a.y);
+            view.putDouble("PathCurrentLineAZ", currentLine.a.z);
+            view.putDouble("PathCurrentLineBX", currentLine.b.x);
+            view.putDouble("PathCurrentLineBY", currentLine.b.y);
+            view.putDouble("PathCurrentLineBZ", currentLine.b.z);
+            view.putInt("PathCurrentLineScanBit", currentLine.scanBit);
+        }
+    }
+
+    @Override
+    public void readLegacyNbt(ReadView view) {
+        if (entity == null) return;
+
+        // Load trackStart
+        if (view.contains("PathTrackStartX")) {
+            double x = view.getDouble("PathTrackStartX", 0.0);
+            double y = view.getDouble("PathTrackStartY", 0.0);
+            double z = view.getDouble("PathTrackStartZ", 0.0);
+            entity.setTrackStart(new Vec3d(x, y, z));
+        }
+
+        // Load pending lines (flat format)
+        int count = view.getInt("PathPendingLinesCount", 0);
+        entity.getPendingLines().clear();
+        for (int i = 0; i < count; i++) {
+            if (view.contains("PathPL" + i + "AX")) {
+                Vec3d a = new Vec3d(
+                    view.getDouble("PathPL" + i + "AX", 0.0),
+                    view.getDouble("PathPL" + i + "AY", 0.0),
+                    view.getDouble("PathPL" + i + "AZ", 0.0)
+                );
+                Vec3d b = new Vec3d(
+                    view.getDouble("PathPL" + i + "BX", 0.0),
+                    view.getDouble("PathPL" + i + "BY", 0.0),
+                    view.getDouble("PathPL" + i + "BZ", 0.0)
+                );
+                entity.getPendingLines().addLast(new LineSeg(a, b));
+            }
+        }
+
+        // Load current line
+        if (view.contains("PathCurrentLineAX")) {
+            Vec3d a = new Vec3d(
+                view.getDouble("PathCurrentLineAX", 0.0),
+                view.getDouble("PathCurrentLineAY", 0.0),
+                view.getDouble("PathCurrentLineAZ", 0.0)
+            );
+            Vec3d b = new Vec3d(
+                view.getDouble("PathCurrentLineBX", 0.0),
+                view.getDouble("PathCurrentLineBY", 0.0),
+                view.getDouble("PathCurrentLineBZ", 0.0)
+            );
+            LineSeg currentLine = new LineSeg(a, b);
+            currentLine.begin(entity);
+            currentLine.scanBit = view.getInt("PathCurrentLineScanBit", 0);
+            entity.setCurrentLine(currentLine);
+        }
+    }
+
     /**
      * Clear all path mode state.
      */

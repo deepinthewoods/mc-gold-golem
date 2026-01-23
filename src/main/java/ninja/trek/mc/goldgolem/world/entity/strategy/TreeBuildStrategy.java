@@ -397,7 +397,10 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
                     // Sample from gradient for this block type
                     BlockState finalState = sampleTreeGradient(golem, targetState, placePos);
-                    currentTileBlocks.put(placePos, finalState);
+                    // If null, gradient slot was empty - skip this block
+                    if (finalState != null) {
+                        currentTileBlocks.put(placePos, finalState);
+                    }
                 }
             }
         }
@@ -461,8 +464,8 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         }
 
         if (lastNonEmpty < 0) {
-            // Empty gradient, use original
-            return originalState;
+            // All gradient slots empty - skip this block entirely
+            return null;
         }
 
         int w = (int) Math.max(1, Math.round(window));
@@ -473,11 +476,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         String sampledBlockId = gradientSlots[idx];
         if (sampledBlockId == null || sampledBlockId.isEmpty()) {
-            return originalState;
+            // Sampled slot is empty - skip this block entirely
+            return null;
         }
 
         Identifier id = Identifier.tryParse(sampledBlockId);
-        if (id == null) return originalState;
+        if (id == null) return null;
         net.minecraft.block.Block sampledBlock = Registries.BLOCK.get(id);
         return sampledBlock.getDefaultState();
     }

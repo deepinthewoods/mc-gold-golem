@@ -26,6 +26,7 @@ public class PlacementPlanner {
 
     // Configuration
     private static final double MAX_REACH = 6.0;  // Extended reach for golem building
+    private static final double PLANNING_REACH_BUFFER = 0.5;
     private static final int MAX_DEFER_ATTEMPTS = 3;
     private static final int STUCK_THRESHOLD_TICKS = 20;
     private static final int SUFFOCATION_TELEPORT_RADIUS = 6;
@@ -33,8 +34,8 @@ public class PlacementPlanner {
     private static final int DEFERRED_RETRY_INTERVAL = 4;
     private static final int MAX_CANDIDATES_PER_TICK = 3;
     private static final int SKIP_RETRY_TICKS = 12;
-    private static final int MAX_PATHFINDS_PER_TICK = 2;
-    private static final int PATH_CACHE_TTL_TICKS = 20;
+    private static final int MAX_PATHFINDS_PER_TICK = 4;
+    private static final int PATH_CACHE_TTL_TICKS = 60;
     private static final int MIN_NAV_FAILURES_FOR_TELEPORT = 2;
     private static final int PATH_FAILURE_WINDOW_TICKS = 30;
     private static final boolean DEBUG_COUNTERS = false;
@@ -240,14 +241,17 @@ public class PlacementPlanner {
             currentTarget = selectNextBlock();
             if (currentTarget == null) {
                 if (selectionBlockedByBudget || !remainingBlocks.isEmpty() || !deferredBlocks.isEmpty()) {
+                    LOGGER.debug("No target selected, still working: budget={} remaining={} deferred={}",
+                        selectionBlockedByBudget, remainingBlocks.size(), deferredBlocks.size());
                     return TickResult.WORKING;
                 }
+                LOGGER.info("All blocks placed, returning COMPLETED");
                 return TickResult.COMPLETED;
             }
 
             // If already in reach, place without moving.
             Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
-            if (isWithinReach(golemPos, currentTarget)) {
+            if (isWithinReach(golemPos, currentTarget, MAX_REACH)) {
                 currentStandPos = golem.getBlockPos();
                 navigatingToStandPos = false;
                 stuckTicks = 0;
@@ -268,19 +272,34 @@ public class PlacementPlanner {
                     if (placement.budgetLimited) {
                         return TickResult.WORKING;
                     }
-                    // Can't reach this block, defer it
-                    LOGGER.warn("Placement deferred: no stand positions for target={} golemPos={}",
-                            currentTarget, golem.getBlockPos());
-                    defer(currentTarget);
-                    currentTarget = null;
-                    return TickResult.DEFERRED;
+                    // Pathfinding failed - use aggressive fallback: find ANY position and teleport
+                    BlockPos fallbackPos = findAnyStandPosition(currentTarget);
+                    if (fallbackPos != null) {
+                        LOGGER.info("Using fallback teleport: target={} fallback={}", currentTarget, fallbackPos);
+                        teleportToStandPosition(fallbackPos);
+                        currentStandPos = fallbackPos;
+                        navigatingToStandPos = false;
+                        stuckTicks = 0;
+                        lastNavPos = null;
+                        navigationFailures = 0;
+                    } else {
+                        // No valid position at all - force place from current position
+                        LOGGER.info("No valid stand position, force placing: target={}", currentTarget);
+                        currentStandPos = golem.getBlockPos();
+                        navigatingToStandPos = false;
+                        stuckTicks = 0;
+                        lastNavPos = null;
+                        navigationFailures = 0;
+                    }
+                } else {
+                    // Found a valid pathable stand position
+                    currentStandPos = placement.standPosition;
+                    navigatingToStandPos = true;
+                    stuckTicks = 0;
+                    lastNavPos = null;
+                    navigationFailures = 0;
+                    LOGGER.info("Selected standPos={} for target={}", currentStandPos, currentTarget);
                 }
-
-                currentStandPos = placement.standPosition;
-                navigatingToStandPos = true;
-                stuckTicks = 0;
-                lastNavPos = null;
-                navigationFailures = 0;
             }
         }
 
@@ -294,7 +313,7 @@ public class PlacementPlanner {
 
             // Check if we're close enough to place
             Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
-            boolean inReach = currentTarget != null && isWithinReach(golemPos, currentTarget);
+            boolean inReach = currentTarget != null && isWithinReach(golemPos, currentTarget, MAX_REACH);
             if (inReach) {
                 navigatingToStandPos = false;
                 stuckTicks = 0;
@@ -304,24 +323,15 @@ public class PlacementPlanner {
                 boolean started = golem.getNavigation().startMovingTo(
                         currentStandPos.getX() + 0.5, currentStandPos.getY(), currentStandPos.getZ() + 0.5, 1.1);
                 if (!started) {
-                    navigationFailures++;
-                    lastPathFailureTick = golem.getEntityWorld().getTime(); // Update failure time so teleport is allowed
-                    if (currentStandPos != null && currentStandPos.equals(golem.getBlockPos())) {
-                        LOGGER.warn("Placement navigation failed: already at standPos={} target={}",
-                                currentStandPos, currentTarget);
-                        navigatingToStandPos = false;
-                        stuckTicks = 0;
-                        lastNavPos = null;
-                        return TickResult.WORKING;
-                    }
-                    if (shouldTeleport()) {
-                        LOGGER.warn("Placement teleport: navigation start failed for standPos={} target={}",
+                    // Navigation failed to start - teleport immediately
+                    if (currentStandPos != null && !currentStandPos.equals(golem.getBlockPos())) {
+                        LOGGER.info("Navigation failed, teleporting: standPos={} target={}",
                                 currentStandPos, currentTarget);
                         teleportToStandPosition(currentStandPos);
-                        stuckTicks = 0;
-                        navigatingToStandPos = false;
-                        lastNavPos = null;
                     }
+                    navigatingToStandPos = false;
+                    stuckTicks = 0;
+                    lastNavPos = null;
                     return TickResult.WORKING;
                 }
                 navigationFailures = 0;
@@ -333,17 +343,12 @@ public class PlacementPlanner {
                 if ((!started || idle || movedSq < MIN_MOVE_DIST_SQ) && !inReach) {
                     stuckTicks++;
                     if (stuckTicks >= STUCK_THRESHOLD_TICKS) {
-                        navigationFailures++;
-                        lastPathFailureTick = golem.getEntityWorld().getTime(); // Update failure time
-                        if (shouldTeleport()) {
-                            // Try to teleport to stand position
-                            teleportToStandPosition(currentStandPos);
-                            stuckTicks = 0;
-                            navigatingToStandPos = false;
-                            lastNavPos = null;
-                        } else {
-                            stuckTicks = 0;
-                        }
+                        // Stuck - teleport immediately
+                        LOGGER.info("Stuck, teleporting: standPos={} target={}", currentStandPos, currentTarget);
+                        teleportToStandPosition(currentStandPos);
+                        stuckTicks = 0;
+                        navigatingToStandPos = false;
+                        lastNavPos = null;
                     }
                 } else {
                     stuckTicks = 0;
@@ -354,13 +359,31 @@ public class PlacementPlanner {
             }
         }
 
-        // We're at the stand position, place the block if within reach
-        Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
-        if (currentTarget != null && isWithinReach(golemPos, currentTarget)) {
-            // Place the block
+        // We're at the stand position, place the block
+        if (currentTarget != null) {
+            Vec3d golemPos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
+            boolean inReach = isWithinReach(golemPos, currentTarget, MAX_REACH);
+
+            if (!inReach) {
+                // Not in reach - try to find a better position and teleport
+                BlockPos betterPos = findAnyStandPosition(currentTarget);
+                if (betterPos != null && !betterPos.equals(golem.getBlockPos())) {
+                    LOGGER.info("Teleporting to better position: target={} pos={}", currentTarget, betterPos);
+                    teleportToStandPosition(betterPos);
+                    return TickResult.WORKING;
+                }
+                // No better position - force place anyway
+                LOGGER.info("Force placing out of range: target={}", currentTarget);
+            }
+
+            // Place the block (even if slightly out of range)
             BlockPos nextTarget = peekNextTarget();
+            LOGGER.info("Attempting to place block at target={} golemPos={} nextTarget={}",
+                currentTarget, golem.getBlockPos(), nextTarget);
             boolean placed = blockPlacer.placeBlock(currentTarget, nextTarget);
             if (placed) {
+                LOGGER.info("Successfully placed block at {} remaining={} deferred={}",
+                    currentTarget, remainingBlocks.size(), deferredBlocks.size());
                 remainingBlocks.remove(currentTarget);
                 deferAttempts.remove(currentTarget);
                 currentTarget = null;
@@ -368,30 +391,11 @@ public class PlacementPlanner {
                 navigationFailures = 0;
                 return TickResult.PLACED_BLOCK;
             } else {
-                // Couldn't place (maybe no inventory), defer
-                LOGGER.warn("Placement deferred: blockPlacer rejected target={} standPos={}",
-                        currentTarget, currentStandPos);
-                defer(currentTarget);
-                currentTarget = null;
-                currentStandPos = null;
-                navigationFailures = 0;
-                return TickResult.DEFERRED;
+                // Couldn't place (missing inventory) - keep target and return IDLE to stop building
+                // Golem will wait to be fed a nugget to restart
+                LOGGER.info("Block placer rejected (missing inventory?), stopping: target={}", currentTarget);
+                return TickResult.IDLE;
             }
-        } else if (currentTarget != null) {
-            // Not within reach even though we thought we would be - teleport and retry
-            if (shouldTeleport()) {
-                LOGGER.warn("Placement teleport: target out of reach target={} standPos={} golemPos={}",
-                        currentTarget, currentStandPos, golem.getBlockPos());
-                if (currentStandPos != null && !currentStandPos.equals(golem.getBlockPos())) {
-                    teleportToStandPosition(currentStandPos);
-                }
-                navigatingToStandPos = false;
-                stuckTicks = 0;
-                lastNavPos = null;
-            } else {
-                navigatingToStandPos = true;
-            }
-            return TickResult.WORKING;
         }
 
         return TickResult.IDLE;
@@ -432,6 +436,19 @@ public class PlacementPlanner {
         }
 
         Vec3d golemEyePos = new Vec3d(golem.getX(), golem.getEyeY(), golem.getZ());
+
+        // PHASE 1: Prioritize blocks within reach to avoid unnecessary teleporting
+        // This ensures we place ALL reachable blocks before moving elsewhere
+        BlockPos inReachBlock = findBlockWithinReach(golemEyePos, now);
+        if (inReachBlock != null) {
+            return inReachBlock;
+        }
+
+        // PHASE 2: No blocks in reach - re-sort by distance to current golem position
+        // This ensures when we do teleport/pathfind, it's to the nearest cluster
+        resortByDistanceToGolem();
+
+        // PHASE 3: Select with pathfinding for blocks that require movement
         int attempts = 0;
         BlockPos fallback = null;
         while (attempts < MAX_CANDIDATES_PER_TICK && !remainingBlocks.isEmpty()) {
@@ -449,14 +466,16 @@ public class PlacementPlanner {
                 continue;
             }
 
-            if (isWithinReach(golemEyePos, pos)) {
+            // Double-check reach (golem might have moved slightly)
+            if (isWithinReach(golemEyePos, pos, MAX_REACH)) {
                 return pos;
             }
 
             PlacementSearchResult placement = findPlacementResult(pos);
             if (placement.budgetLimited && placement.standPosition == null) {
                 selectionBlockedByBudget = true;
-                remainingBlocks.addFirst(pos);
+                // Defer to increment attempt count and try later (prevents getting stuck on one block)
+                defer(pos);
                 break;
             }
             if (placement.standPosition != null) {
@@ -474,7 +493,50 @@ public class PlacementPlanner {
             return fallback;
         }
 
+        if (!remainingBlocks.isEmpty() || !deferredBlocks.isEmpty()) {
+             LOGGER.warn("PlacementPlanner: yielded no target. Remaining={}, Deferred={}, BudgetLimited={}",
+                 remainingBlocks.size(), deferredBlocks.size(), selectionBlockedByBudget);
+        }
+
         return null;
+    }
+
+    /**
+     * Find any block within reach of the golem, respecting skip timers.
+     * Scans the queue and returns the first reachable block found.
+     * @return A block position within reach, or null if none found
+     */
+    private BlockPos findBlockWithinReach(Vec3d golemEyePos, long now) {
+        for (Iterator<BlockPos> it = remainingBlocks.iterator(); it.hasNext(); ) {
+            BlockPos pos = it.next();
+            Long skipUntil = skipUntilTick.get(pos);
+            if (skipUntil != null && skipUntil > now) {
+                continue;
+            }
+            if (isWithinReach(golemEyePos, pos, MAX_REACH)) {
+                it.remove();
+                return pos;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Re-sort remaining blocks by distance to golem's current position.
+     * Uses Java's TimSort which is O(n) on nearly-sorted data.
+     * Called when no blocks are within reach, before teleporting to nearest cluster.
+     */
+    private void resortByDistanceToGolem() {
+        if (remainingBlocks.size() <= 1) return;
+
+        Vec3d golemPos = new Vec3d(golem.getX(), golem.getY(), golem.getZ());
+        List<BlockPos> blocks = new ArrayList<>(remainingBlocks);
+        blocks.sort(Comparator.comparingDouble(b ->
+            golemPos.squaredDistanceTo(b.getX() + 0.5, b.getY() + 0.5, b.getZ() + 0.5)));
+        remainingBlocks.clear();
+        remainingBlocks.addAll(blocks);
+
+        LOGGER.debug("Re-sorted {} blocks by distance to golem at {}", blocks.size(), golem.getBlockPos());
     }
 
     private BlockPos peekNextTarget() {
@@ -543,62 +605,149 @@ public class PlacementPlanner {
      */
     /**
      * Find a valid stand position, preferring pathable spots and early exit.
+     * For tower building, prioritizes positions closer to the target's Y level (higher up).
      */
     private PlacementSearchResult findPlacementResult(BlockPos target) {
         int reach = (int) Math.ceil(MAX_REACH);
         Vec3d golemPos = new Vec3d(golem.getX(), golem.getY(), golem.getZ());
-        BlockPos fallback = null;
-        double fallbackDist = Double.MAX_VALUE;
-        boolean budgetLimited = false;
+        int targetY = target.getY();
 
-        for (int radius = 0; radius <= reach; radius++) {
-            for (int dx = -radius; dx <= radius; dx++) {
-                int absDx = Math.abs(dx);
-                for (int dy = -radius; dy <= radius; dy++) {
-                    int absDy = Math.abs(dy);
-                    for (int dz = -radius; dz <= radius; dz++) {
-                        int absDz = Math.abs(dz);
-                        if (Math.max(absDx, Math.max(absDy, absDz)) != radius) {
-                            continue;
-                        }
+        // Collect all valid stand positions, then sort by preference
+        List<BlockPos> candidates = new ArrayList<>();
 
-                        BlockPos standPos = target.add(dx, dy, dz);
-                        Vec3d standEye = new Vec3d(standPos.getX() + 0.5, standPos.getY() + 1.0, standPos.getZ() + 0.5);
-                        if (!isWithinReach(standEye, target) || !canStandAt(standPos)) {
-                            continue;
-                        }
+        for (int dx = -reach; dx <= reach; dx++) {
+            for (int dy = -reach; dy <= reach; dy++) {
+                for (int dz = -reach; dz <= reach; dz++) {
+                    BlockPos standPos = target.add(dx, dy, dz);
 
-                        double dist = golemPos.squaredDistanceTo(standPos.getX() + 0.5, standPos.getY(), standPos.getZ() + 0.5);
-                        if (dist < fallbackDist) {
-                            fallbackDist = dist;
-                            fallback = standPos;
-                        }
+                    // Skip positions that would place the block inside the golem
+                    // (target at feet level or head level)
+                    if (standPos.equals(target) || standPos.up().equals(target)) {
+                        continue;
+                    }
 
-                        PathCheckStatus status = canPathTo(standPos);
-                        if (status == PathCheckStatus.PATHABLE) {
-                            return new PlacementSearchResult(standPos, false, true);
-                        }
-                        if (status == PathCheckStatus.UNKNOWN) {
-                            budgetLimited = true;
-                        }
+                    Vec3d standEye = new Vec3d(standPos.getX() + 0.5, standPos.getY() + golem.getEyeHeight(golem.getPose()), standPos.getZ() + 0.5);
+
+                    if (isWithinReach(standEye, target, MAX_REACH) && canStandAt(standPos)) {
+                        candidates.add(standPos);
                     }
                 }
             }
         }
 
-        if (fallback == null) {
-            return new PlacementSearchResult(null, budgetLimited, false);
+        if (candidates.isEmpty()) {
+            LOGGER.warn("No valid stand candidates found for target={}", target);
+            return new PlacementSearchResult(null, false, false);
         }
+
+        // Sort candidates: prefer positions at or below target Y (for tower building - ground is more reliable below)
+        // then by Y distance, then by distance to golem
+        candidates.sort((a, b) -> {
+            // First, prefer positions at or below target Y (ground is guaranteed from previous layers)
+            boolean aBelow = a.getY() <= targetY;
+            boolean bBelow = b.getY() <= targetY;
+            if (aBelow != bBelow) {
+                return aBelow ? -1 : 1;  // Below/at target comes first
+            }
+            // Then prefer positions closer to target Y level
+            int aYDist = Math.abs(a.getY() - targetY);
+            int bYDist = Math.abs(b.getY() - targetY);
+            if (aYDist != bYDist) {
+                return Integer.compare(aYDist, bYDist);
+            }
+            // Then sort by distance to golem
+            double distA = golemPos.squaredDistanceTo(a.getX() + 0.5, a.getY(), a.getZ() + 0.5);
+            double distB = golemPos.squaredDistanceTo(b.getX() + 0.5, b.getY(), b.getZ() + 0.5);
+            return Double.compare(distA, distB);
+        });
+
+        BlockPos fallback = candidates.get(0); // Best candidate (closest to target Y)
+        boolean budgetLimited = false;
+        int notPathableCount = 0;
+
+        // Debug: log candidate selection
+        if (candidates.size() <= 5) {
+            LOGGER.info("Stand candidates for target={}: {}", target, candidates);
+        } else {
+            LOGGER.info("Stand candidates for target={}: top5={}, total={}", target,
+                candidates.subList(0, 5), candidates.size());
+        }
+
+        // Check pathability for candidates (in sorted order)
+        for (BlockPos standPos : candidates) {
+            Vec3d standEye = new Vec3d(standPos.getX() + 0.5, standPos.getY() + golem.getEyeHeight(golem.getPose()), standPos.getZ() + 0.5);
+
+            // Only consider pathing to spots that are comfortably within reach
+            if (!isWithinReach(standEye, target, MAX_REACH - PLANNING_REACH_BUFFER)) {
+                continue;
+            }
+
+            PathCheckStatus status = canPathTo(standPos);
+            if (status == PathCheckStatus.PATHABLE) {
+                return new PlacementSearchResult(standPos, false, true);
+            }
+            if (status == PathCheckStatus.UNKNOWN) {
+                budgetLimited = true;
+            } else if (status == PathCheckStatus.NOT_PATHABLE) {
+                notPathableCount++;
+            }
+        }
+
+        int attempts = deferAttempts.getOrDefault(target, 0);
+        int golemY = golem.getBlockPos().getY();
+
+        // For tower building: if we found positions close to target Y but can't path to them,
+        // use the fallback (teleport) after just 1 defer attempt, not 2
+        int fallbackYDist = Math.abs(fallback.getY() - targetY);
+        boolean fallbackIsCloseToTarget = fallbackYDist <= 2;
+
+        // Key insight: if the fallback is significantly ABOVE the golem, pathfinding will fail
+        // because entities can't walk up without stairs/ladders. Teleport immediately.
+        int fallbackAboveGolem = fallback.getY() - golemY;
+        if (fallbackAboveGolem >= 1) {
+            LOGGER.info("Fallback above golem, teleporting up: fallback={} golemY={} target={}",
+                fallback, golemY, target);
+            return new PlacementSearchResult(fallback, false, true);
+        }
+
+        // If target is above the golem, we're likely in tower mode - teleport immediately
+        int targetAboveGolem = targetY - golemY;
+        if (targetAboveGolem >= 2) {
+            LOGGER.info("Target above golem (tower mode), using fallback: fallback={} golemY={} target={}",
+                fallback, golemY, target);
+            return new PlacementSearchResult(fallback, false, true);
+        }
+
+        if (attempts >= MAX_DEFER_ATTEMPTS - 1) {
+            LOGGER.info("Using fallback after max attempts: fallback={} target={}", fallback, target);
+            return new PlacementSearchResult(fallback, false, true);
+        }
+
+        // If we have a good fallback (close to target Y) and many positions weren't pathable,
+        // use it sooner - this helps with tower building where golem needs to teleport up
+        if (fallbackIsCloseToTarget && notPathableCount >= 3) {
+            LOGGER.info("Using close fallback for tower: fallback={} target={} notPathable={}",
+                fallback, target, notPathableCount);
+            return new PlacementSearchResult(fallback, false, true);
+        }
+
+        // If we checked several positions and none were pathable, just use the fallback
+        // This prevents getting stuck when pathfinding is unreliable
+        if (notPathableCount >= 5) {
+            LOGGER.info("Many unpathable positions, using fallback: fallback={} target={} notPathable={}",
+                fallback, target, notPathableCount);
+            return new PlacementSearchResult(fallback, false, true);
+        }
+
         if (budgetLimited) {
             return new PlacementSearchResult(null, true, true);
         }
 
-        int attempts = deferAttempts.getOrDefault(target, 0);
-        if (attempts >= MAX_DEFER_ATTEMPTS - 1) {
-            return new PlacementSearchResult(fallback, false, true);
-        }
-
-        return new PlacementSearchResult(null, false, true);
+        // Final fallback: if we have valid candidates but couldn't path to any,
+        // just return the best one and let the caller teleport
+        LOGGER.info("No pathable positions found, using fallback anyway: fallback={} target={}",
+            fallback, target);
+        return new PlacementSearchResult(fallback, false, true);
     }
 
     private BlockPos findNearestSafeStandPosition(BlockPos origin, int radius) {
@@ -627,12 +776,12 @@ public class PlacementPlanner {
     /**
      * Check if a position is within reach to place a block.
      */
-    private boolean isWithinReach(Vec3d from, BlockPos target) {
+    private boolean isWithinReach(Vec3d from, BlockPos target, double maxReach) {
         double dx = from.x - (target.getX() + 0.5);
         double dy = from.y - (target.getY() + 0.5);
         double dz = from.z - (target.getZ() + 0.5);
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        return dist <= MAX_REACH;
+        return dist <= maxReach;
     }
 
     /**
@@ -648,11 +797,95 @@ public class PlacementPlanner {
             return false;
         }
 
-        // Check for air at feet and head level (golem is 2 blocks tall)
+        // Check for air at feet
         BlockState feetState = world.getBlockState(pos);
-        BlockState headState = world.getBlockState(pos.up());
+        if (!feetState.isAir()) {
+            return false;
+        }
 
-        return feetState.isAir() && headState.isAir();
+        // Check for air at head level only if golem is tall enough
+        if (golem.getHeight() > 1.0) {
+            BlockState headState = world.getBlockState(pos.up());
+            if (!headState.isAir()) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Find ANY valid position to stand/teleport to for placing the target block.
+     * Tries ground positions first, then air positions (for placing while falling).
+     * Returns null only if no empty space exists within reach at all.
+     */
+    private BlockPos findAnyStandPosition(BlockPos target) {
+        int reach = (int) Math.ceil(MAX_REACH);
+        var world = golem.getEntityWorld();
+
+        BlockPos bestGround = null;
+        double bestGroundDist = Double.MAX_VALUE;
+        BlockPos bestAir = null;
+        double bestAirDist = Double.MAX_VALUE;
+        int targetY = target.getY();
+
+        for (int dx = -reach; dx <= reach; dx++) {
+            for (int dy = -reach; dy <= reach; dy++) {
+                for (int dz = -reach; dz <= reach; dz++) {
+                    BlockPos pos = target.add(dx, dy, dz);
+
+                    // Skip positions that would place the block inside the golem
+                    if (pos.equals(target) || pos.up().equals(target)) {
+                        continue;
+                    }
+
+                    Vec3d standEye = new Vec3d(pos.getX() + 0.5, pos.getY() + golem.getEyeHeight(golem.getPose()), pos.getZ() + 0.5);
+
+                    if (!isWithinReach(standEye, target, MAX_REACH)) {
+                        continue;
+                    }
+
+                    BlockState feetState = world.getBlockState(pos);
+                    if (!feetState.isAir()) {
+                        continue;
+                    }
+
+                    // Check head clearance
+                    if (golem.getHeight() > 1.0) {
+                        BlockState headState = world.getBlockState(pos.up());
+                        if (!headState.isAir()) {
+                            continue;
+                        }
+                    }
+
+                    // Prefer positions at or below target Y (ground is more reliable), then closer to target Y
+                    // Positions above target get a penalty since ground may not exist yet
+                    int yDiff = pos.getY() - targetY;
+                    double yPenalty = yDiff > 0 ? yDiff * 20 : Math.abs(yDiff) * 10;  // Above target = larger penalty
+                    double dist = yPenalty + Math.abs(dx) + Math.abs(dz);
+
+                    // Check if this is a ground position
+                    if (canStandAt(pos)) {
+                        if (dist < bestGroundDist) {
+                            bestGroundDist = dist;
+                            bestGround = pos;
+                        }
+                    } else {
+                        // Air position (no solid ground) - golem will fall
+                        if (dist < bestAirDist) {
+                            bestAirDist = dist;
+                            bestAir = pos;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Prefer ground positions, fall back to air
+        if (bestGround != null) {
+            return bestGround;
+        }
+        return bestAir;
     }
 
     /**

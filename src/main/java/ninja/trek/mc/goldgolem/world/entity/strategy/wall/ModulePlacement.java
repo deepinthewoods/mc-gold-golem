@@ -131,7 +131,9 @@ public class ModulePlacement {
             BlockState stateToPlace = v.state;
             String blockId = net.minecraft.registry.Registries.BLOCK.getId(v.state.getBlock()).toString();
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
-            if (groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size()) {
+            boolean hasGradientGroup = groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size();
+            boolean skipBlock = false;
+            if (hasGradientGroup) {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
                 int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
@@ -143,12 +145,23 @@ public class ModulePlacement {
                         BlockState sampledState = golem.getBlockStateFromId(sampledId);
                         if (sampledState != null) {
                             stateToPlace = sampledState;
+                        } else {
+                            // Sampled slot is empty - skip this block entirely
+                            skipBlock = true;
                         }
+                    } else {
+                        // Sampled slot is empty - skip this block entirely
+                        skipBlock = true;
                     }
+                } else {
+                    // No valid sample index (all slots empty) - skip this block entirely
+                    skipBlock = true;
                 }
             }
 
-            blockStatesMap.put(new BlockPos(wx, wy, wz), stateToPlace);
+            if (!skipBlock) {
+                blockStatesMap.put(new BlockPos(wx, wy, wz), stateToPlace);
+            }
         }
     }
 
@@ -217,7 +230,9 @@ public class ModulePlacement {
             BlockState stateToPlace = v.state;
             String blockId = net.minecraft.registry.Registries.BLOCK.getId(v.state.getBlock()).toString();
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
-            if (groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size()) {
+            boolean hasGradientGroup = groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size();
+            boolean skipBlock = false;
+            if (hasGradientGroup) {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
                 int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
@@ -230,12 +245,23 @@ public class ModulePlacement {
                         BlockState sampledState = golem.getBlockStateFromId(sampledId);
                         if (sampledState != null) {
                             stateToPlace = sampledState;
+                        } else {
+                            // Sampled slot is empty - skip this block entirely
+                            skipBlock = true;
                         }
+                    } else {
+                        // Sampled slot is empty - skip this block entirely
+                        skipBlock = true;
                     }
+                } else {
+                    // No valid sample index (all slots empty) - skip this block entirely
+                    skipBlock = true;
                 }
             }
 
-            strategy.placeBlockStateAt(golem, wx, wy, wz, stateToPlace, rot, mirror, null);
+            if (!skipBlock) {
+                strategy.placeBlockStateAt(golem, wx, wy, wz, stateToPlace, rot, mirror, null);
+            }
             ops++;
         }
     }

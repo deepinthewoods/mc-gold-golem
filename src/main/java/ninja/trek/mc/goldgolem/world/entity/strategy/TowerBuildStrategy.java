@@ -310,10 +310,12 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
                     return golem.placeBlockFromInventory(pos, sampledState, nextPos, isLeftHandActive());
                 }
             }
+            // Sampled slot is empty - skip this block entirely (don't fall back to original)
+            return true;
         }
 
-        // Fallback: place original block
-        return golem.placeBlockFromInventory(pos, targetState, nextPos, isLeftHandActive());
+        // No valid sample index (G == 0, all slots empty) - skip this block entirely
+        return true;
     }
 
     private BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
