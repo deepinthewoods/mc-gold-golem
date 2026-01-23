@@ -72,6 +72,12 @@ public class GoldGolemEntity extends PathAwareEntity {
     public static final int INVENTORY_SIZE = 27;
     private static final String SNAPSHOT_FOLDER = "GoldGolemModules";
     private static final int SNAPSHOT_VERSION = 2;
+    private static final String GOLEM_COUNTER_FILE = "golem_counters.json";
+
+    // Golem counter system for sequential naming (thread-safe for multiplayer)
+    private static final java.util.Map<BuildMode, Integer> golemCounters = new java.util.HashMap<>();
+    private static boolean countersLoaded = false;
+    private static final Object counterLock = new Object();
 
     // Data trackers for client-server sync
     private static final TrackedData<Integer> LEFT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
@@ -627,6 +633,82 @@ public class GoldGolemEntity extends PathAwareEntity {
         } catch (IOException ignored) {
         }
         return best;
+    }
+
+    /**
+     * Load golem counters from persistent storage (must be called within synchronized block)
+     */
+    private static void loadGolemCounters() {
+        if (countersLoaded) return;
+        countersLoaded = true;
+
+        Path gameDir = FabricLoader.getInstance().getGameDir();
+        Path counterFile = gameDir.resolve(SNAPSHOT_FOLDER).resolve(GOLEM_COUNTER_FILE);
+
+        if (!Files.exists(counterFile)) {
+            // Initialize all counters to 1
+            for (BuildMode mode : BuildMode.values()) {
+                golemCounters.put(mode, 1);
+            }
+            return;
+        }
+
+        try {
+            String json = Files.readString(counterFile);
+            JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+
+            for (BuildMode mode : BuildMode.values()) {
+                String key = mode.name().toLowerCase();
+                if (root.has(key)) {
+                    golemCounters.put(mode, root.get(key).getAsInt());
+                } else {
+                    golemCounters.put(mode, 1);
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Failed to load golem counters, resetting to 1", e);
+            for (BuildMode mode : BuildMode.values()) {
+                golemCounters.put(mode, 1);
+            }
+        }
+    }
+
+    /**
+     * Save golem counters to persistent storage
+     */
+    private static void saveGolemCounters() {
+        Path gameDir = FabricLoader.getInstance().getGameDir();
+        Path folder = gameDir.resolve(SNAPSHOT_FOLDER);
+        Path counterFile = folder.resolve(GOLEM_COUNTER_FILE);
+
+        try {
+            Files.createDirectories(folder);
+
+            JsonObject root = new JsonObject();
+            for (java.util.Map.Entry<BuildMode, Integer> entry : golemCounters.entrySet()) {
+                root.addProperty(entry.getKey().name().toLowerCase(), entry.getValue());
+            }
+
+            Files.writeString(counterFile, new GsonBuilder().setPrettyPrinting().create().toJson(root));
+        } catch (IOException e) {
+            LOGGER.error("Failed to save golem counters", e);
+        }
+    }
+
+    /**
+     * Get the next sequential golem name for a given build mode (thread-safe for multiplayer)
+     */
+    public static String getNextGolemName(BuildMode mode) {
+        synchronized (counterLock) {
+            loadGolemCounters();
+
+            int counter = golemCounters.getOrDefault(mode, 1);
+            golemCounters.put(mode, counter + 1);
+            saveGolemCounters();
+
+            String modeStr = mode.name().toLowerCase();
+            return "gg_" + modeStr + "_" + counter;
+        }
     }
 
     private static JsonObject serializeBlockState(BlockState state) {

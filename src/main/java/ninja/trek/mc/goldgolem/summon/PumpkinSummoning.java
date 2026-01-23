@@ -178,6 +178,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.EXCAVATION);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.EXCAVATION)));
             golem.setExcavationConfig(chest1, chest2, chestDirection1, chestDirection2, below);
 
             world.breakBlock(below, false, player);
@@ -194,6 +195,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.MINING);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.MINING)));
             golem.setMiningConfig(chestPos, miningDir, below);
 
             world.breakBlock(below, false, player);
@@ -216,6 +218,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TERRAFORMING);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.TERRAFORMING)));
             golem.setTerraformingConfig(def, below);
 
             // Remove the 3x3 gold platform
@@ -246,6 +249,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(secondGoldPos.getX() + 0.5, secondGoldPos.getY(), secondGoldPos.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TREE);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.TREE)));
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -327,6 +331,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(bottomGold.getX() + 0.5, bottomGold.getY(), bottomGold.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TOWER);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.TOWER)));
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -395,6 +400,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.WALL);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.WALL)));
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -484,6 +490,7 @@ public class PumpkinSummoning {
             golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.PATH);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.PATH)));
             world.breakBlock(below, false, player);
             ((ServerWorld) world).spawnEntity(golem);
             if (!player.isCreative()) stack.decrement(1);

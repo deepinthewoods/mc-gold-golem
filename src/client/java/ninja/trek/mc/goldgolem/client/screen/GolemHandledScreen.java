@@ -692,7 +692,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         int totalW = this.backgroundWidth - 16;
         int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap - resetButtonW - resetButtonGap);
         int layersSliderX = left + resetButtonW + resetButtonGap;
-        int layersFieldX = left + layersSliderW + layersGap;
+        int layersFieldX = layersSliderX + layersSliderW + layersGap;
         int layersFieldY = getTowerLayersFieldY();
         int resetButtonX = left;
         if (towerLayersSlider == null) {
@@ -1284,7 +1284,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 int totalW = this.backgroundWidth - 16;
                 int layersSliderW = Math.max(40, totalW - layersFieldW - layersGap - resetButtonW - resetButtonGap);
                 int layersSliderX = left + resetButtonW + resetButtonGap;
-                int layersFieldX = left + layersSliderW + layersGap;
+                int layersFieldX = layersSliderX + layersSliderW + layersGap;
                 int layersFieldY = getTowerLayersFieldY();
                 int resetButtonX = left;
                 towerLayersSlider = new TowerLayersRangeSlider(layersSliderX, layersFieldY, layersSliderW, layersFieldH, towerLayers);
@@ -1950,7 +1950,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                             Map<String, Integer> blockCounts = strategy.getBlockCounts();
                             int count = blockCounts.getOrDefault(id, 0);
                             String countText = "x" + count;
-                            int textX = ix + 18;
+                            int textX = ix + 24;  // Shifted right to avoid overlap
                             int textY = y + 4;
                             context.drawText(this.textRenderer, countText, textX, textY, 0xFFFFFFFF, true);
                         }
@@ -1995,6 +1995,45 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                         }
                     }
                 }
+            }
+
+            // Draw total blocks preview for Tower mode (to the right of window/scale sliders)
+            if (showBlockCounts && strategy.shouldShowBlockCounts()) {
+                Map<String, Integer> blockCounts = strategy.getBlockCounts();
+                int totalBlocks = 0;
+
+                // Sum all blocks that have non-zero counts
+                for (Integer count : blockCounts.values()) {
+                    if (count > 0) {
+                        totalBlocks += count;
+                    }
+                }
+
+                // Calculate stacks (64 blocks per stack)
+                int totalStacks = (int) Math.ceil((double) totalBlocks / 64.0);
+
+                // Build the preview text
+                StringBuilder previewText = new StringBuilder();
+                previewText.append(totalStacks).append("st");
+
+                // If more than 27 stacks, show shulker boxes
+                if (totalStacks > 27) {
+                    double shulkerBoxes = Math.ceil((double) totalStacks / 27.0 * 10.0) / 10.0; // Round up to 1 decimal place
+                    previewText.append(" ").append(String.format("%.1f", shulkerBoxes)).append("sb");
+                }
+
+                // Position to the right of window/scale sliders
+                gridX = this.x + 8;
+                int wx2 = gridX + 9 * 18 + 12;
+                int w2 = 70;  // window slider width
+                int gap2 = 6;
+                int s2 = 50;  // scale slider width
+                int gridTop = this.y + 26;
+
+                String preview = previewText.toString();
+                int previewX = wx2 + w2 + gap2 + s2 + 8; // 8 pixels to the right of scale slider
+                int previewY = gridTop; // Align with top of first row
+                context.drawText(this.textRenderer, Text.literal(preview), previewX, previewY, 0xFFFFFFFF, true);
             }
         }
 
