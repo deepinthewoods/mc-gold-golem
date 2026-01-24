@@ -1234,6 +1234,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 0.0)
                 .add(EntityAttributes.JUMP_STRENGTH, 0.42)
                 .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.15)
+                .add(EntityAttributes.EXPLOSION_KNOCKBACK_RESISTANCE, 0.15)
+                
                 .add(EntityAttributes.SCALE, 1.0);
     }
 
@@ -1831,6 +1833,26 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         this.getEntityWorld().setBlockState(pos, finalState);
+
+        // Explicitly update the block state to ensure proper connections (e.g. walls/fences)
+        // This fixes issues where simulatePlayerPlacement might miss connections or when replacing blocks
+        BlockState placedState = this.getEntityWorld().getBlockState(pos);
+        BlockState correctedState = placedState;
+        for (Direction dir : Direction.values()) {
+            correctedState = correctedState.getStateForNeighborUpdate(
+                this.getEntityWorld(),
+                this.getEntityWorld(),
+                pos,
+                dir,
+                pos.offset(dir),
+                this.getEntityWorld().getBlockState(pos.offset(dir)),
+                this.getEntityWorld().getRandom()
+            );
+        }
+        if (correctedState != placedState) {
+            this.getEntityWorld().setBlockState(pos, correctedState);
+        }
+
         // Set hand animation with current and next block positions
         beginHandAnimation(isLeft, pos, nextPos);
         return true;
@@ -2140,8 +2162,6 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         if (this.towerJsonFile != null) view.putString("TowerJson", this.towerJsonFile);
         view.putInt("TowerHeight", this.towerHeight);
-        view.putInt("TowerCurrentY", this.towerCurrentY);
-        view.putInt("TowerPlacementCursor", this.towerPlacementCursor);
         if (this.towerUniqueBlockIds != null && !this.towerUniqueBlockIds.isEmpty()) {
             view.putInt("TowerUniqCount", this.towerUniqueBlockIds.size());
             for (int i = 0; i < this.towerUniqueBlockIds.size(); i++) {
@@ -2354,8 +2374,6 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         this.towerJsonFile = view.getString("TowerJson", null);
         this.towerHeight = view.getInt("TowerHeight", 0);
-        this.towerCurrentY = view.getInt("TowerCurrentY", 0);
-        this.towerPlacementCursor = view.getInt("TowerPlacementCursor", 0);
         int tc = view.getInt("TowerUniqCount", 0);
         if (tc > 0) {
             java.util.ArrayList<String> ids = new java.util.ArrayList<>(tc);

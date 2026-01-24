@@ -19,7 +19,7 @@ import java.util.*;
  * Detects 3x3 gold platform and scans skeleton structure attached to it.
  */
 public final class TerraformingScanner {
-    public static final int MAX_VOXELS = 4096;
+    public static final int MAX_VOXELS = 16000;
     public static final int MAX_EXTENT = 512; // per axis bound size
 
     private static final Direction[] NEIGHBORS = new Direction[]{

@@ -20,7 +20,7 @@ import java.util.*;
  * and extracts individual modules as separate connected components.
  */
 public final class TreeScanner {
-    public static final int MAX_VOXELS = 4096;
+    public static final int MAX_VOXELS = 16000;
     public static final int MAX_EXTENT = 512; // per axis bound size
 
     private static final Direction[] NEIGHBORS = new Direction[]{
@@ -82,7 +82,7 @@ public final class TreeScanner {
                 max = new BlockPos(Math.max(max.getX(), n.getX()), Math.max(max.getY(), n.getY()), Math.max(max.getZ(), n.getZ()));
 
                 if (visited.size() > MAX_VOXELS) {
-                    return new Result(null, "Tree scan exceeded 4096 blocks");
+                    return new Result(null, "Tree scan exceeded " + MAX_VOXELS + " blocks");
                 }
                 if ((max.getX() - min.getX() + 1) > MAX_EXTENT ||
                         (max.getY() - min.getY() + 1) > MAX_EXTENT ||
