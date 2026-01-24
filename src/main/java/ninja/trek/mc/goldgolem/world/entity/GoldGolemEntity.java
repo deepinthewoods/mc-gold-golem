@@ -45,6 +45,11 @@ import net.minecraft.component.type.ContainerComponent;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.registry.Registries;
 import net.minecraft.state.property.Property;
+import net.minecraft.state.property.Properties;
+import net.minecraft.item.ItemPlacementContext;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.Direction;
 import net.minecraft.storage.NbtReadView;
 import net.minecraft.storage.NbtWriteView;
 import net.minecraft.storage.ReadView;
@@ -1235,10 +1240,15 @@ public class GoldGolemEntity extends PathAwareEntity {
     @Override
     protected void initGoals() {
         // Follow players holding gold nuggets (approach within 1.5 blocks)
-        this.goalSelector.add(3, new FollowGoldNuggetHolderGoal(this, 1.1, 1.5));
+        this.goalSelector.add(3, new FollowGoldNuggetHolderGoal(this, 1.1, 1.75));
         this.goalSelector.add(5, new PathingAwareWanderGoal(this, 0.8));
         this.goalSelector.add(6, new LookAtEntityGoal(this, PlayerEntity.class, 8.0f));
         this.goalSelector.add(7, new LookAroundGoal(this));
+    }
+
+    @Override
+    public boolean isPersistent() {
+        return true;
     }
 
     @Override
@@ -1366,8 +1376,8 @@ public class GoldGolemEntity extends PathAwareEntity {
             Vec3d armPos = new Vec3d(this.getX() - 0.3, this.getY() + 1.0, this.getZ()); // Left arm position (approx)
             Vec3d targetPos = leftArmTargetBlock;
 
-            // For ticks 2-3, adjust target based on animation state
-            if (leftHandAnimationTick == 3 && nextLeftBlock != null) {
+            // For later ticks, transition to looking at next block
+            if (leftHandAnimationTick >= 6 && nextLeftBlock != null) {
                 targetPos = new Vec3d(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5);
             }
 
@@ -1408,8 +1418,8 @@ public class GoldGolemEntity extends PathAwareEntity {
             Vec3d armPos = new Vec3d(this.getX() + 0.3, this.getY() + 1.0, this.getZ()); // Right arm position (approx)
             Vec3d targetPos = rightArmTargetBlock;
 
-            // For ticks 2-3, adjust target based on animation state
-            if (rightHandAnimationTick == 3 && nextRightBlock != null) {
+            // For later ticks, transition to looking at next block
+            if (rightHandAnimationTick >= 6 && nextRightBlock != null) {
                 targetPos = new Vec3d(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5);
             }
 
@@ -1533,7 +1543,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         int next = tick + 1;
-        if (next >= 4) {
+        // Extended animation duration from 4 to 12 ticks to keep arms/eyes animated during movement
+        if (next >= 12) {
             clearHandAnimation(isLeft);
         } else {
             this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, next);
@@ -1798,24 +1809,181 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     public boolean placeBlockFromInventory(BlockPos pos, BlockState state, BlockPos nextPos, boolean isLeft) {
+        return placeBlockFromInventoryWithTemplate(pos, state, state, nextPos, isLeft);
+    }
+
+    public boolean placeBlockFromInventoryWithTemplate(BlockPos pos, BlockState templateState, BlockState gradientState, BlockPos nextPos, boolean isLeft) {
+        // Determine the final block state to place based on template and gradient
+        BlockState finalState = getPlacementStateForBlock(pos, gradientState.getBlock(), templateState, 0, false);
+
         // Check if block already exists at position
-        if (this.getEntityWorld().getBlockState(pos).equals(state)) return true;
+        if (this.getEntityWorld().getBlockState(pos).equals(finalState)) return true;
 
         // Prevent placing blocks inside self to avoid suffocation damage
         if (wouldBlockOverlapSelf(pos)) return false;
 
         // Try to consume block from inventory
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(state.getBlock()).toString();
+        String blockId = net.minecraft.registry.Registries.BLOCK.getId(finalState.getBlock()).toString();
         if (!consumeBlockFromInventory(blockId)) {
             LOGGER.warn("GoldGolem placement failed: missing blockId={} at pos={}", blockId, pos);
             handleMissingBuildingBlock();
             return false;
         }
 
-        this.getEntityWorld().setBlockState(pos, state);
+        this.getEntityWorld().setBlockState(pos, finalState);
         // Set hand animation with current and next block positions
         beginHandAnimation(isLeft, pos, nextPos);
         return true;
+    }
+
+    /**
+     * Determines the appropriate block state for placement based on template and target block.
+     * Three-tier logic:
+     * 1. Same block type → copy exact state
+     * 2. Same property set → copy all properties
+     * 3. Different block family → simulate player placement
+     */
+    private BlockState getPlacementStateForBlock(BlockPos pos, net.minecraft.block.Block targetBlock, BlockState templateState, int rotation, boolean mirror) {
+        net.minecraft.block.Block templateBlock = templateState.getBlock();
+
+        // Case A: Exact same block type - copy state directly
+        if (templateBlock == targetBlock) {
+            BlockState result = templateState;
+            result = applyRotationAndMirror(result, rotation, mirror);
+            return result;
+        }
+
+        // Case B: Different blocks - check if they have the same property set
+        java.util.Collection<Property<?>> templatePropsCollection = templateState.getProperties();
+        java.util.Collection<Property<?>> targetPropsCollection = targetBlock.getDefaultState().getProperties();
+
+        java.util.Set<Property<?>> templateProps = new java.util.HashSet<>(templatePropsCollection);
+        java.util.Set<Property<?>> targetProps = new java.util.HashSet<>(targetPropsCollection);
+
+        if (templateProps.equals(targetProps)) {
+            // Same property set - copy all properties from template
+            BlockState result = targetBlock.getDefaultState();
+            for (Property<?> prop : templateProps) {
+                result = copyProperty(templateState, result, prop);
+            }
+            result = applyRotationAndMirror(result, rotation, mirror);
+            return result;
+        }
+
+        // Case C: Different block family - simulate player placement
+        BlockState result = simulatePlayerPlacement(pos, targetBlock);
+        result = applyRotationAndMirror(result, rotation, mirror);
+        return result;
+    }
+
+    /**
+     * Safely copies a property value from source to target BlockState.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T extends Comparable<T>> BlockState copyProperty(BlockState source, BlockState target, Property<T> property) {
+        try {
+            if (target.contains(property)) {
+                T value = source.get(property);
+                return target.with(property, value);
+            }
+        } catch (Exception e) {
+            // Property incompatible or other error - skip silently
+        }
+        return target;
+    }
+
+    /**
+     * Applies rotation and mirroring to a block state (used in wall mode).
+     */
+    private BlockState applyRotationAndMirror(BlockState state, int rotation, boolean mirror) {
+        if (rotation == 0 && !mirror) {
+            return state;
+        }
+
+        try {
+            net.minecraft.util.BlockRotation blockRotation = switch (rotation & 3) {
+                case 1 -> net.minecraft.util.BlockRotation.CLOCKWISE_90;
+                case 2 -> net.minecraft.util.BlockRotation.CLOCKWISE_180;
+                case 3 -> net.minecraft.util.BlockRotation.COUNTERCLOCKWISE_90;
+                default -> net.minecraft.util.BlockRotation.NONE;
+            };
+            state = state.rotate(blockRotation);
+        } catch (Throwable ignored) {}
+
+        try {
+            if (mirror) {
+                net.minecraft.util.BlockMirror blockMirror = net.minecraft.util.BlockMirror.LEFT_RIGHT;
+                state = state.mirror(blockMirror);
+            }
+        } catch (Throwable ignored) {}
+
+        return state;
+    }
+
+    /**
+     * Simulates player placement with deterministic randomness.
+     * Uses world seed + position for consistent results.
+     */
+    private BlockState simulatePlayerPlacement(BlockPos pos, net.minecraft.block.Block block) {
+        // Create deterministic random from world seed + position
+        long seed = pos.asLong();
+        World world = this.getEntityWorld();
+        if (world instanceof ServerWorld serverWorld) {
+            seed = serverWorld.getSeed() + pos.asLong();
+        }
+        java.util.Random random = new java.util.Random(seed);
+
+        // Pick random horizontal direction (0-3 for N/E/S/W)
+        // Direction.NORTH = 2, SOUTH = 0, WEST = 1, EAST = 3
+        Direction[] horizontalDirections = {Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST};
+        Direction horizontalFacing = horizontalDirections[random.nextInt(4)];
+
+        // Pick random hit side (0-5 for all directions)
+        Direction hitSide = Direction.values()[random.nextInt(6)];
+
+        // Create fake placement context
+        ItemPlacementContext context = createFakePlacementContext(pos, horizontalFacing, hitSide);
+
+        // Try to get placement state from block
+        BlockState placementState = null;
+        try {
+            placementState = block.getPlacementState(context);
+        } catch (Exception e) {
+            // Some blocks might throw exceptions - ignore
+        }
+
+        // Fall back to default state if placement state is null
+        if (placementState == null) {
+            placementState = block.getDefaultState();
+        }
+
+        return placementState;
+    }
+
+    /**
+     * Creates a fake ItemPlacementContext for simulating player placement.
+     */
+    private ItemPlacementContext createFakePlacementContext(BlockPos pos, Direction horizontalFacing, Direction hitSide) {
+        // Create a fake BlockHitResult
+        Vec3d hitPos = Vec3d.ofCenter(pos);
+        BlockHitResult hitResult = new BlockHitResult(hitPos, hitSide, pos, false);
+
+        // Create ItemPlacementContext
+        // The context simulates a player placing a block
+        World world = this.getEntityWorld();
+        ItemStack stack = new ItemStack(Items.STONE); // Dummy item, not used by most blocks
+
+        return new ItemPlacementContext(world, null, Hand.MAIN_HAND, stack, hitResult) {
+            @Override
+            public Direction getHorizontalPlayerFacing() {
+                return horizontalFacing;
+            }
+
+            @Override
+            public Direction getPlayerLookDirection() {
+                return hitSide;
+            }
+        };
     }
 
     private boolean consumeFromShulkerBox(ItemStack shulkerBox, String blockId) {
@@ -2641,8 +2809,11 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     @Override
     public boolean damage(net.minecraft.server.world.ServerWorld world, net.minecraft.entity.damage.DamageSource source, float amount) {
+        System.out.println("[GoldGolem] Taking damage - Source: " + source.getName() + ", Amount: " + amount + ", Type: " + source.getType());
+
         // Immune to suffocation damage (being inside blocks)
         if (source.isOf(net.minecraft.entity.damage.DamageTypes.IN_WALL)) {
+            System.out.println("[GoldGolem] Blocked suffocation damage (IN_WALL)");
             return false;
         }
         var attacker = source.getAttacker();
@@ -2671,14 +2842,17 @@ public class GoldGolemEntity extends PathAwareEntity {
             recentPlaced.clear();
             placedHead = placedSize = 0;
             if (ignoreOwnerDamage) {
+                System.out.println("[GoldGolem] Ignored low owner damage (fist attack)");
                 return false; // cancel low (fist) damage
             }
         }
+        System.out.println("[GoldGolem] Applying damage - Source: " + source.getName() + ", Amount: " + amount);
         return super.damage(world, source, amount);
     }
 
     @Override
     public void onDeath(net.minecraft.entity.damage.DamageSource source) {
+        System.out.println("[GoldGolem] Died - Cause: " + source.getName() + ", Type: " + source.getType());
         super.onDeath(source);
         if (!(this.getEntityWorld() instanceof ServerWorld world)) return;
         String dropName = "";
@@ -3131,21 +3305,17 @@ public class GoldGolemEntity extends PathAwareEntity {
             handleMissingBuildingBlock();
             return;
         }
-        net.minecraft.util.BlockRotation rotation = switch (rot & 3) {
-            case 1 -> net.minecraft.util.BlockRotation.CLOCKWISE_90;
-            case 2 -> net.minecraft.util.BlockRotation.CLOCKWISE_180;
-            case 3 -> net.minecraft.util.BlockRotation.COUNTERCLOCKWISE_90;
-            default -> net.minecraft.util.BlockRotation.NONE;
-        };
-        net.minecraft.util.BlockMirror mir = mirror ? net.minecraft.util.BlockMirror.LEFT_RIGHT : net.minecraft.util.BlockMirror.NONE;
-        net.minecraft.block.BlockState place = baseState;
-        try { place = place.rotate(rotation); } catch (Throwable ignored) {}
-        try { place = place.mirror(mir); } catch (Throwable ignored) {}
+
+        // Use new placement logic to determine final state
+        net.minecraft.block.BlockState place = getPlacementStateForBlock(pos, block, baseState, rot, mirror);
+
+        // Apply waterlogging fix
         try {
-            if (place.contains(net.minecraft.state.property.Properties.WATERLOGGED)) {
-                place = place.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE);
+            if (place.contains(Properties.WATERLOGGED)) {
+                place = place.with(Properties.WATERLOGGED, Boolean.FALSE);
             }
         } catch (Throwable ignored) {}
+
         // Prevent placing blocks inside self to avoid suffocation damage
         if (wouldBlockOverlapSelf(pos)) {
             unrecordPlaced(key);

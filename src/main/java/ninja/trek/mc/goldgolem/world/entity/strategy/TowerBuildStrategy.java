@@ -285,18 +285,18 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         if (golem.getEntityWorld().isClient()) return false;
 
         // Get the original block state from the template
-        BlockState targetState = getTowerBlockStateAt(template, origin, pos);
-        if (targetState == null) {
+        BlockState templateState = getTowerBlockStateAt(template, origin, pos);
+        if (templateState == null) {
             LOGGER.warn("Tower placement failed: missing target state at pos={} origin={}", pos, origin);
             return false;
         }
 
         // Use gradient sampling to potentially replace with a different block
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
+        String blockId = net.minecraft.registry.Registries.BLOCK.getId(templateState.getBlock()).toString();
         Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
         if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
             // No group mapping, place original block
-            return golem.placeBlockFromInventory(pos, targetState, nextPos, isLeftHandActive());
+            return golem.placeBlockFromInventoryWithTemplate(pos, templateState, templateState, nextPos, isLeftHandActive());
         }
 
         // Sample gradient based on Y position in total tower (not module)
@@ -310,7 +310,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             if (sampledId != null && !sampledId.isEmpty()) {
                 BlockState sampledState = golem.getBlockStateFromId(sampledId);
                 if (sampledState != null) {
-                    return golem.placeBlockFromInventory(pos, sampledState, nextPos, isLeftHandActive());
+                    // Pass both template state and sampled state for proper block state preservation
+                    return golem.placeBlockFromInventoryWithTemplate(pos, templateState, sampledState, nextPos, isLeftHandActive());
                 }
             }
             // Sampled slot is empty - skip this block entirely (don't fall back to original)
