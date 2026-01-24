@@ -434,15 +434,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     private void teleportToStart() {
         LOGGER.info("Mining Golem stuck detected! Teleporting to start pos: {}", startPos);
-        if (entity.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.PORTAL, entity.getX(), entity.getY() + 0.5, entity.getZ(),
-                40, 0.5, 0.5, 0.5, 0.2);
-            sw.spawnParticles(ParticleTypes.PORTAL, startPos.getX() + 0.5,
-                startPos.getY() + 0.5, startPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-        }
-        entity.refreshPositionAndAngles(startPos.getX() + 0.5, startPos.getY(),
-            startPos.getZ() + 0.5, entity.getYaw(), entity.getPitch());
-        entity.getNavigation().stop();
+        entity.teleportWithParticles(startPos);
     }
 
     private boolean isInventoryFull() {

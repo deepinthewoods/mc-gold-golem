@@ -1127,29 +1127,10 @@ public class PlacementPlanner {
 
     /**
      * Teleport the golem to a stand position.
+     * Delegates to the golem's teleportWithParticles method for consistent behavior.
      */
     private void teleportToStandPosition(BlockPos standPos) {
-        if (golem.getEntityWorld() instanceof ServerWorld sw) {
-            // Spawn particles at origin and destination
-            sw.spawnParticles(ParticleTypes.PORTAL,
-                    golem.getX(), golem.getY() + 0.5, golem.getZ(),
-                    40, 0.5, 0.5, 0.5, 0.2);
-            sw.spawnParticles(ParticleTypes.PORTAL,
-                    standPos.getX() + 0.5, standPos.getY() + 0.5, standPos.getZ() + 0.5,
-                    40, 0.5, 0.5, 0.5, 0.2);
-        }
-
-        // Add small Y offset (0.1) to ensure golem spawns clearly above the floor
-        // and doesn't clip into the ground block causing brief suffocation
-        golem.refreshPositionAndAngles(
-                standPos.getX() + 0.5,
-                standPos.getY() + 0.1,
-                standPos.getZ() + 0.5,
-                golem.getYaw(),
-                golem.getPitch()
-        );
-        golem.setVelocity(0, 0, 0);  // Clear velocity to prevent unexpected movement
-        golem.getNavigation().stop();
+        golem.teleportWithParticles(standPos);
     }
 
     /**

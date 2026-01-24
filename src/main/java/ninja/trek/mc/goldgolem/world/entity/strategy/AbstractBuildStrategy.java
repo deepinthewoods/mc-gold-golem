@@ -61,6 +61,7 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
 
     /**
      * Teleport the golem to a target position with portal particle effects.
+     * Adds a small Y offset (0.1) to prevent clipping into ground blocks.
      */
     protected void teleportWithParticles(GoldGolemEntity golem, Vec3d target) {
         LOGGER.info("Gold Golem stuck detected! Teleporting from {} to {}", golem.getBlockPos(), target);
@@ -72,8 +73,11 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
                 target.x, target.y + 0.5, target.z,
                 40, 0.5, 0.5, 0.5, 0.2);
         }
-        golem.refreshPositionAndAngles(target.x, target.y, target.z,
+        // Add small Y offset (0.1) to ensure golem spawns clearly above the floor
+        // and doesn't clip into the ground block causing brief suffocation
+        golem.refreshPositionAndAngles(target.x, target.y + 0.1, target.z,
             golem.getYaw(), golem.getPitch());
+        golem.setVelocity(0, 0, 0);  // Clear velocity to prevent unexpected movement
         golem.getNavigation().stop();
     }
 

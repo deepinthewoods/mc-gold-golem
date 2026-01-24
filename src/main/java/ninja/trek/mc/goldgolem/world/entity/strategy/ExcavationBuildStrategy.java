@@ -430,15 +430,7 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     }
 
     private void teleportToChest(BlockPos chestPos) {
-        if (entity.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.PORTAL, entity.getX(), entity.getY() + 0.5, entity.getZ(),
-                40, 0.5, 0.5, 0.5, 0.2);
-            sw.spawnParticles(ParticleTypes.PORTAL, chestPos.getX() + 0.5,
-                chestPos.getY() + 0.5, chestPos.getZ() + 0.5, 40, 0.5, 0.5, 0.5, 0.2);
-        }
-        entity.refreshPositionAndAngles(chestPos.getX() + 0.5, chestPos.getY(),
-            chestPos.getZ() + 0.5, entity.getYaw(), entity.getPitch());
-        entity.getNavigation().stop();
+        entity.teleportWithParticles(chestPos);
     }
 
     private BlockPos getNearestChest() {

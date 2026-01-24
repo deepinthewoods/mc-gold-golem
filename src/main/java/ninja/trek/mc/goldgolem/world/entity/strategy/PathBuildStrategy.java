@@ -362,14 +362,8 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
             if (golem.getNavigation().isIdle() && distSq > 1.0) {
                 stuckTicks++;
                 if (stuckTicks >= 20) {
-                    if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, golem.getX(), golem.getY() + 0.5, golem.getZ(),
-                            40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z,
-                            40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    golem.refreshPositionAndAngles(end.x, ty, end.z, golem.getYaw(), golem.getPitch());
-                    golem.getNavigation().stop();
+                    BlockPos targetPos = new BlockPos((int) Math.floor(end.x), (int) Math.floor(ty), (int) Math.floor(end.z));
+                    golem.teleportWithParticles(targetPos);
                     stuckTicks = 0;
                 }
             } else {

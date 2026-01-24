@@ -1226,7 +1226,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.MOVEMENT_EFFICIENCY, 1.0)
                 .add(EntityAttributes.GRAVITY, 0.08)
                 .add(EntityAttributes.SAFE_FALL_DISTANCE, 128.0)
-                .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 1.0)
+                .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 0.0)
                 .add(EntityAttributes.JUMP_STRENGTH, 0.42)
                 .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.15)
                 .add(EntityAttributes.SCALE, 1.0);
@@ -1570,6 +1570,32 @@ public class GoldGolemEntity extends PathAwareEntity {
         return groundY + 1.0;
     }
 
+    /**
+     * Teleport the golem to a target position with portal particle effects.
+     * Adds a small Y offset (0.1) to prevent clipping into ground blocks.
+     */
+    public void teleportWithParticles(BlockPos target) {
+        if (this.getEntityWorld() instanceof ServerWorld sw) {
+            sw.spawnParticles(ParticleTypes.PORTAL,
+                    this.getX(), this.getY() + 0.5, this.getZ(),
+                    40, 0.5, 0.5, 0.5, 0.2);
+            sw.spawnParticles(ParticleTypes.PORTAL,
+                    target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
+                    40, 0.5, 0.5, 0.5, 0.2);
+        }
+        // Add small Y offset (0.1) to ensure golem spawns clearly above the floor
+        // and doesn't clip into the ground block causing brief suffocation
+        this.refreshPositionAndAngles(
+                target.getX() + 0.5,
+                target.getY() + 0.1,
+                target.getZ() + 0.5,
+                this.getYaw(),
+                this.getPitch()
+        );
+        this.setVelocity(0, 0, 0);  // Clear velocity to prevent unexpected movement
+        this.getNavigation().stop();
+    }
+
     // WALL MODE runtime tick handler
     private void tickWallMode(PlayerEntity owner) {
         // Track anchors and enqueue modules based on movement
@@ -1626,12 +1652,8 @@ public class GoldGolemEntity extends PathAwareEntity {
                 stuckTicks++;
                 if (stuckTicks >= 20) {
                     LOGGER.info("Gold Golem stuck in Wall Mode! Teleporting to {}", end);
-                    if (this.getEntityWorld() instanceof ServerWorld sw) {
-                        sw.spawnParticles(ParticleTypes.PORTAL, this.getX(), this.getY() + 0.5, this.getZ(), 40, 0.5, 0.5, 0.5, 0.2);
-                        sw.spawnParticles(ParticleTypes.PORTAL, end.x, ty + 0.5, end.z, 40, 0.5, 0.5, 0.5, 0.2);
-                    }
-                    this.refreshPositionAndAngles(end.x, ty, end.z, this.getYaw(), this.getPitch());
-                    this.getNavigation().stop();
+                    BlockPos targetPos = new BlockPos((int) Math.floor(end.x), (int) Math.floor(ty), (int) Math.floor(end.z));
+                    this.teleportWithParticles(targetPos);
                     stuckTicks = 0;
                 }
             } else {
