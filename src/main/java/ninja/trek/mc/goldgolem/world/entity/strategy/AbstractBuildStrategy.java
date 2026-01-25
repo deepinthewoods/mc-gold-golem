@@ -1,14 +1,22 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
+import net.minecraft.block.Blocks;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.inventory.Inventory;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.LightType;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Random;
 
 /**
  * Abstract base class for build strategies with shared navigation,
@@ -17,6 +25,9 @@ import org.slf4j.LoggerFactory;
 public abstract class AbstractBuildStrategy implements BuildStrategy {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AbstractBuildStrategy.class);
+    private static final int TORCH_SCAN_RADIUS = 5; // Scan within placement range
+    private static final Random random = new Random();
+
     protected GoldGolemEntity entity;
     protected int stuckTicks = 0;
     protected int placementTickCounter = 0;
@@ -214,5 +225,91 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
     @Override
     public void stop(GoldGolemEntity golem) {
         cleanup(golem);
+    }
+
+    /**
+     * Check if a block is a torch (wall torch or floor torch).
+     * Used to avoid mining torches directly.
+     */
+    protected boolean isTorchBlock(String blockId) {
+        return blockId.contains("torch");
+    }
+
+    /**
+     * Try to place a torch in a dark area within range.
+     * Scans one random block per tick and places a torch if:
+     * - The golem has torches in inventory
+     * - The position has light level 0
+     * - The position is a valid floor (air above solid block)
+     *
+     * @return true if a torch was placed
+     */
+    protected boolean tryPlaceTorchInDarkArea() {
+        if (entity == null || entity.getEntityWorld().isClient()) return false;
+
+        // Check if we have torches
+        Inventory inventory = entity.getInventory();
+        int torchSlot = findTorchSlot(inventory);
+        if (torchSlot == -1) return false;
+
+        // Pick a random position within scan radius
+        BlockPos center = entity.getBlockPos();
+        int dx = random.nextInt(TORCH_SCAN_RADIUS * 2 + 1) - TORCH_SCAN_RADIUS;
+        int dy = random.nextInt(5) - 2; // -2 to +2 vertical range
+        int dz = random.nextInt(TORCH_SCAN_RADIUS * 2 + 1) - TORCH_SCAN_RADIUS;
+        BlockPos checkPos = center.add(dx, dy, dz);
+
+        // Check if this is a valid torch placement position
+        if (!isValidTorchPlacement(checkPos)) return false;
+
+        // Check light level (block light only, not sky light for underground mining)
+        int lightLevel = entity.getEntityWorld().getLightLevel(LightType.BLOCK, checkPos);
+        if (lightLevel > 0) return false;
+
+        // Place the torch
+        entity.getEntityWorld().setBlockState(checkPos, Blocks.TORCH.getDefaultState());
+
+        // Consume torch from inventory
+        ItemStack torchStack = inventory.getStack(torchSlot);
+        torchStack.decrement(1);
+        if (torchStack.isEmpty()) {
+            inventory.setStack(torchSlot, ItemStack.EMPTY);
+        }
+
+        // Trigger hand animation
+        entity.beginHandAnimation(isLeftHandActive(), checkPos, null);
+        alternateHand();
+
+        return true;
+    }
+
+    /**
+     * Find a slot containing torches in the inventory.
+     * @return slot index or -1 if no torches found
+     */
+    private int findTorchSlot(Inventory inventory) {
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (!stack.isEmpty() && stack.getItem() == Items.TORCH) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Check if a position is valid for torch placement.
+     * Must be air with a solid block below.
+     */
+    private boolean isValidTorchPlacement(BlockPos pos) {
+        var world = entity.getEntityWorld();
+
+        // Must be air
+        if (!world.getBlockState(pos).isAir()) return false;
+
+        // Must have solid block below
+        BlockPos below = pos.down();
+        var belowState = world.getBlockState(below);
+        return belowState.isSolidBlock(world, below);
     }
 }

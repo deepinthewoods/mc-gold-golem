@@ -346,35 +346,29 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 matrices.pop();
             } else if (meshName != null && meshName.toLowerCase().contains("arm")) {
                 // Arm mesh: apply swing rotation
-                matrices.push();
-
-                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
-
-                // Determine if this is left or right arm based on mesh name
                 boolean isLeftArm = meshName.toLowerCase().contains("arm_l");
                 float armRotation = isLeftArm ? state.leftArmRotation : state.rightArmRotation;
 
-                // Apply rotation around X-axis (forward/backward swing)
+                // Render the arm mesh
+                matrices.push();
+                matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
                 matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
-
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
-
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
+                matrices.pop();
 
-                // Render held item in hand - apply transformation correctly
-                // We're currently in the arm's rotated coordinate system
+                // Render held item in hand - completely separate transform from base
                 ItemRenderState itemState = isLeftArm ? state.leftItemRenderState : state.rightItemRenderState;
                 if (itemState != null && !itemState.isEmpty()) {
                     matrices.push();
 
-                    // Translate to arm pivot point
+                    // Start fresh: translate to arm pivot
                     matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
-                    // Apply arm rotation (this is the ONLY rotation we should apply)
+                    // Apply arm rotation once
                     matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
 
-                    // Now translate down the local arm axis to reach hand
-                    // In the rotated local space, -Y goes down the arm toward the hand
+                    // Translate down the rotated arm to reach hand position
                     float armLength = 6.0f;  // May need adjustment based on model
                     matrices.translate(0.0f, -armLength, 0.0f);
 
@@ -396,8 +390,6 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                     matrices.pop();
                 }
-
-                matrices.pop();
             } else if (isHeadMesh) {
                 // Head mesh: rotate based on look direction
                 matrices.push();

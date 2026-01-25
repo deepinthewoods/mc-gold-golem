@@ -21,6 +21,11 @@ import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.enchantment.Enchantments;
 import net.minecraft.registry.RegistryKeys;
 
+import net.minecraft.item.Items;
+
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Strategy for Excavation mode.
  * Excavates an area in a spiral pattern and deposits materials in chests.
@@ -54,6 +59,17 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     private int miningSwingTick = 0;
     private static final int MINING_SWING_INTERVAL = 5; // ticks between swings
 
+    // PlacementPlanner for smart movement (reused for mining)
+    private PlacementPlanner planner;
+    private int ticksInAir = 0;
+    private static final int TICKS_IN_AIR_THRESHOLD = 5; // Brief air time is fine
+
+    // Movement tracking for return-to-chest stuck detection
+    private double lastX = 0, lastZ = 0;
+    private int noMovementTicks = 0;
+    private static final double MOVEMENT_THRESHOLD = 0.1;
+    private static final int STUCK_TICKS_BEFORE_TELEPORT = 100;
+
     @Override
     public BuildMode getMode() {
         return BuildMode.EXCAVATION;
@@ -70,6 +86,8 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         // Reset transient state
         currentTarget = null;
         breakProgress = 0;
+        planner = new PlacementPlanner(golem);
+        ticksInAir = 0;
     }
 
     @Override
@@ -128,6 +146,11 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         currentTarget = null;
         breakProgress = 0;
         miningSwingTick = 0;
+        ticksInAir = 0;
+        noMovementTicks = 0;
+        if (planner != null) {
+            planner.clear();
+        }
         if (entity != null) {
             entity.setCurrentMiningTool(ItemStack.EMPTY);
         }
@@ -145,6 +168,11 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         currentTarget = null;
         breakProgress = 0;
         miningSwingTick = 0;
+        ticksInAir = 0;
+        noMovementTicks = 0;
+        if (planner != null) {
+            planner.clear();
+        }
         if (entity != null) {
             entity.setCurrentMiningTool(ItemStack.EMPTY);
         }
@@ -438,19 +466,28 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
             entity.getNavigation().startMovingTo(nearestChest.getX() + 0.5,
                 nearestChest.getY(), nearestChest.getZ() + 0.5, 1.1);
 
-            if (entity.getNavigation().isIdle() && distSq > 16.0) {
-                stuckTicks++;
-                if (stuckTicks >= 60) {
+            // Track actual movement for stuck detection
+            double movedX = entity.getX() - lastX;
+            double movedZ = entity.getZ() - lastZ;
+            double movedDistSq = movedX * movedX + movedZ * movedZ;
+
+            if (movedDistSq < MOVEMENT_THRESHOLD * MOVEMENT_THRESHOLD) {
+                noMovementTicks++;
+                if (noMovementTicks >= STUCK_TICKS_BEFORE_TELEPORT && distSq > 9.0) {
                     teleportToChest(nearestChest);
-                    stuckTicks = 0;
+                    noMovementTicks = 0;
                 }
             } else {
-                stuckTicks = 0;
+                noMovementTicks = 0;
             }
+
+            lastX = entity.getX();
+            lastZ = entity.getZ();
         } else {
             entity.getNavigation().stop();
             depositInventoryToChest(nearestChest);
             returningToChest = false;
+            noMovementTicks = 0;
             if (isInventoryFull()) {
                 idleAtStart = true;
                 entity.setBuildingPaths(false);
@@ -459,67 +496,180 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     }
 
     private void tickExcavationActive() {
-        placeFloorBlocksIfNeeded();
-
-        BlockPos targetPos = getNextTarget();
-        if (targetPos == null) {
-            entity.setBuildingPaths(false);
-            return;
+        // Reactive floor building - only when falling into deep gap
+        if (needsFloorSupport()) {
+            placeFloorBlocks();
         }
 
-        double ty = targetPos.getY();
-        entity.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
+        // Try to place torches in dark areas
+        tryPlaceTorchInDarkArea();
 
-        double dx = entity.getX() - (targetPos.getX() + 0.5);
-        double dy = entity.getY() - targetPos.getY();
-        double dz = entity.getZ() - (targetPos.getZ() + 0.5);
-        double distSq = dx * dx + dy * dy + dz * dz;
+        // Ensure planner is initialized
+        if (planner == null) {
+            planner = new PlacementPlanner(entity);
+        }
 
-        if (distSq <= 25.0) {
-            stuckTicks = 0; // Reset stuck counter when in range
-            excavateBlock(targetPos);
-        } else {
-            if (currentTarget != null && !currentTarget.equals(targetPos)) {
-                currentTarget = null;
-                breakProgress = 0;
-            }
+        // Initialize planner for current ring if needed
+        if (planner.isComplete()) {
+            List<BlockPos> ringBlocks = getBlocksForCurrentRing();
+            if (ringBlocks.isEmpty()) {
+                // Advance to next ring
+                currentRing++;
+                ringProgress = 0;
 
-            // Stuck detection: if navigation is idle but we're far from target
-            if (entity.getNavigation().isIdle() && distSq > 16.0) {
-                stuckTicks++;
-                if (stuckTicks >= 60) {
-                    BlockPos safePos = findSafePositionNear(targetPos);
-                    if (safePos != null) {
-                        entity.teleportWithParticles(safePos);
-                    }
-                    stuckTicks = 0;
+                // Check if excavation complete
+                int maxRing = depth > 0 ? depth - 1 : 63;
+                if (currentRing > maxRing) {
+                    idleAtStart = true;
+                    entity.setBuildingPaths(false);
+                    return;
                 }
-            } else {
-                stuckTicks = 0;
+
+                // Try getting blocks for the new ring
+                ringBlocks = getBlocksForCurrentRing();
+                if (ringBlocks.isEmpty()) {
+                    return; // Next tick will try again
+                }
+            }
+            planner.setBlocks(ringBlocks, pos -> !shouldMineBlock(pos));
+        }
+
+        // Let planner handle movement and reach
+        PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+            return mineBlock(pos);  // Returns true when block is broken
+        });
+
+        // Handle completion
+        if (result == PlacementPlanner.TickResult.COMPLETED) {
+            // Ring complete, advance to next ring on next tick
+            currentRing++;
+            ringProgress = 0;
+
+            // Return to chest to deposit items after each ring completion
+            returningToChest = true;
+            currentTarget = null;
+            breakProgress = 0;
+        }
+    }
+
+    /**
+     * Get all blocks to mine for the current ring.
+     * Returns blocks column-by-column (all Y levels for each XZ position).
+     */
+    private List<BlockPos> getBlocksForCurrentRing() {
+        List<BlockPos> blocks = new ArrayList<>();
+        int blocksInRing = 2 * currentRing + 1;
+
+        for (int progress = 0; progress < blocksInRing; progress++) {
+            BlockPos basePos = getExpandingSquarePosition(currentRing, progress);
+            for (int dy = 0; dy < height; dy++) {
+                BlockPos pos = basePos.up(dy);
+                if (shouldMineBlock(pos)) {
+                    blocks.add(pos);
+                }
             }
         }
+        return blocks;
+    }
+
+    /**
+     * Mine a single block. Returns true when the block is fully broken.
+     */
+    private boolean mineBlock(BlockPos pos) {
+        if (entity.getEntityWorld().isClient()) return false;
+
+        BlockState state = entity.getEntityWorld().getBlockState(pos);
+        if (state.isAir()) {
+            // Block already gone
+            currentTarget = null;
+            breakProgress = 0;
+            return true;
+        }
+
+        if (currentTarget == null || !currentTarget.equals(pos)) {
+            currentTarget = pos;
+            breakProgress = 0;
+            miningSwingTick = 0;
+        }
+
+        ItemStack bestTool = findBestTool(state);
+        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
+        breakSpeed *= 0.5f;
+
+        float hardness = state.getHardness(entity.getEntityWorld(), pos);
+        if (hardness < 0) {
+            // Unbreakable
+            currentTarget = null;
+            breakProgress = 0;
+            return true; // Skip this block
+        }
+
+        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
+        requiredTicks = Math.max(1, requiredTicks);
+
+        breakProgress++;
+        miningSwingTick++;
+
+        // Set the mining tool for display
+        entity.setCurrentMiningTool(bestTool);
+
+        // Trigger continuous arm swing animation
+        if (miningSwingTick >= MINING_SWING_INTERVAL) {
+            miningSwingTick = 0;
+            entity.beginHandAnimation(isLeftHandActive(), pos, null);
+            alternateHand();
+        }
+
+        if (breakProgress >= requiredTicks) {
+            if (entity.getEntityWorld() instanceof ServerWorld sw) {
+                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
+                    entity.getEntityWorld().getBlockEntity(pos), entity, bestTool);
+
+                for (ItemStack drop : drops) {
+                    addToInventory(drop);
+                }
+            }
+
+            entity.getEntityWorld().breakBlock(pos, false);
+
+            if (entity.getEntityWorld() instanceof ServerWorld sw) {
+                sw.spawnParticles(ParticleTypes.CLOUD, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    10, 0.25, 0.25, 0.25, 0.1);
+            }
+
+            currentTarget = null;
+            breakProgress = 0;
+            miningSwingTick = 0;
+            return true; // Block broken
+        }
+
+        return false; // Still mining
+    }
+
+    /**
+     * Check if the golem needs floor support (reactive floor building).
+     * Only returns true when actually falling into a deep gap.
+     */
+    private boolean needsFloorSupport() {
+        if (entity.isOnGround()) {
+            ticksInAir = 0;
+            return false;
+        }
+
+        ticksInAir++;
+        if (ticksInAir < TICKS_IN_AIR_THRESHOLD) {
+            return false; // Brief air time is fine (jumping, stepping)
+        }
+
+        // Check for deep gap (2+ blocks of air below)
+        BlockPos below = entity.getBlockPos().down();
+        BlockPos twoBelow = below.down();
+        return entity.getEntityWorld().getBlockState(below).isAir()
+            && entity.getEntityWorld().getBlockState(twoBelow).isAir();
     }
 
     private void teleportToChest(BlockPos chestPos) {
         entity.teleportWithParticles(chestPos);
-    }
-
-    /**
-     * Find a safe position near the target for teleportation.
-     * Looks for an adjacent position with solid ground and open space.
-     */
-    private BlockPos findSafePositionNear(BlockPos target) {
-        // Try positions around target at same Y level
-        for (Direction dir : Direction.Type.HORIZONTAL) {
-            BlockPos adjacent = target.offset(dir);
-            BlockState below = entity.getEntityWorld().getBlockState(adjacent.down());
-            BlockState at = entity.getEntityWorld().getBlockState(adjacent);
-            BlockState above = entity.getEntityWorld().getBlockState(adjacent.up());
-            if (!below.isAir() && at.isAir() && above.isAir()) {
-                return adjacent;
-            }
-        }
-        return target; // Fallback to target itself
     }
 
     private BlockPos getNearestChest() {
@@ -538,13 +688,39 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     private boolean isInventoryFull() {
         Inventory inventory = entity.getInventory();
-        int emptySlots = 0;
+        int availableSlots = 0;
         for (int i = 0; i < inventory.size(); i++) {
-            if (inventory.getStack(i).isEmpty()) {
-                emptySlots++;
+            ItemStack stack = inventory.getStack(i);
+            // Count empty slots and slots with tools/torches (since those won't be deposited)
+            if (stack.isEmpty() || isToolOrTorch(stack)) {
+                availableSlots++;
             }
         }
-        return emptySlots < 2;
+        // Need at least 2 slots available for non-tool/torch items
+        return availableSlots < 2;
+    }
+
+    /**
+     * Check if an item is a tool or torch that should never be deposited.
+     */
+    private boolean isToolOrTorch(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+
+        var item = stack.getItem();
+
+        // Check for torches
+        if (item == Items.TORCH || item == Items.SOUL_TORCH) {
+            return true;
+        }
+
+        // Check for tools by item ID pattern
+        String itemId = Registries.ITEM.getId(item).toString();
+        if (itemId.contains("_pickaxe") || itemId.contains("_shovel") ||
+            itemId.contains("_axe") || itemId.contains("_hoe") || itemId.contains("_sword")) {
+            return true;
+        }
+
+        return false;
     }
 
     private void depositInventoryToChest(BlockPos chestPos) {
@@ -558,6 +734,9 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         for (int i = 0; i < inventory.size(); i++) {
             ItemStack stack = inventory.getStack(i);
             if (stack.isEmpty()) continue;
+
+            // Never deposit tools or torches
+            if (isToolOrTorch(stack)) continue;
 
             String blockId = getBlockIdFromStack(stack);
             boolean isBuildingBlock = buildingBlockType != null && blockId != null &&
@@ -612,26 +791,6 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         return stack;
     }
 
-    /**
-     * Only place floor blocks when truly needed (over a 2+ block gap).
-     * For 1-block gaps, let the golem step over naturally.
-     */
-    private void placeFloorBlocksIfNeeded() {
-        if (entity.getEntityWorld().isClient()) return;
-
-        BlockPos below = entity.getBlockPos().down();
-        BlockState belowState = entity.getEntityWorld().getBlockState(below);
-
-        // Only act if standing on air
-        if (!belowState.isAir()) return;
-
-        // Only place if this is a deep gap (2+ blocks)
-        BlockPos twoBelow = below.down();
-        if (entity.getEntityWorld().getBlockState(twoBelow).isAir()) {
-            placeFloorBlocks(); // Use existing method for actual placement
-        }
-        // For 1-block gaps, let the golem step over naturally
-    }
 
     private void placeFloorBlocks() {
         if (entity.getEntityWorld().isClient()) return;
@@ -678,47 +837,35 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         }
     }
 
-    private BlockPos getNextTarget() {
-        // Use sweep pattern: currentRing = row, ringProgress = column
-        int width = depth > 0 ? depth : 64;
-
-        // Advance to next row if we've completed the current one
-        if (ringProgress >= width) {
-            currentRing++;
-            ringProgress = 0;
-        }
-
-        // Check if excavation is complete
-        if (depth > 0 && currentRing >= depth) {
-            return null; // Excavation complete
-        }
-
-        BlockPos sweepPos = getSweepPosition(currentRing, ringProgress);
-
-        for (int dy = 0; dy < height; dy++) {
-            BlockPos checkPos = sweepPos.up(dy);
-            if (shouldMineBlock(checkPos)) {
-                return checkPos;
-            }
-        }
-
-        ringProgress++;
-        return getNextTarget();
-    }
 
     /**
-     * Get position using sweep pattern from corner.
+     * Get position using expanding square pattern from corner.
      * startPos is the corner (near chests), excavating away from them.
-     * @param row Row index (secondary direction)
-     * @param col Column index (primary direction)
+     *
+     * For ring N, we mine an L-shaped edge that completes an (N+1)x(N+1) square:
+     * - Right edge: column N, rows 0 to N-1 (N blocks)
+     * - Bottom edge: row N, columns 0 to N (N+1 blocks)
+     * Total: 2N+1 blocks
+     *
+     * @param ring Ring index (0 = corner only, 1 = 2x2 square, etc.)
+     * @param progress Position within the ring's L-shape (0 to 2*ring)
      * @return Block position to excavate
      */
-    private BlockPos getSweepPosition(int row, int col) {
-        // If directions aren't set, fall back to default directions
+    private BlockPos getExpandingSquarePosition(int ring, int progress) {
         Direction primary = primaryExcavDir != null ? primaryExcavDir : Direction.SOUTH;
         Direction secondary = secondaryExcavDir != null ? secondaryExcavDir : Direction.EAST;
 
-        // Move from corner in both excavation directions
+        int col, row;
+        if (progress < ring) {
+            // Right edge: column = ring, row = progress
+            col = ring;
+            row = progress;
+        } else {
+            // Bottom edge: row = ring, column = progress - ring
+            col = progress - ring;
+            row = ring;
+        }
+
         return startPos
             .offset(primary, col)
             .offset(secondary, row);
@@ -734,6 +881,11 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
         // Never mine chests (used for storage)
         if (isChestBlock(blockId)) {
+            return false;
+        }
+
+        // Never mine torches directly (lighting is important)
+        if (isTorchBlock(blockId)) {
             return false;
         }
 
@@ -816,71 +968,6 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         return false;
     }
 
-    private void excavateBlock(BlockPos pos) {
-        if (entity.getEntityWorld().isClient()) return;
-
-        BlockState state = entity.getEntityWorld().getBlockState(pos);
-        if (state.isAir()) {
-            currentTarget = null;
-            breakProgress = 0;
-            return;
-        }
-
-        if (currentTarget == null || !currentTarget.equals(pos)) {
-            currentTarget = pos;
-            breakProgress = 0;
-            miningSwingTick = 0;
-        }
-
-        ItemStack bestTool = findBestTool(state);
-        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
-        breakSpeed *= 0.5f;
-
-        float hardness = state.getHardness(entity.getEntityWorld(), pos);
-        if (hardness < 0) {
-            currentTarget = null;
-            breakProgress = 0;
-            return;
-        }
-
-        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
-        requiredTicks = Math.max(1, requiredTicks);
-
-        breakProgress++;
-        miningSwingTick++;
-
-        // Set the mining tool for display (always show while excavating)
-        entity.setCurrentMiningTool(bestTool);
-
-        // Trigger continuous arm swing animation like a player mining
-        if (miningSwingTick >= MINING_SWING_INTERVAL) {
-            miningSwingTick = 0;
-            entity.beginHandAnimation(isLeftHandActive(), pos, null);
-            alternateHand();
-        }
-
-        if (breakProgress >= requiredTicks) {
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
-                    entity.getEntityWorld().getBlockEntity(pos), entity, bestTool);
-
-                for (ItemStack drop : drops) {
-                    addToInventory(drop);
-                }
-            }
-
-            entity.getEntityWorld().breakBlock(pos, false);
-
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                sw.spawnParticles(ParticleTypes.CLOUD, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                    10, 0.25, 0.25, 0.25, 0.1);
-            }
-
-            currentTarget = null;
-            breakProgress = 0;
-            miningSwingTick = 0;
-        }
-    }
 
     private boolean isGravityBlock(net.minecraft.block.Block block) {
         return block instanceof FallingBlock;

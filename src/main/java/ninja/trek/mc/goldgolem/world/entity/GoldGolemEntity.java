@@ -1263,7 +1263,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                 .add(EntityAttributes.JUMP_STRENGTH, 0.42)
                 .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.15)
                 .add(EntityAttributes.EXPLOSION_KNOCKBACK_RESISTANCE, 0.15)
-                
+                .add(EntityAttributes.BURNING_TIME, 10f)
                 .add(EntityAttributes.SCALE, 1.0);
     }
 

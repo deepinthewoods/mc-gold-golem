@@ -401,6 +401,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     private void tickMiningActive() {
         placeBlocksUnderFeet();
         scanForOres();
+        tryPlaceTorchInDarkArea();
 
         BlockPos targetPos = getNextMiningTarget();
         if (targetPos == null) {
@@ -766,6 +767,11 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
         // Never mine chests (used for storage)
         if (isChestBlock(blockId)) {
+            return false;
+        }
+
+        // Never mine torches directly (lighting is important)
+        if (isTorchBlock(blockId)) {
             return false;
         }
 

@@ -429,6 +429,14 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 this);
         sections = sectionConfig.sections;
 
+        // For modes with manual widget positioning (EXCAVATION, MINING),
+        // keep the old backgroundHeight calculation based on controlsMargin
+        // to ensure slot positions match
+        if (mode == BuildMode.EXCAVATION || mode == BuildMode.MINING) {
+            // Don't override backgroundHeight - use the constructor's calculation
+            return;
+        }
+
         // Calculate layout
         LayoutManager layoutManager = new LayoutManager(layoutContext, sections);
         LayoutManager.LayoutResult result = layoutManager.calculateLayout();
@@ -1456,13 +1464,22 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 ensureTowerLayersField();
             }
         } else if (isExcavationMode()) {
-            // Excavation Mode UI: simple sliders for height and depth + ore mode button
+            // Excavation Mode UI: position widgets within controlsMargin area
+            // controlsMargin defines where inventory slots start, so widgets must fit above that
+            int margin = this.handler.getControlsMargin();
             int sliderW = 120;
             int sliderH = 12;
+            int buttonH = 16;
+            int gap = 4;
             int sliderX = this.x + this.backgroundWidth - 8 - sliderW;
-            int sliderY1 = this.y + 26; // First slider position
-            int sliderY2 = sliderY1 + sliderH + 14; // Second slider below with gap
-            int buttonY = sliderY2 + sliderH + 14; // Button below depth slider
+
+            // Calculate positions to fit within margin (leaving some padding)
+            // Total height needed: 12 + 4 + 12 + 4 + 16 = 48 pixels
+            // Start position: margin - 48 - small_gap = margin - 52
+            int startY = this.y + margin - 52;
+            int sliderY1 = startY;
+            int sliderY2 = sliderY1 + sliderH + gap;
+            int buttonY = sliderY2 + sliderH + gap;
 
             excavationHeightSlider = new ExcavationHeightSlider(sliderX, sliderY1, sliderW, sliderH, excavationHeight);
             excavationDepthSlider = new ExcavationDepthSlider(sliderX, sliderY2, sliderW, sliderH, excavationDepth);
@@ -1479,13 +1496,15 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetOreMiningModeC2SPayload(
                         getEntityId(), 1, excavationOreMiningMode)); // targetMode=1 for excavation
                 }
-            ).dimensions(sliderX, buttonY, sliderW, 16).build();
+            ).dimensions(sliderX, buttonY, sliderW, buttonH).build();
             this.addDrawableChild(excavationOreModeButton);
         } else if (isMiningMode()) {
-            // Mining Mode UI: ore mode button
+            // Mining Mode UI: position ore button within controlsMargin area
+            int margin = this.handler.getControlsMargin();
             int sliderW = 120;
+            int buttonH = 16;
             int sliderX = this.x + this.backgroundWidth - 8 - sliderW;
-            int buttonY = this.y + 26;
+            int buttonY = this.y + margin - buttonH - 4; // Position near bottom of margin area
 
             // Ore mining mode cycling button
             miningOreModeButton = ButtonWidget.builder(
@@ -1496,7 +1515,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetOreMiningModeC2SPayload(
                         getEntityId(), 0, miningOreMiningMode)); // targetMode=0 for mining
                 }
-            ).dimensions(sliderX, buttonY, sliderW, 16).build();
+            ).dimensions(sliderX, buttonY, sliderW, buttonH).build();
             this.addDrawableChild(miningOreModeButton);
         } else if (isTerraformingMode()) {
             // Terraforming mode: 3 gradient rows + window sliders + scan radius slider
@@ -1606,6 +1625,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         this.renderBackground(context, mouseX, mouseY, delta);
         super.render(context, mouseX, mouseY, delta);
+        this.drawMouseoverTooltip(context, mouseX, mouseY);
 
         // Draw mode name on top of everything to ensure visibility
         BuildMode currentMode = getCurrentMode();
