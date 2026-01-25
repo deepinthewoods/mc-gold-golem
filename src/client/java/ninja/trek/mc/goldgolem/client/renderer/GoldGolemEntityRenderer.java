@@ -369,11 +369,11 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                     matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
 
                     // Translate down the rotated arm to reach hand position
-                    float armLength = 6.0f;  // May need adjustment based on model
+                    float armLength = 6.0f / 16.0f;  // Adjusted for pixel-to-meter scaling
                     matrices.translate(0.0f, -armLength, 0.0f);
 
                     // Offset forward slightly for grip position
-                    matrices.translate(0.0f, 0.0f, 1.0f);
+                    matrices.translate(0.0f, 0.0f, 1.0f / 16.0f);
 
                     // Orient the item for proper grip
                     matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(-90.0f));
