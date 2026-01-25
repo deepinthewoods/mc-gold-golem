@@ -7,6 +7,7 @@ import net.minecraft.inventory.Inventory;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.particle.BlockStateParticleEffect;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
@@ -40,7 +41,7 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     private BlockPos startPos = null;
     private int height = 3;
     private int depth = 16;  // 0 = infinite (stops at gold blocks)
-    private OreMiningMode oreMiningMode = OreMiningMode.ALWAYS;
+    private OreMiningMode oreMiningMode = OreMiningMode.SILK_TOUCH_FORTUNE;
 
     // Excavation direction (opposite of chest directions)
     private Direction primaryExcavDir = null;   // Opposite of dir1
@@ -98,6 +99,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void cleanup(GoldGolemEntity golem) {
+        // Clear breaking overlay before cleanup
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
         super.cleanup(golem);
         clearState();
     }
@@ -128,8 +133,18 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     }
 
     public void setSliders(int height, int depth) {
-        this.height = Math.max(1, Math.min(5, height));
-        this.depth = Math.max(0, Math.min(64, depth));  // 0 = infinite
+        int newHeight = Math.max(1, Math.min(5, height));
+        int newDepth = Math.max(0, Math.min(64, depth));  // 0 = infinite
+
+        // If height changed, restart excavation (but not for depth changes)
+        if (newHeight != this.height && !idleAtStart) {
+            this.height = newHeight;
+            this.depth = newDepth;
+            restartExcavation();
+        } else {
+            this.height = newHeight;
+            this.depth = newDepth;
+        }
     }
 
     public int getHeight() { return height; }
@@ -143,6 +158,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     public void resetToIdle() {
         idleAtStart = true;
         returningToChest = false;
+        // Clear breaking overlay before resetting target
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
         currentTarget = null;
         breakProgress = 0;
         miningSwingTick = 0;
@@ -158,6 +177,70 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     public void startFromIdle() {
         idleAtStart = false;
+        // Skip rings that are already excavated
+        skipCompletedRings();
+    }
+
+    /**
+     * Restart excavation from the beginning, skipping already-completed rings.
+     * Called when height changes or when fed a nugget while active.
+     */
+    public void restartExcavation() {
+        // Clear current state
+        currentRing = 0;
+        ringProgress = 0;
+        returningToChest = false;
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
+        currentTarget = null;
+        breakProgress = 0;
+        miningSwingTick = 0;
+        ticksInAir = 0;
+        noMovementTicks = 0;
+        if (planner != null) {
+            planner.clear();
+        }
+        if (entity != null) {
+            entity.setCurrentMiningTool(ItemStack.EMPTY);
+        }
+        // Skip already-completed rings
+        skipCompletedRings();
+        idleAtStart = false;
+    }
+
+    /**
+     * Skip rings that are already fully excavated (all air).
+     * Advances currentRing to the first ring that has blocks to mine.
+     */
+    private void skipCompletedRings() {
+        if (entity == null || startPos == null) return;
+
+        int maxRing = depth > 0 ? depth - 1 : 63;
+        while (currentRing <= maxRing) {
+            if (ringHasBlocksToMine(currentRing)) {
+                break; // Found a ring with blocks to mine
+            }
+            currentRing++;
+            ringProgress = 0;
+        }
+    }
+
+    /**
+     * Check if a ring has any blocks that need to be mined.
+     */
+    private boolean ringHasBlocksToMine(int ring) {
+        int blocksInRing = 2 * ring + 1;
+        for (int progress = 0; progress < blocksInRing; progress++) {
+            BlockPos basePos = getExpandingSquarePosition(ring, progress);
+            for (int dy = 0; dy < height; dy++) {
+                BlockPos pos = basePos.up(dy);
+                if (shouldMineBlock(pos)) {
+                    return true; // Found at least one block to mine
+                }
+            }
+        }
+        return false; // All blocks in this ring are air or shouldn't be mined
     }
 
     public void clearState() {
@@ -165,6 +248,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         ringProgress = 0;
         returningToChest = false;
         idleAtStart = false;
+        // Clear breaking overlay before resetting target
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
         currentTarget = null;
         breakProgress = 0;
         miningSwingTick = 0;
@@ -408,7 +495,9 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
             startFromIdle();
             return FeedResult.STARTED;
         }
-        return FeedResult.ALREADY_ACTIVE;
+        // Already active - restart excavation from the beginning
+        restartExcavation();
+        return FeedResult.STARTED;
     }
 
     @Override
@@ -513,23 +602,35 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         if (planner.isComplete()) {
             List<BlockPos> ringBlocks = getBlocksForCurrentRing();
             if (ringBlocks.isEmpty()) {
-                // Advance to next ring
+                // Ring is complete (all blocks mined) - return to chest before starting next ring
                 currentRing++;
                 ringProgress = 0;
 
                 // Check if excavation complete
                 int maxRing = depth > 0 ? depth - 1 : 63;
                 if (currentRing > maxRing) {
+                    // Final return to chest before going idle (only if we have items to deposit)
+                    if (!isInventoryEmpty()) {
+                        returningToChest = true;
+                        currentTarget = null;
+                        breakProgress = 0;
+                        return;
+                    }
+                    // Nothing to deposit, just go idle
                     idleAtStart = true;
                     entity.setBuildingPaths(false);
                     return;
                 }
 
-                // Try getting blocks for the new ring
-                ringBlocks = getBlocksForCurrentRing();
-                if (ringBlocks.isEmpty()) {
-                    return; // Next tick will try again
+                // Return to chest to deposit items after completing this ring (only if we have items)
+                if (!isInventoryEmpty()) {
+                    returningToChest = true;
+                    currentTarget = null;
+                    breakProgress = 0;
+                    return;
                 }
+                // Nothing to deposit, continue to next ring
+                return;
             }
             planner.setBlocks(ringBlocks, pos -> !shouldMineBlock(pos));
         }
@@ -545,10 +646,12 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
             currentRing++;
             ringProgress = 0;
 
-            // Return to chest to deposit items after each ring completion
-            returningToChest = true;
-            currentTarget = null;
-            breakProgress = 0;
+            // Return to chest to deposit items after each ring completion (only if we have items)
+            if (!isInventoryEmpty()) {
+                returningToChest = true;
+                currentTarget = null;
+                breakProgress = 0;
+            }
         }
     }
 
@@ -587,6 +690,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         }
 
         if (currentTarget == null || !currentTarget.equals(pos)) {
+            // Clear previous breaking overlay
+            if (currentTarget != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+                sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+            }
             currentTarget = pos;
             breakProgress = 0;
             miningSwingTick = 0;
@@ -613,11 +720,26 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         // Set the mining tool for display
         entity.setCurrentMiningTool(bestTool);
 
+        // Update breaking overlay (stages 0-9)
+        if (entity.getEntityWorld() instanceof ServerWorld sw) {
+            int breakStage = (int) ((float) breakProgress / requiredTicks * 10.0f);
+            breakStage = Math.min(9, Math.max(0, breakStage));
+            sw.setBlockBreakingInfo(entity.getId(), pos, breakStage);
+        }
+
         // Trigger continuous arm swing animation
         if (miningSwingTick >= MINING_SWING_INTERVAL) {
             miningSwingTick = 0;
             entity.beginHandAnimation(isLeftHandActive(), pos, null);
             alternateHand();
+
+            // Spawn small block particles during mining
+            if (entity.getEntityWorld() instanceof ServerWorld sw) {
+                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
+                sw.spawnParticles(particleEffect,
+                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    3, 0.2, 0.2, 0.2, 0.05);
+            }
         }
 
         if (breakProgress >= requiredTicks) {
@@ -633,8 +755,14 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
             entity.getEntityWorld().breakBlock(pos, false);
 
             if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                sw.spawnParticles(ParticleTypes.CLOUD, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                    10, 0.25, 0.25, 0.25, 0.1);
+                // Clear breaking overlay
+                sw.setBlockBreakingInfo(entity.getId(), pos, -1);
+
+                // Spawn burst of block-specific particles
+                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
+                sw.spawnParticles(particleEffect,
+                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    30, 0.4, 0.4, 0.4, 0.15);
             }
 
             currentTarget = null;
@@ -688,16 +816,31 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
     private boolean isInventoryFull() {
         Inventory inventory = entity.getInventory();
-        int availableSlots = 0;
+        int emptySlots = 0;
         for (int i = 0; i < inventory.size(); i++) {
             ItemStack stack = inventory.getStack(i);
-            // Count empty slots and slots with tools/torches (since those won't be deposited)
-            if (stack.isEmpty() || isToolOrTorch(stack)) {
-                availableSlots++;
+            if (stack.isEmpty()) {
+                emptySlots++;
             }
         }
-        // Need at least 2 slots available for non-tool/torch items
-        return availableSlots < 2;
+        // Need at least 2 empty slots for mined items
+        return emptySlots < 2;
+    }
+
+    /**
+     * Check if inventory has no depositable items (ignoring tools and torches).
+     * Used to skip returning to chest when there's nothing to dump.
+     */
+    private boolean isInventoryEmpty() {
+        Inventory inventory = entity.getInventory();
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (!stack.isEmpty() && !isToolOrTorch(stack)) {
+                // Found a non-tool/torch item that can be deposited
+                return false;
+            }
+        }
+        return true; // Only empty slots or tools/torches
     }
 
     /**

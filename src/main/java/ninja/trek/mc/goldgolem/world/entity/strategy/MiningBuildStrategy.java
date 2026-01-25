@@ -8,6 +8,7 @@ import net.minecraft.inventory.Inventory;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.particle.BlockStateParticleEffect;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.world.ServerWorld;
@@ -43,7 +44,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     private int branchDepth = 16;
     private int branchSpacing = 3;
     private int tunnelHeight = 2;
-    private OreMiningMode oreMiningMode = OreMiningMode.ALWAYS;
+    private OreMiningMode oreMiningMode = OreMiningMode.SILK_TOUCH_FORTUNE;
 
     // Mining progress state
     private int primaryProgress = 0;
@@ -88,6 +89,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void cleanup(GoldGolemEntity golem) {
+        // Clear breaking overlay before cleanup
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
         super.cleanup(golem);
         clearState();
     }
@@ -129,6 +134,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     public void resetToIdle() {
         idleAtChest = true;
         returningToChest = false;
+        // Clear breaking overlay before resetting target
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
         currentTarget = null;
         breakProgress = 0;
         miningSwingTick = 0;
@@ -148,6 +157,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         returningToChest = false;
         idleAtChest = false;
         pendingOres.clear();
+        // Clear breaking overlay before resetting target
+        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        }
         currentTarget = null;
         breakProgress = 0;
         miningSwingTick = 0;
@@ -811,6 +824,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         }
 
         if (currentTarget == null || !currentTarget.equals(pos)) {
+            // Clear previous breaking overlay
+            if (currentTarget != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+                sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+            }
             currentTarget = pos;
             breakProgress = 0;
             miningSwingTick = 0;
@@ -836,11 +853,26 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         // Set the mining tool for display (always show while mining)
         entity.setCurrentMiningTool(bestTool);
 
+        // Update breaking overlay (stages 0-9)
+        if (entity.getEntityWorld() instanceof ServerWorld sw) {
+            int breakStage = (int) ((float) breakProgress / requiredTicks * 10.0f);
+            breakStage = Math.min(9, Math.max(0, breakStage));
+            sw.setBlockBreakingInfo(entity.getId(), pos, breakStage);
+        }
+
         // Trigger continuous arm swing animation like a player mining
         if (miningSwingTick >= MINING_SWING_INTERVAL) {
             miningSwingTick = 0;
             entity.beginHandAnimation(isLeftHandActive(), pos, null);
             alternateHand();
+
+            // Spawn small block particles during mining
+            if (entity.getEntityWorld() instanceof ServerWorld sw) {
+                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
+                sw.spawnParticles(particleEffect,
+                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    3, 0.2, 0.2, 0.2, 0.05);
+            }
         }
 
         if (breakProgress >= requiredTicks) {
@@ -857,6 +889,17 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
             }
 
             entity.getEntityWorld().breakBlock(pos, false);
+
+            if (entity.getEntityWorld() instanceof ServerWorld sw) {
+                // Clear breaking overlay
+                sw.setBlockBreakingInfo(entity.getId(), pos, -1);
+
+                // Spawn burst of block-specific particles
+                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
+                sw.spawnParticles(particleEffect,
+                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
+                    30, 0.4, 0.4, 0.4, 0.15);
+            }
 
             if (!bestTool.isEmpty() && bestTool.isDamageable()) {
                 bestTool.damage(1, entity, EquipmentSlot.MAINHAND);
