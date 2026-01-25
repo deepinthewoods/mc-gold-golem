@@ -17,7 +17,11 @@ import net.minecraft.util.Identifier;
 
 import ninja.trek.mc.goldgolem.screen.GolemInventoryScreenHandler;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.client.screen.layout.*;
+import ninja.trek.mc.goldgolem.client.screen.layout.sections.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandler> {
@@ -125,6 +129,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private final java.util.List<NoiseScaleSlider> groupRowScaleSliders = new java.util.ArrayList<>();
     private final int[] groupSliderToGroup = new int[6];
     private final java.util.List<IconHit> groupIconHits = new java.util.ArrayList<>();
+
+    // Section-based layout system
+    private SectionFactory.SectionConfiguration sectionConfig;
+    private List<GuiSection> sections = new ArrayList<>();
+    private boolean useNewLayoutSystem = true; // Feature flag for gradual migration
 
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
@@ -402,6 +411,86 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         this.backgroundHeight = handler.getControlsMargin() + handler.getGolemRows() * 18 + 94;
     }
 
+    /**
+     * Calculate dynamic layout BEFORE super.init() is called.
+     * This sets the backgroundHeight based on content and screen size.
+     */
+    private void calculateDynamicLayout() {
+        // Create layout context
+        LayoutContext layoutContext = new LayoutContext(this.width, this.height);
+
+        // Get current build mode
+        BuildMode mode = getCurrentBuildMode();
+
+        // Create sections for current mode
+        sectionConfig = SectionFactory.createSectionsForMode(
+                mode,
+                this.handler.getGolemRows(),
+                this);
+        sections = sectionConfig.sections;
+
+        // Calculate layout
+        LayoutManager layoutManager = new LayoutManager(layoutContext, sections);
+        LayoutManager.LayoutResult result = layoutManager.calculateLayout();
+
+        // Update GUI height based on layout calculation
+        this.backgroundHeight = result.guiHeight;
+    }
+
+    /**
+     * Initialize the section-based layout system widgets.
+     * Called AFTER super.init() so x, y are set correctly.
+     */
+    private void initializeSections() {
+        // If we used the new layout system for height calculation,
+        // initialize section widgets now
+        if (useNewLayoutSystem && sectionConfig != null) {
+            // Initialize section widgets
+            for (GuiSection section : sections) {
+                if (section instanceof SettingsSection) {
+                    ((SettingsSection) section).setGuiCoordinates(this.x, this.y);
+                }
+                section.initializeWidgets(this::addDrawableChild);
+            }
+        }
+
+        // Always update gradient sections with current data (for state sync)
+        if (sectionConfig != null && sectionConfig.gradientsSection != null) {
+            BuildMode mode = getCurrentBuildMode();
+            if (mode == BuildMode.PATH || mode == BuildMode.GRADIENT) {
+                sectionConfig.gradientsSection.setGradientRow(0, gradientMainBlocks);
+                sectionConfig.gradientsSection.setGradientRow(1, gradientStepBlocks);
+            } else if (mode == BuildMode.TERRAFORMING) {
+                sectionConfig.gradientsSection.setGradientRow(0, terraformingGradientVertical);
+                sectionConfig.gradientsSection.setGradientRow(1, terraformingGradientHorizontal);
+                sectionConfig.gradientsSection.setGradientRow(2, terraformingGradientSloped);
+            }
+        }
+    }
+
+    /**
+     * Refresh the layout when group data changes.
+     * This recalculates heights based on actual data and repositions GUI if needed.
+     */
+    private void refreshLayoutIfNeeded() {
+        if (!useNewLayoutSystem || sectionConfig == null) return;
+
+        // Recalculate layout with current data
+        LayoutContext layoutContext = new LayoutContext(this.width, this.height);
+        LayoutManager layoutManager = new LayoutManager(layoutContext, sections);
+        LayoutManager.LayoutResult result = layoutManager.calculateLayout();
+
+        // Check if height changed significantly
+        int newHeight = result.guiHeight;
+        if (Math.abs(newHeight - this.backgroundHeight) > 5) {
+            // Height changed - update GUI dimensions
+            this.backgroundHeight = newHeight;
+            // Recenter the GUI
+            this.x = (this.width - this.backgroundWidth) / 2;
+            this.y = (this.height - this.backgroundHeight) / 2;
+        }
+    }
+
     public void setWallUniqueBlocks(java.util.List<String> ids) {
         this.wallUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
     }
@@ -426,6 +515,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (strategy != null) {
             syncGroupSliders(strategy);
         }
+        refreshLayoutIfNeeded();
     }
 
     // Tower mode network sync methods
@@ -461,6 +551,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             syncGroupSliders(strategy);
         }
         ensureTowerLayersField();
+        refreshLayoutIfNeeded();
     }
 
     // Excavation mode network sync method
@@ -576,6 +667,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (strategy != null) {
             syncGroupSliders(strategy);
         }
+        refreshLayoutIfNeeded();
     }
 
     private void scrollWall(int delta) {
@@ -826,9 +918,41 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     /**
+     * Get the text renderer for drawing text.
+     */
+    public net.minecraft.client.font.TextRenderer getTextRenderer() {
+        return this.textRenderer;
+    }
+
+    /**
+     * Get the player inventory title text.
+     */
+    public Text getPlayerInventoryTitle() {
+        return this.playerInventoryTitle;
+    }
+
+    /**
+     * Get the current build mode.
+     */
+    public BuildMode getCurrentBuildMode() {
+        // Determine mode from handler's slider mode
+        if (this.handler.isSliderEnabled()) {
+            return BuildMode.PATH;
+        }
+        int sliderMode = this.handler.getSliderMode();
+        if (sliderMode == 0) return BuildMode.WALL;
+        if (sliderMode == 1) return BuildMode.TOWER;
+        if (sliderMode == 2) return BuildMode.EXCAVATION;
+        if (sliderMode == 3) return BuildMode.MINING;
+        if (sliderMode == 4) return BuildMode.TERRAFORMING;
+        if (sliderMode == 5) return BuildMode.TREE;
+        return BuildMode.PATH;
+    }
+
+    /**
      * Get the current group mode strategy, or null if not in a group mode.
      */
-    private GroupModeStrategy getGroupModeStrategy() {
+    public GroupModeStrategy getGroupModeStrategy() {
         if (groupModeStrategy != null) {
             return groupModeStrategy;
         }
@@ -1161,7 +1285,16 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
     @Override
     protected void init() {
+        // Calculate layout BEFORE super.init() so height is correct for GUI centering
+        if (useNewLayoutSystem) {
+            calculateDynamicLayout();
+        }
+
         super.init();
+
+        // Initialize section widgets AFTER super.init() (which sets x, y)
+        initializeSections();
+
         // Place window slider in the controls margin area. Gradient slots are handled via mouse clicks, not buttons.
         int controlsTop = this.y + 8; // leave a small header gap
         // int slotsX = this.x + 8; // for reference
@@ -1877,8 +2010,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     @Override
     protected void drawForeground(DrawContext context, int mouseX, int mouseY) {
         // Labels (foreground coordinates are relative to GUI top-left)
-        // Player inventory label (match vanilla placement)
-        int invY = this.backgroundHeight - 96 + 2;
+        // Player inventory label - position relative to where slots actually are
+        // Slots are positioned using controlsMargin from the handler
+        int margin = this.handler.getControlsMargin();
+        int golemRows = this.handler.getGolemRows();
+        int invY = margin + golemRows * 18 + 2; // 2px above player inventory slots (which start at margin + golemRows*18 + 15)
         context.drawText(this.textRenderer, this.playerInventoryTitle, 8, invY, 0xFF404040, false);
         // Width label near the slider
         if (widthSlider != null && this.handler.isSliderEnabled()) {
