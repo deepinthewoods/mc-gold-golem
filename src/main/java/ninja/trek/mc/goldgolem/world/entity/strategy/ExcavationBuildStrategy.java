@@ -631,6 +631,11 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
         String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
 
+        // Never mine chests (used for storage)
+        if (isChestBlock(blockId)) {
+            return false;
+        }
+
         // In infinite mode (depth == 0), gold blocks act as boundaries
         if (depth == 0 && isGoldBlock(blockId)) {
             return false;
@@ -661,6 +666,14 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     private boolean isOreBlock(String blockId) {
         return blockId.contains("_ore") || blockId.contains("ancient_debris") ||
                blockId.equals("minecraft:gilded_blackstone");
+    }
+
+    /**
+     * Check if a block is a chest or storage container.
+     */
+    private boolean isChestBlock(String blockId) {
+        return blockId.contains("chest") || blockId.contains("barrel") ||
+               blockId.contains("shulker_box");
     }
 
     /**

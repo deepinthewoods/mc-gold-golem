@@ -2873,6 +2873,16 @@ public class GoldGolemEntity extends PathAwareEntity {
         System.out.println("[GoldGolem] Died - Cause: " + source.getName() + ", Type: " + source.getType());
         super.onDeath(source);
         if (!(this.getEntityWorld() instanceof ServerWorld world)) return;
+
+        // Drop all items from the inventory
+        for (int i = 0; i < this.inventory.size(); ++i) {
+            ItemStack itemStack = this.inventory.getStack(i);
+            if (!itemStack.isEmpty()) {
+                this.dropStack(world, itemStack);
+                this.inventory.setStack(i, ItemStack.EMPTY);
+            }
+        }
+
         String dropName = "";
         Text custom = getCustomName();
         if (custom != null) {
