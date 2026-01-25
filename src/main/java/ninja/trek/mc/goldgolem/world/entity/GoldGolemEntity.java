@@ -95,6 +95,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
     private static final TrackedData<Boolean> BUILDING_PATHS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
     private static final TrackedData<Integer> BUILD_MODE = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
+    private static final TrackedData<ItemStack> CURRENT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
@@ -255,6 +256,15 @@ public class GoldGolemEntity extends PathAwareEntity {
         return tick >= 0 && tick <= 1;
     }
     public ItemStack getLeftHandItem() {
+        BuildMode mode = getBuildMode();
+        // Mining/Excavation: show tool continuously while active
+        if ((mode == BuildMode.MINING || mode == BuildMode.EXCAVATION) && isBuildingPaths()) {
+            ItemStack tool = getCurrentMiningTool();
+            if (!tool.isEmpty()) {
+                return tool;
+            }
+        }
+        // Building modes: show block during placement animation
         if (!shouldShowLeftHandItem()) return ItemStack.EMPTY;
         // Return the first block item from inventory
         for (int i = 0; i < inventory.size(); i++) {
@@ -266,6 +276,15 @@ public class GoldGolemEntity extends PathAwareEntity {
         return ItemStack.EMPTY;
     }
     public ItemStack getRightHandItem() {
+        BuildMode mode = getBuildMode();
+        // Mining/Excavation: show tool continuously while active
+        if ((mode == BuildMode.MINING || mode == BuildMode.EXCAVATION) && isBuildingPaths()) {
+            ItemStack tool = getCurrentMiningTool();
+            if (!tool.isEmpty()) {
+                return tool;
+            }
+        }
+        // Building modes: show block during placement animation
         if (!shouldShowRightHandItem()) return ItemStack.EMPTY;
         // Return the first block item from inventory
         for (int i = 0; i < inventory.size(); i++) {
@@ -283,6 +302,14 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
     public void setBuildMode(BuildMode mode) {
         this.dataTracker.set(BUILD_MODE, (mode == null ? BuildMode.PATH : mode).ordinal());
+    }
+
+    public ItemStack getCurrentMiningTool() {
+        return this.dataTracker.get(CURRENT_MINING_TOOL);
+    }
+
+    public void setCurrentMiningTool(ItemStack tool) {
+        this.dataTracker.set(CURRENT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
     }
 
     // Strategy pattern methods
@@ -1197,6 +1224,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         builder.add(RIGHT_HAND_NEXT_POS, Optional.empty());
         builder.add(BUILDING_PATHS, false);
         builder.add(BUILD_MODE, BuildMode.PATH.ordinal());
+        builder.add(CURRENT_MINING_TOOL, ItemStack.EMPTY);
     }
 
     // UUID conversion helpers for NBT (still used by mining mode)

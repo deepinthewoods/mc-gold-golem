@@ -12,8 +12,12 @@ import net.minecraft.client.render.command.OrderedRenderCommandQueue;
 import net.minecraft.client.render.entity.EntityRenderer;
 import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.render.entity.state.EntityRenderState;
+import net.minecraft.client.item.ItemModelManager;
+import net.minecraft.client.render.item.ItemRenderState;
 import net.minecraft.client.render.state.CameraRenderState;
 import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.item.ItemDisplayContext;
+import net.minecraft.item.ItemStack;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.RotationAxis;
 import ninja.trek.mc.goldgolem.BuildMode;
@@ -28,8 +32,12 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     // Calculated on first render based on actual mesh extents
     private static float[] wheelSpeedMultipliers = null;
 
+    // Item rendering
+    private final ItemModelManager itemModelManager;
+
     public GoldGolemEntityRenderer(EntityRendererFactory.Context ctx) {
         super(ctx);
+        this.itemModelManager = ctx.getItemModelManager();
     }
 
     public static class GoldGolemRenderState extends EntityRenderState {
@@ -44,8 +52,10 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float rightEyePitch;
         public float leftArmRotation;
         public float rightArmRotation;
-        public net.minecraft.item.ItemStack leftHandItem = net.minecraft.item.ItemStack.EMPTY;
-        public net.minecraft.item.ItemStack rightHandItem = net.minecraft.item.ItemStack.EMPTY;
+        public ItemStack leftHandItem = ItemStack.EMPTY;
+        public ItemStack rightHandItem = ItemStack.EMPTY;
+        public final ItemRenderState leftItemRenderState = new ItemRenderState();
+        public final ItemRenderState rightItemRenderState = new ItemRenderState();
     }
 
     @Override
@@ -78,6 +88,20 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.rightArmRotation = entity.getRightArmRotation();
         state.leftHandItem = entity.getLeftHandItem();
         state.rightHandItem = entity.getRightHandItem();
+
+        // Update item render states for MC 1.21 rendering
+        this.itemModelManager.updateForLivingEntity(
+            state.leftItemRenderState,
+            state.leftHandItem,
+            ItemDisplayContext.THIRD_PERSON_LEFT_HAND,
+            entity
+        );
+        this.itemModelManager.updateForLivingEntity(
+            state.rightItemRenderState,
+            state.rightHandItem,
+            ItemDisplayContext.THIRD_PERSON_RIGHT_HAND,
+            entity
+        );
     }
 
     /**
@@ -337,16 +361,37 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
 
-                // TODO: Item rendering - needs implementation for MC 1.21.10
-                // The API has changed significantly:
-                // - ModelTransformationMode is now ItemDisplayContext
-                // - Item rendering now uses a different system with ItemModelManager
-                // For now, just log when hands should have items
-                net.minecraft.item.ItemStack handItem = isLeftArm ? state.leftHandItem : state.rightHandItem;
-                if (!handItem.isEmpty()) {
-                    System.out.println("Should render " + (isLeftArm ? "left" : "right") + " hand item: " + handItem.getItem().toString());
-                    System.out.println("  Arm rotation: " + armRotation);
-                    System.out.println("  Mesh pivot: [" + mesh.pivotX() + ", " + mesh.pivotY() + ", " + mesh.pivotZ() + "]");
+                // Render held item in hand
+                ItemRenderState itemState = isLeftArm ? state.leftItemRenderState : state.rightItemRenderState;
+                if (itemState != null && !itemState.isEmpty()) {
+                    matrices.push();
+
+                    // Position to the hand (end of arm)
+                    // The arm is already positioned at pivot, we need to go to the hand
+                    // Translate along the arm direction (down) to reach hand position
+                    // Arm pivot is at shoulder, translate down ~6 units to hand
+                    matrices.translate(mesh.pivotX(), mesh.pivotY() - 6.0f, mesh.pivotZ());
+
+                    // Apply arm rotation to follow the arm
+                    matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
+
+                    // Position relative to rotated arm - move forward slightly for the hand
+                    matrices.translate(0.0f, 0.0f, 1.0f);
+
+                    // Rotate the item to face outward and grip correctly
+                    matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(-90.0f));
+                    if (isLeftArm) {
+                        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0f));
+                    }
+
+                    // Scale item to appropriate size
+                    float itemScale = 0.5f;
+                    matrices.scale(itemScale, itemScale, itemScale);
+
+                    // Render the item (5th param is outline color, 0 = no outline)
+                    itemState.render(matrices, queue, light, overlay, 0);
+
+                    matrices.pop();
                 }
 
                 matrices.pop();

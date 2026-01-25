@@ -58,6 +58,8 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     private String buildingBlockType = null;
     private int breakProgress = 0;
     private BlockPos currentTarget = null;
+    private int miningSwingTick = 0;
+    private static final int MINING_SWING_INTERVAL = 5; // ticks between swings
 
     @Override
     public BuildMode getMode() {
@@ -129,6 +131,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         returningToChest = false;
         currentTarget = null;
         breakProgress = 0;
+        miningSwingTick = 0;
+        if (entity != null) {
+            entity.setCurrentMiningTool(ItemStack.EMPTY);
+        }
     }
 
     public void startFromIdle() {
@@ -144,6 +150,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         pendingOres.clear();
         currentTarget = null;
         breakProgress = 0;
+        miningSwingTick = 0;
+        if (entity != null) {
+            entity.setCurrentMiningTool(ItemStack.EMPTY);
+        }
     }
 
     // ==================== NBT Serialization ====================
@@ -748,12 +758,28 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     private boolean shouldMineBlock(BlockPos pos) {
         BlockState state = entity.getEntityWorld().getBlockState(pos);
-        return !state.isAir() && state.getHardness(entity.getEntityWorld(), pos) >= 0;
+        if (state.isAir() || state.getHardness(entity.getEntityWorld(), pos) < 0) {
+            return false;
+        }
+
+        String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+
+        // Never mine chests (used for storage)
+        if (isChestBlock(blockId)) {
+            return false;
+        }
+
+        return true;
     }
 
     private boolean isOreBlock(String blockId) {
         return blockId.contains("_ore") || blockId.contains("ancient_debris") ||
                blockId.equals("minecraft:gilded_blackstone");
+    }
+
+    private boolean isChestBlock(String blockId) {
+        return blockId.contains("chest") || blockId.contains("barrel") ||
+               blockId.contains("shulker_box");
     }
 
     private boolean isGravityBlock(net.minecraft.block.Block block) {
@@ -781,6 +807,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         if (currentTarget == null || !currentTarget.equals(pos)) {
             currentTarget = pos;
             breakProgress = 0;
+            miningSwingTick = 0;
         }
 
         ItemStack bestTool = findBestTool(state);
@@ -798,6 +825,17 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         requiredTicks = Math.max(1, requiredTicks);
 
         breakProgress++;
+        miningSwingTick++;
+
+        // Set the mining tool for display (always show while mining)
+        entity.setCurrentMiningTool(bestTool);
+
+        // Trigger continuous arm swing animation like a player mining
+        if (miningSwingTick >= MINING_SWING_INTERVAL) {
+            miningSwingTick = 0;
+            entity.beginHandAnimation(isLeftHandActive(), pos, null);
+            alternateHand();
+        }
 
         if (breakProgress >= requiredTicks) {
             String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
@@ -828,6 +866,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
             pendingOres.remove(pos);
             currentTarget = null;
             breakProgress = 0;
+            miningSwingTick = 0;
 
             if (isOre) {
                 mineOreSurroundings(pos);

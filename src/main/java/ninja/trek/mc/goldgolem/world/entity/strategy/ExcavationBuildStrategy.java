@@ -47,6 +47,8 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     private String buildingBlockType = null;
     private int breakProgress = 0;
     private BlockPos currentTarget = null;
+    private int miningSwingTick = 0;
+    private static final int MINING_SWING_INTERVAL = 5; // ticks between swings
 
     @Override
     public BuildMode getMode() {
@@ -117,6 +119,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         returningToChest = false;
         currentTarget = null;
         breakProgress = 0;
+        miningSwingTick = 0;
+        if (entity != null) {
+            entity.setCurrentMiningTool(ItemStack.EMPTY);
+        }
     }
 
     public void startFromIdle() {
@@ -130,6 +136,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         idleAtStart = false;
         currentTarget = null;
         breakProgress = 0;
+        miningSwingTick = 0;
+        if (entity != null) {
+            entity.setCurrentMiningTool(ItemStack.EMPTY);
+        }
     }
 
     // ==================== NBT Serialization ====================
@@ -728,6 +738,7 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         if (currentTarget == null || !currentTarget.equals(pos)) {
             currentTarget = pos;
             breakProgress = 0;
+            miningSwingTick = 0;
         }
 
         ItemStack bestTool = findBestTool(state);
@@ -745,6 +756,17 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         requiredTicks = Math.max(1, requiredTicks);
 
         breakProgress++;
+        miningSwingTick++;
+
+        // Set the mining tool for display (always show while excavating)
+        entity.setCurrentMiningTool(bestTool);
+
+        // Trigger continuous arm swing animation like a player mining
+        if (miningSwingTick >= MINING_SWING_INTERVAL) {
+            miningSwingTick = 0;
+            entity.beginHandAnimation(isLeftHandActive(), pos, null);
+            alternateHand();
+        }
 
         if (breakProgress >= requiredTicks) {
             if (entity.getEntityWorld() instanceof ServerWorld sw) {
@@ -765,6 +787,7 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
 
             currentTarget = null;
             breakProgress = 0;
+            miningSwingTick = 0;
         }
     }
 
