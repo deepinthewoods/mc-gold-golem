@@ -361,34 +361,37 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
 
-                // Render held item in hand
+                // Render held item in hand - apply transformation correctly
+                // We're currently in the arm's rotated coordinate system
                 ItemRenderState itemState = isLeftArm ? state.leftItemRenderState : state.rightItemRenderState;
                 if (itemState != null && !itemState.isEmpty()) {
                     matrices.push();
 
-                    // Position to the hand (end of arm)
-                    // The arm is already positioned at pivot, we need to go to the hand
-                    // Translate along the arm direction (down) to reach hand position
-                    // Arm pivot is at shoulder, translate down ~6 units to hand
-                    matrices.translate(mesh.pivotX(), mesh.pivotY() - 6.0f, mesh.pivotZ());
+                    // Translate to arm pivot point
+                    matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
-                    // Apply arm rotation to follow the arm
+                    // Apply arm rotation (this is the ONLY rotation we should apply)
                     matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
 
-                    // Position relative to rotated arm - move forward slightly for the hand
+                    // Now translate down the local arm axis to reach hand
+                    // In the rotated local space, -Y goes down the arm toward the hand
+                    float armLength = 6.0f;  // May need adjustment based on model
+                    matrices.translate(0.0f, -armLength, 0.0f);
+
+                    // Offset forward slightly for grip position
                     matrices.translate(0.0f, 0.0f, 1.0f);
 
-                    // Rotate the item to face outward and grip correctly
+                    // Orient the item for proper grip
                     matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(-90.0f));
                     if (isLeftArm) {
                         matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0f));
                     }
 
-                    // Scale item to appropriate size
+                    // Scale item appropriately
                     float itemScale = 0.5f;
                     matrices.scale(itemScale, itemScale, itemScale);
 
-                    // Render the item (5th param is outline color, 0 = no outline)
+                    // Render the item
                     itemState.render(matrices, queue, light, overlay, 0);
 
                     matrices.pop();

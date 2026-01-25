@@ -37,6 +37,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     private int depth = 16;  // 0 = infinite (stops at gold blocks)
     private OreMiningMode oreMiningMode = OreMiningMode.ALWAYS;
 
+    // Excavation direction (opposite of chest directions)
+    private Direction primaryExcavDir = null;   // Opposite of dir1
+    private Direction secondaryExcavDir = null; // Opposite of dir2
+
     // Excavation progress state
     private int currentRing = 0;
     private int ringProgress = 0;
@@ -99,6 +103,10 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         this.dir2 = dir2;
         this.startPos = startPos;
         this.idleAtStart = true; // Start idle, waiting for gold nugget
+
+        // Compute excavation directions (opposite of chest directions)
+        this.primaryExcavDir = dir1 != null ? dir1.getOpposite() : null;
+        this.secondaryExcavDir = dir2 != null ? dir2.getOpposite() : null;
     }
 
     public void setSliders(int height, int depth) {
@@ -158,6 +166,8 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         }
         if (dir1 != null) nbt.putString("Dir1", dir1.name());
         if (dir2 != null) nbt.putString("Dir2", dir2.name());
+        if (primaryExcavDir != null) nbt.putString("PrimaryExcavDir", primaryExcavDir.name());
+        if (secondaryExcavDir != null) nbt.putString("SecondaryExcavDir", secondaryExcavDir.name());
         if (startPos != null) {
             nbt.putInt("StartX", startPos.getX());
             nbt.putInt("StartY", startPos.getY());
@@ -199,6 +209,20 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
                 dir2 = Direction.valueOf(nbt.getString("Dir2", "EAST"));
             } catch (IllegalArgumentException ignored) {
                 dir2 = null;
+            }
+        }
+        if (nbt.contains("PrimaryExcavDir")) {
+            try {
+                primaryExcavDir = Direction.valueOf(nbt.getString("PrimaryExcavDir", "SOUTH"));
+            } catch (IllegalArgumentException ignored) {
+                primaryExcavDir = null;
+            }
+        }
+        if (nbt.contains("SecondaryExcavDir")) {
+            try {
+                secondaryExcavDir = Direction.valueOf(nbt.getString("SecondaryExcavDir", "WEST"));
+            } catch (IllegalArgumentException ignored) {
+                secondaryExcavDir = null;
             }
         }
         if (nbt.contains("StartX")) {
@@ -245,6 +269,12 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         }
         if (dir2 != null) {
             view.putString("ExcavDir2", dir2.name());
+        }
+        if (primaryExcavDir != null) {
+            view.putString("ExcavPrimaryDir", primaryExcavDir.name());
+        }
+        if (secondaryExcavDir != null) {
+            view.putString("ExcavSecondaryDir", secondaryExcavDir.name());
         }
         if (startPos != null) {
             view.putInt("ExcavStartX", startPos.getX());
@@ -297,6 +327,22 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
                 dir2 = Direction.valueOf(excavDir2);
             } catch (IllegalArgumentException ignored) {
                 dir2 = null;
+            }
+        }
+        String excavPrimaryDir = view.getString("ExcavPrimaryDir", null);
+        if (excavPrimaryDir != null) {
+            try {
+                primaryExcavDir = Direction.valueOf(excavPrimaryDir);
+            } catch (IllegalArgumentException ignored) {
+                primaryExcavDir = null;
+            }
+        }
+        String excavSecondaryDir = view.getString("ExcavSecondaryDir", null);
+        if (excavSecondaryDir != null) {
+            try {
+                secondaryExcavDir = Direction.valueOf(excavSecondaryDir);
+            } catch (IllegalArgumentException ignored) {
+                secondaryExcavDir = null;
             }
         }
         if (view.contains("ExcavStartX")) {
@@ -413,7 +459,7 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     }
 
     private void tickExcavationActive() {
-        placeFloorBlocks();
+        placeFloorBlocksIfNeeded();
 
         BlockPos targetPos = getNextTarget();
         if (targetPos == null) {
@@ -430,17 +476,50 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         double distSq = dx * dx + dy * dy + dz * dz;
 
         if (distSq <= 25.0) {
+            stuckTicks = 0; // Reset stuck counter when in range
             excavateBlock(targetPos);
         } else {
             if (currentTarget != null && !currentTarget.equals(targetPos)) {
                 currentTarget = null;
                 breakProgress = 0;
             }
+
+            // Stuck detection: if navigation is idle but we're far from target
+            if (entity.getNavigation().isIdle() && distSq > 16.0) {
+                stuckTicks++;
+                if (stuckTicks >= 60) {
+                    BlockPos safePos = findSafePositionNear(targetPos);
+                    if (safePos != null) {
+                        entity.teleportWithParticles(safePos);
+                    }
+                    stuckTicks = 0;
+                }
+            } else {
+                stuckTicks = 0;
+            }
         }
     }
 
     private void teleportToChest(BlockPos chestPos) {
         entity.teleportWithParticles(chestPos);
+    }
+
+    /**
+     * Find a safe position near the target for teleportation.
+     * Looks for an adjacent position with solid ground and open space.
+     */
+    private BlockPos findSafePositionNear(BlockPos target) {
+        // Try positions around target at same Y level
+        for (Direction dir : Direction.Type.HORIZONTAL) {
+            BlockPos adjacent = target.offset(dir);
+            BlockState below = entity.getEntityWorld().getBlockState(adjacent.down());
+            BlockState at = entity.getEntityWorld().getBlockState(adjacent);
+            BlockState above = entity.getEntityWorld().getBlockState(adjacent.up());
+            if (!below.isAir() && at.isAir() && above.isAir()) {
+                return adjacent;
+            }
+        }
+        return target; // Fallback to target itself
     }
 
     private BlockPos getNearestChest() {
@@ -533,6 +612,27 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         return stack;
     }
 
+    /**
+     * Only place floor blocks when truly needed (over a 2+ block gap).
+     * For 1-block gaps, let the golem step over naturally.
+     */
+    private void placeFloorBlocksIfNeeded() {
+        if (entity.getEntityWorld().isClient()) return;
+
+        BlockPos below = entity.getBlockPos().down();
+        BlockState belowState = entity.getEntityWorld().getBlockState(below);
+
+        // Only act if standing on air
+        if (!belowState.isAir()) return;
+
+        // Only place if this is a deep gap (2+ blocks)
+        BlockPos twoBelow = below.down();
+        if (entity.getEntityWorld().getBlockState(twoBelow).isAir()) {
+            placeFloorBlocks(); // Use existing method for actual placement
+        }
+        // For 1-block gaps, let the golem step over naturally
+    }
+
     private void placeFloorBlocks() {
         if (entity.getEntityWorld().isClient()) return;
 
@@ -579,22 +679,24 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
     }
 
     private BlockPos getNextTarget() {
-        int ringSize = currentRing == 0 ? 1 : (currentRing * 8);
-        if (ringProgress >= ringSize) {
+        // Use sweep pattern: currentRing = row, ringProgress = column
+        int width = depth > 0 ? depth : 64;
+
+        // Advance to next row if we've completed the current one
+        if (ringProgress >= width) {
             currentRing++;
             ringProgress = 0;
         }
 
-        // depth == 0 means infinite (no ring limit)
-        // depth > 0 means stop at that ring
-        if (depth > 0 && currentRing > depth) {
-            return null;
+        // Check if excavation is complete
+        if (depth > 0 && currentRing >= depth) {
+            return null; // Excavation complete
         }
 
-        BlockPos ringPos = getRingPosition(currentRing, ringProgress);
+        BlockPos sweepPos = getSweepPosition(currentRing, ringProgress);
 
         for (int dy = 0; dy < height; dy++) {
-            BlockPos checkPos = ringPos.up(dy);
+            BlockPos checkPos = sweepPos.up(dy);
             if (shouldMineBlock(checkPos)) {
                 return checkPos;
             }
@@ -604,33 +706,22 @@ public class ExcavationBuildStrategy extends AbstractBuildStrategy {
         return getNextTarget();
     }
 
-    private BlockPos getRingPosition(int ring, int progress) {
-        if (ring == 0) {
-            return startPos;
-        }
+    /**
+     * Get position using sweep pattern from corner.
+     * startPos is the corner (near chests), excavating away from them.
+     * @param row Row index (secondary direction)
+     * @param col Column index (primary direction)
+     * @return Block position to excavate
+     */
+    private BlockPos getSweepPosition(int row, int col) {
+        // If directions aren't set, fall back to default directions
+        Direction primary = primaryExcavDir != null ? primaryExcavDir : Direction.SOUTH;
+        Direction secondary = secondaryExcavDir != null ? secondaryExcavDir : Direction.EAST;
 
-        int sideLength = ring * 2;
-        int x = startPos.getX();
-        int z = startPos.getZ();
-
-        int perimeter = sideLength * 4;
-        int pos = progress % perimeter;
-
-        if (pos < sideLength) {
-            x = x - ring + pos;
-            z = z - ring;
-        } else if (pos < sideLength * 2) {
-            x = x + ring;
-            z = z - ring + (pos - sideLength);
-        } else if (pos < sideLength * 3) {
-            x = x + ring - (pos - sideLength * 2);
-            z = z + ring;
-        } else {
-            x = x - ring;
-            z = z + ring - (pos - sideLength * 3);
-        }
-
-        return new BlockPos(x, startPos.getY(), z);
+        // Move from corner in both excavation directions
+        return startPos
+            .offset(primary, col)
+            .offset(secondary, row);
     }
 
     private boolean shouldMineBlock(BlockPos pos) {
