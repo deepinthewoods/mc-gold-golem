@@ -57,9 +57,16 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     // Mining runtime state (not persisted)
     private final Set<BlockPos> pendingOres = new HashSet<>();
     private String buildingBlockType = null;
-    private int breakProgress = 0;
-    private BlockPos currentTarget = null;
-    private int miningSwingTick = 0;
+
+    // Dual-hand mining state - each hand mines independently at 4x player time
+    private BlockPos leftTarget = null;
+    private BlockPos rightTarget = null;
+    private int leftBreakProgress = 0;
+    private int rightBreakProgress = 0;
+    private int leftSwingTick = 0;
+    private int rightSwingTick = 0;
+    private ItemStack leftTool = ItemStack.EMPTY;
+    private ItemStack rightTool = ItemStack.EMPTY;
     private static final int MINING_SWING_INTERVAL = 5; // ticks between swings
 
     @Override
@@ -77,8 +84,14 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         super.initialize(golem);
         // Reset transient state
         pendingOres.clear();
-        currentTarget = null;
-        breakProgress = 0;
+        leftTarget = null;
+        rightTarget = null;
+        leftBreakProgress = 0;
+        rightBreakProgress = 0;
+        leftSwingTick = 0;
+        rightSwingTick = 0;
+        leftTool = ItemStack.EMPTY;
+        rightTool = ItemStack.EMPTY;
     }
 
     @Override
@@ -89,9 +102,14 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void cleanup(GoldGolemEntity golem) {
-        // Clear breaking overlay before cleanup
-        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        // Clear breaking overlays for both hands before cleanup
+        if (entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            if (leftTarget != null) {
+                sw.setBlockBreakingInfo(entity.getId(), leftTarget, -1);
+            }
+            if (rightTarget != null) {
+                sw.setBlockBreakingInfo(entity.getId() + 1000, rightTarget, -1);
+            }
         }
         super.cleanup(golem);
         clearState();
@@ -134,15 +152,26 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     public void resetToIdle() {
         idleAtChest = true;
         returningToChest = false;
-        // Clear breaking overlay before resetting target
-        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        // Clear breaking overlays for both hands
+        if (entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            if (leftTarget != null) {
+                sw.setBlockBreakingInfo(entity.getId(), leftTarget, -1);
+            }
+            if (rightTarget != null) {
+                sw.setBlockBreakingInfo(entity.getId() + 1000, rightTarget, -1);
+            }
         }
-        currentTarget = null;
-        breakProgress = 0;
-        miningSwingTick = 0;
+        leftTarget = null;
+        rightTarget = null;
+        leftBreakProgress = 0;
+        rightBreakProgress = 0;
+        leftSwingTick = 0;
+        rightSwingTick = 0;
+        leftTool = ItemStack.EMPTY;
+        rightTool = ItemStack.EMPTY;
         if (entity != null) {
-            entity.setCurrentMiningTool(ItemStack.EMPTY);
+            entity.setLeftMiningTool(ItemStack.EMPTY);
+            entity.setRightMiningTool(ItemStack.EMPTY);
         }
     }
 
@@ -157,15 +186,26 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         returningToChest = false;
         idleAtChest = false;
         pendingOres.clear();
-        // Clear breaking overlay before resetting target
-        if (currentTarget != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        // Clear breaking overlays for both hands
+        if (entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
+            if (leftTarget != null) {
+                sw.setBlockBreakingInfo(entity.getId(), leftTarget, -1);
+            }
+            if (rightTarget != null) {
+                sw.setBlockBreakingInfo(entity.getId() + 1000, rightTarget, -1);
+            }
         }
-        currentTarget = null;
-        breakProgress = 0;
-        miningSwingTick = 0;
+        leftTarget = null;
+        rightTarget = null;
+        leftBreakProgress = 0;
+        rightBreakProgress = 0;
+        leftSwingTick = 0;
+        rightSwingTick = 0;
+        leftTool = ItemStack.EMPTY;
+        rightTool = ItemStack.EMPTY;
         if (entity != null) {
-            entity.setCurrentMiningTool(ItemStack.EMPTY);
+            entity.setLeftMiningTool(ItemStack.EMPTY);
+            entity.setRightMiningTool(ItemStack.EMPTY);
         }
     }
 
@@ -373,8 +413,10 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         // State 3: Check if inventory is full (need to return)
         if (isInventoryFull()) {
             returningToChest = true;
-            currentTarget = null;
-            breakProgress = 0;
+            leftTarget = null;
+            rightTarget = null;
+            leftBreakProgress = 0;
+            rightBreakProgress = 0;
             return;
         }
 
@@ -416,44 +458,106 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         scanForOres();
         tryPlaceTorchInDarkArea();
 
-        BlockPos targetPos = getNextMiningTarget();
-        if (targetPos == null) {
+        // Get targets for each hand independently
+        if (leftTarget == null || entity.getEntityWorld().getBlockState(leftTarget).isAir()) {
+            leftTarget = getNextMiningTarget();
+            leftBreakProgress = 0;
+            leftSwingTick = 0;
+        }
+        if (rightTarget == null || entity.getEntityWorld().getBlockState(rightTarget).isAir()) {
+            rightTarget = getNextMiningTargetExcluding(leftTarget);
+            rightBreakProgress = 0;
+            rightSwingTick = 0;
+        }
+
+        // If no targets, we're done
+        if (leftTarget == null && rightTarget == null) {
             entity.setBuildingPaths(false);
             return;
         }
 
-        double ty = targetPos.getY();
-        entity.getNavigation().startMovingTo(targetPos.getX() + 0.5, ty, targetPos.getZ() + 0.5, 1.1);
-
-        double dx = entity.getX() - (targetPos.getX() + 0.5);
-        double dy = entity.getY() - targetPos.getY();
-        double dz = entity.getZ() - (targetPos.getZ() + 0.5);
-        double distSq = dx * dx + dy * dy + dz * dz;
-
-        if (distSq <= 25.0) {
-            mineBlock(targetPos);
+        // Navigate toward the closest target
+        BlockPos navTarget = leftTarget != null ? leftTarget : rightTarget;
+        if (leftTarget != null && rightTarget != null) {
+            // Navigate to midpoint if both targets exist
+            double midX = (leftTarget.getX() + rightTarget.getX()) / 2.0 + 0.5;
+            double midY = Math.min(leftTarget.getY(), rightTarget.getY());
+            double midZ = (leftTarget.getZ() + rightTarget.getZ()) / 2.0 + 0.5;
+            entity.getNavigation().startMovingTo(midX, midY, midZ, 1.1);
         } else {
-            if (currentTarget != null && !currentTarget.equals(targetPos)) {
-                currentTarget = null;
-                breakProgress = 0;
+            entity.getNavigation().startMovingTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
+        }
+
+        // Mine with left hand if in range
+        if (leftTarget != null) {
+            double dx = entity.getX() - (leftTarget.getX() + 0.5);
+            double dy = entity.getY() - leftTarget.getY();
+            double dz = entity.getZ() - (leftTarget.getZ() + 0.5);
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq <= 25.0) {
+                mineBlockWithHand(leftTarget, true);
             }
         }
 
-        if (entity.getNavigation().isIdle() && distSq > 16.0) {
-            stuckTicks++;
-            if (stuckTicks >= 60) {
-                teleportToStart();
+        // Mine with right hand if in range
+        if (rightTarget != null) {
+            double dx = entity.getX() - (rightTarget.getX() + 0.5);
+            double dy = entity.getY() - rightTarget.getY();
+            double dz = entity.getZ() - (rightTarget.getZ() + 0.5);
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq <= 25.0) {
+                mineBlockWithHand(rightTarget, false);
+            }
+        }
+
+        // Stuck detection
+        BlockPos primaryTarget = leftTarget != null ? leftTarget : rightTarget;
+        if (primaryTarget != null) {
+            double dx = entity.getX() - (primaryTarget.getX() + 0.5);
+            double dy = entity.getY() - primaryTarget.getY();
+            double dz = entity.getZ() - (primaryTarget.getZ() + 0.5);
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (entity.getNavigation().isIdle() && distSq > 16.0) {
+                stuckTicks++;
+                if (stuckTicks >= 60) {
+                    teleportToStart();
+                    stuckTicks = 0;
+                    leftTarget = null;
+                    rightTarget = null;
+                    leftBreakProgress = 0;
+                    rightBreakProgress = 0;
+                    primaryProgress = 0;
+                    currentBranch = -1;
+                    branchProgress = 0;
+                    pendingOres.clear();
+                }
+            } else {
                 stuckTicks = 0;
-                currentTarget = null;
-                breakProgress = 0;
-                primaryProgress = 0;
-                currentBranch = -1;
-                branchProgress = 0;
-                pendingOres.clear();
             }
-        } else {
-            stuckTicks = 0;
         }
+    }
+
+    /**
+     * Get next mining target, excluding a specific position.
+     */
+    private BlockPos getNextMiningTargetExcluding(BlockPos exclude) {
+        BlockPos target = getNextMiningTarget();
+        if (target != null && target.equals(exclude)) {
+            // Get another target from pending ores or branch mining
+            if (!pendingOres.isEmpty()) {
+                for (BlockPos orePos : pendingOres) {
+                    if (!orePos.equals(exclude)) {
+                        BlockState state = entity.getEntityWorld().getBlockState(orePos);
+                        String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+                        if (isOreBlock(blockId) && !state.isAir()) {
+                            return orePos;
+                        }
+                    }
+                }
+            }
+            return null; // No second target available
+        }
+        return target;
     }
 
     private void teleportToStart() {
@@ -812,59 +916,100 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         return Registries.BLOCK.getId(blockItem.getBlock()).toString();
     }
 
-    private void mineBlock(BlockPos pos) {
+    /**
+     * Mine a block with a specific hand. Each hand mines independently at 4x player time.
+     * @param pos The block position to mine
+     * @param isLeftHand True for left hand, false for right hand
+     */
+    private void mineBlockWithHand(BlockPos pos, boolean isLeftHand) {
         if (entity.getEntityWorld().isClient()) return;
 
         BlockState state = entity.getEntityWorld().getBlockState(pos);
         if (state.isAir()) {
             pendingOres.remove(pos);
-            currentTarget = null;
-            breakProgress = 0;
+            if (isLeftHand) {
+                leftTarget = null;
+                leftBreakProgress = 0;
+            } else {
+                rightTarget = null;
+                rightBreakProgress = 0;
+            }
             return;
         }
 
-        if (currentTarget == null || !currentTarget.equals(pos)) {
-            // Clear previous breaking overlay
-            if (currentTarget != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-                sw.setBlockBreakingInfo(entity.getId(), currentTarget, -1);
+        // Use unique entity ID for break overlay (offset for right hand)
+        int breakId = isLeftHand ? entity.getId() : entity.getId() + 1000;
+
+        // Find tool for this hand (uses different tools for each hand)
+        ItemStack tool = isLeftHand ? leftTool : rightTool;
+        if (tool.isEmpty() || !tool.isSuitableFor(state)) {
+            // Find appropriate tool for this hand
+            ItemStack[] tools = findTwoTools(state);
+            if (isLeftHand) {
+                leftTool = tools[0];
+                tool = leftTool;
+            } else {
+                rightTool = tools[1];
+                tool = rightTool;
             }
-            currentTarget = pos;
-            breakProgress = 0;
-            miningSwingTick = 0;
         }
 
-        ItemStack bestTool = findBestTool(state);
-        float breakSpeed = bestTool.isEmpty() ? 1.0f : bestTool.getMiningSpeedMultiplier(state);
-        breakSpeed *= 0.5f;
+        float breakSpeed = tool.isEmpty() ? 1.0f : tool.getMiningSpeedMultiplier(state);
+        // 4x player time = 0.25f multiplier (each hand is 4x slower, but together they equal 2x)
+        breakSpeed *= 0.25f;
 
         float hardness = state.getHardness(entity.getEntityWorld(), pos);
         if (hardness < 0) {
-            currentTarget = null;
-            breakProgress = 0;
+            if (isLeftHand) {
+                leftTarget = null;
+                leftBreakProgress = 0;
+            } else {
+                rightTarget = null;
+                rightBreakProgress = 0;
+            }
             return;
         }
 
         int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
         requiredTicks = Math.max(1, requiredTicks);
 
-        breakProgress++;
-        miningSwingTick++;
+        // Increment progress for this hand
+        int breakProgress;
+        int swingTick;
+        if (isLeftHand) {
+            leftBreakProgress++;
+            leftSwingTick++;
+            breakProgress = leftBreakProgress;
+            swingTick = leftSwingTick;
+        } else {
+            rightBreakProgress++;
+            rightSwingTick++;
+            breakProgress = rightBreakProgress;
+            swingTick = rightSwingTick;
+        }
 
-        // Set the mining tool for display (always show while mining)
-        entity.setCurrentMiningTool(bestTool);
+        // Set the mining tool for display on this hand
+        if (isLeftHand) {
+            entity.setLeftMiningTool(tool);
+        } else {
+            entity.setRightMiningTool(tool);
+        }
 
         // Update breaking overlay (stages 0-9)
         if (entity.getEntityWorld() instanceof ServerWorld sw) {
             int breakStage = (int) ((float) breakProgress / requiredTicks * 10.0f);
             breakStage = Math.min(9, Math.max(0, breakStage));
-            sw.setBlockBreakingInfo(entity.getId(), pos, breakStage);
+            sw.setBlockBreakingInfo(breakId, pos, breakStage);
         }
 
-        // Trigger continuous arm swing animation like a player mining
-        if (miningSwingTick >= MINING_SWING_INTERVAL) {
-            miningSwingTick = 0;
-            entity.beginHandAnimation(isLeftHandActive(), pos, null);
-            alternateHand();
+        // Trigger arm swing animation - each hand points at its own target
+        if (swingTick >= MINING_SWING_INTERVAL) {
+            if (isLeftHand) {
+                leftSwingTick = 0;
+            } else {
+                rightSwingTick = 0;
+            }
+            entity.beginHandAnimation(isLeftHand, pos, null);
 
             // Spawn small block particles during mining
             if (entity.getEntityWorld() instanceof ServerWorld sw) {
@@ -881,7 +1026,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
             if (entity.getEntityWorld() instanceof ServerWorld sw) {
                 var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
-                    entity.getEntityWorld().getBlockEntity(pos), entity, bestTool);
+                    entity.getEntityWorld().getBlockEntity(pos), entity, tool);
 
                 for (ItemStack drop : drops) {
                     addToInventory(drop);
@@ -892,7 +1037,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
             if (entity.getEntityWorld() instanceof ServerWorld sw) {
                 // Clear breaking overlay
-                sw.setBlockBreakingInfo(entity.getId(), pos, -1);
+                sw.setBlockBreakingInfo(breakId, pos, -1);
 
                 // Spawn burst of block-specific particles
                 BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
@@ -901,21 +1046,29 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
                     30, 0.4, 0.4, 0.4, 0.15);
             }
 
-            if (!bestTool.isEmpty() && bestTool.isDamageable()) {
-                bestTool.damage(1, entity, EquipmentSlot.MAINHAND);
+            if (!tool.isEmpty() && tool.isDamageable()) {
+                tool.damage(1, entity, EquipmentSlot.MAINHAND);
                 Inventory inventory = entity.getInventory();
                 for (int i = 0; i < inventory.size(); i++) {
-                    if (inventory.getStack(i) == bestTool) {
-                        inventory.setStack(i, bestTool);
+                    if (inventory.getStack(i) == tool) {
+                        inventory.setStack(i, tool);
                         break;
                     }
                 }
             }
 
             pendingOres.remove(pos);
-            currentTarget = null;
-            breakProgress = 0;
-            miningSwingTick = 0;
+            if (isLeftHand) {
+                leftTarget = null;
+                leftBreakProgress = 0;
+                leftSwingTick = 0;
+                leftTool = ItemStack.EMPTY;
+            } else {
+                rightTarget = null;
+                rightBreakProgress = 0;
+                rightSwingTick = 0;
+                rightTool = ItemStack.EMPTY;
+            }
 
             if (isOre) {
                 mineOreSurroundings(pos);
@@ -953,6 +1106,49 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         }
 
         return bestTool;
+    }
+
+    /**
+     * Find two different tools for dual-hand mining.
+     * Returns [leftTool, rightTool] - tries to use different tool stacks for each hand.
+     */
+    private ItemStack[] findTwoTools(BlockState state) {
+        ItemStack firstTool = ItemStack.EMPTY;
+        ItemStack secondTool = ItemStack.EMPTY;
+        float firstSpeed = 1.0f;
+        float secondSpeed = 1.0f;
+        int firstSlot = -1;
+
+        Inventory inventory = entity.getInventory();
+
+        // First pass: find the best tool
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
+
+            float speed = stack.getMiningSpeedMultiplier(state);
+            if (speed > firstSpeed) {
+                firstSpeed = speed;
+                firstTool = stack;
+                firstSlot = i;
+            }
+        }
+
+        // Second pass: find a different tool (different stack) for the other hand
+        for (int i = 0; i < inventory.size(); i++) {
+            if (i == firstSlot) continue; // Skip the first tool's slot
+
+            ItemStack stack = inventory.getStack(i);
+            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
+
+            float speed = stack.getMiningSpeedMultiplier(state);
+            if (speed > secondSpeed) {
+                secondSpeed = speed;
+                secondTool = stack;
+            }
+        }
+
+        return new ItemStack[] { firstTool, secondTool };
     }
 
     private void addToInventory(ItemStack stack) {

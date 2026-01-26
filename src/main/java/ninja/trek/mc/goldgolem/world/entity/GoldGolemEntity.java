@@ -95,7 +95,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
     private static final TrackedData<Boolean> BUILDING_PATHS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
     private static final TrackedData<Integer> BUILD_MODE = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
-    private static final TrackedData<ItemStack> CURRENT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
+    private static final TrackedData<ItemStack> LEFT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
+    private static final TrackedData<ItemStack> RIGHT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
     private final String[] gradient = new String[9];
@@ -265,7 +266,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         BuildMode mode = getBuildMode();
         // Mining/Excavation: show tool continuously while active
         if ((mode == BuildMode.MINING || mode == BuildMode.EXCAVATION) && isBuildingPaths()) {
-            ItemStack tool = getCurrentMiningTool();
+            ItemStack tool = getLeftMiningTool();
             if (!tool.isEmpty()) {
                 return tool;
             }
@@ -285,7 +286,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         BuildMode mode = getBuildMode();
         // Mining/Excavation: show tool continuously while active
         if ((mode == BuildMode.MINING || mode == BuildMode.EXCAVATION) && isBuildingPaths()) {
-            ItemStack tool = getCurrentMiningTool();
+            ItemStack tool = getRightMiningTool();
             if (!tool.isEmpty()) {
                 return tool;
             }
@@ -310,12 +311,40 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.dataTracker.set(BUILD_MODE, (mode == null ? BuildMode.PATH : mode).ordinal());
     }
 
-    public ItemStack getCurrentMiningTool() {
-        return this.dataTracker.get(CURRENT_MINING_TOOL);
+    public ItemStack getLeftMiningTool() {
+        return this.dataTracker.get(LEFT_MINING_TOOL);
     }
 
+    public ItemStack getRightMiningTool() {
+        return this.dataTracker.get(RIGHT_MINING_TOOL);
+    }
+
+    public void setLeftMiningTool(ItemStack tool) {
+        this.dataTracker.set(LEFT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
+    }
+
+    public void setRightMiningTool(ItemStack tool) {
+        this.dataTracker.set(RIGHT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
+    }
+
+    /** @deprecated Use getLeftMiningTool() or getRightMiningTool() instead */
+    @Deprecated
+    public ItemStack getCurrentMiningTool() {
+        // For backwards compatibility, return left tool if active, else right
+        ItemStack left = getLeftMiningTool();
+        return !left.isEmpty() ? left : getRightMiningTool();
+    }
+
+    /** @deprecated Use setLeftMiningTool() or setRightMiningTool() instead */
+    @Deprecated
     public void setCurrentMiningTool(ItemStack tool) {
-        this.dataTracker.set(CURRENT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
+        // For backwards compatibility, set both tools to empty when called with empty
+        if (tool == null || tool.isEmpty()) {
+            setLeftMiningTool(ItemStack.EMPTY);
+            setRightMiningTool(ItemStack.EMPTY);
+        } else {
+            setLeftMiningTool(tool);
+        }
     }
 
     // Strategy pattern methods
@@ -1230,7 +1259,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         builder.add(RIGHT_HAND_NEXT_POS, Optional.empty());
         builder.add(BUILDING_PATHS, false);
         builder.add(BUILD_MODE, BuildMode.PATH.ordinal());
-        builder.add(CURRENT_MINING_TOOL, ItemStack.EMPTY);
+        builder.add(LEFT_MINING_TOOL, ItemStack.EMPTY);
+        builder.add(RIGHT_MINING_TOOL, ItemStack.EMPTY);
     }
 
     // UUID conversion helpers for NBT (still used by mining mode)
