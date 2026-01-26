@@ -253,11 +253,13 @@ public class GoldGolemEntity extends PathAwareEntity {
     public int getRightHandAnimationTick() { return this.dataTracker.get(RIGHT_HAND_ANIMATION_TICK); }
     public boolean shouldShowLeftHandItem() {
         int tick = getLeftHandAnimationTick();
-        return tick >= 0 && tick <= 1;
+        // Show item for first half of animation (ticks 0-5 of 12)
+        return tick >= 0 && tick <= 5;
     }
     public boolean shouldShowRightHandItem() {
         int tick = getRightHandAnimationTick();
-        return tick >= 0 && tick <= 1;
+        // Show item for first half of animation (ticks 0-5 of 12)
+        return tick >= 0 && tick <= 5;
     }
     public ItemStack getLeftHandItem() {
         BuildMode mode = getBuildMode();
