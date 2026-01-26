@@ -52,6 +52,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float rightEyePitch;
         public float leftArmRotation;
         public float rightArmRotation;
+        public float leftArmYaw;
+        public float rightArmYaw;
         public ItemStack leftHandItem = ItemStack.EMPTY;
         public ItemStack rightHandItem = ItemStack.EMPTY;
         public final ItemRenderState leftItemRenderState = new ItemRenderState();
@@ -86,6 +88,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.rightEyePitch = entity.getRightEyePitch();
         state.leftArmRotation = entity.getLeftArmRotation();
         state.rightArmRotation = entity.getRightArmRotation();
+        state.leftArmYaw = entity.getLeftArmYaw();
+        state.rightArmYaw = entity.getRightArmYaw();
         state.leftHandItem = entity.getLeftHandItem();
         state.rightHandItem = entity.getRightHandItem();
 
@@ -345,14 +349,18 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
                 matrices.pop();
             } else if (meshName != null && meshName.toLowerCase().contains("arm")) {
-                // Arm mesh: apply swing rotation
+                // Arm mesh: apply yaw (left/right) then pitch (up/down) rotation
                 boolean isLeftArm = meshName.toLowerCase().contains("arm_l");
-                float armRotation = isLeftArm ? state.leftArmRotation : state.rightArmRotation;
+                float armPitch = isLeftArm ? state.leftArmRotation : state.rightArmRotation;
+                float armYaw = isLeftArm ? state.leftArmYaw : state.rightArmYaw;
 
                 // Render the arm mesh
                 matrices.push();
                 matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
+                // First apply yaw (rotate around Y to face direction)
+                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(armYaw));
+                // Then apply pitch (rotate around X to tilt up/down)
+                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armPitch));
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
                 matrices.pop();
@@ -365,8 +373,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                     // Start fresh: translate to arm pivot
                     matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
-                    // Apply arm rotation once
-                    matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armRotation));
+                    // Apply arm rotations (yaw then pitch)
+                    matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(armYaw));
+                    matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armPitch));
 
                     // Translate down the rotated arm to reach hand position
                     float armLength = 6.0f / 16.0f;  // Adjusted for pixel-to-meter scaling

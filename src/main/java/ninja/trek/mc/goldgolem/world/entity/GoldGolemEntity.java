@@ -208,8 +208,10 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final int ARM_SWING_DURATION_TICKS = 15;
     private static final float ARM_SWING_MIN_ANGLE = 15.0f;
     private static final float ARM_SWING_MAX_ANGLE = 70.0f;
-    private float leftArmRotation = 0.0f;  // Current rotation in degrees
-    private float rightArmRotation = 0.0f; // Current rotation in degrees
+    private float leftArmRotation = 0.0f;  // Pitch rotation in degrees (up/down)
+    private float rightArmRotation = 0.0f; // Pitch rotation in degrees (up/down)
+    private float leftArmYaw = 0.0f;       // Yaw rotation in degrees (left/right, relative to body)
+    private float rightArmYaw = 0.0f;      // Yaw rotation in degrees (left/right, relative to body)
     private float leftArmTarget = 0.0f;    // Target rotation for this swing
     private float rightArmTarget = 0.0f;   // Target rotation for this swing
     private int armSwingTimer = 0;         // Timer counting down from SWING_DURATION_TICKS
@@ -245,6 +247,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     public double getWheelRotation() { return wheelRotation; }
     public float getLeftArmRotation() { return leftArmRotation; }
     public float getRightArmRotation() { return rightArmRotation; }
+    public float getLeftArmYaw() { return leftArmYaw; }
+    public float getRightArmYaw() { return rightArmYaw; }
     public int getLeftHandAnimationTick() { return this.dataTracker.get(LEFT_HAND_ANIMATION_TICK); }
     public int getRightHandAnimationTick() { return this.dataTracker.get(RIGHT_HAND_ANIMATION_TICK); }
     public boolean shouldShowLeftHandItem() {
@@ -1309,6 +1313,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             updateClientHandTargetsFromTracker();
         }
 
+        // Read buildingPaths from data tracker BEFORE using it for animation decisions
+        buildingPaths = isBuildingPaths();
+
         // Determine which animation system to use
         boolean leftAnimating = (leftHandAnimationTick >= 0 && (leftArmTargetBlock != null || this.dataTracker.get(LEFT_ARM_HAS_TARGET)));
         boolean rightAnimating = (rightHandAnimationTick >= 0 && (rightArmTargetBlock != null || this.dataTracker.get(RIGHT_ARM_HAS_TARGET)));
@@ -1336,6 +1343,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             float prevRightTarget = -rightArmTarget;
             leftArmRotation = MathHelper.lerp(progress, prevLeftTarget, leftArmTarget);
             rightArmRotation = MathHelper.lerp(progress, prevRightTarget, rightArmTarget);
+            // Reset yaw to forward during walking
+            leftArmYaw = MathHelper.lerp(0.2f, leftArmYaw, 0.0f);
+            rightArmYaw = MathHelper.lerp(0.2f, rightArmYaw, 0.0f);
             armSwingTimer--;
             // Update eyes randomly when not placing blocks
             updateRandomEyeMovement();
@@ -1343,12 +1353,12 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Idle - return arms to neutral
             leftArmRotation = MathHelper.lerp(0.1f, leftArmRotation, 0.0f);
             rightArmRotation = MathHelper.lerp(0.1f, rightArmRotation, 0.0f);
+            leftArmYaw = MathHelper.lerp(0.1f, leftArmYaw, 0.0f);
+            rightArmYaw = MathHelper.lerp(0.1f, rightArmYaw, 0.0f);
             armSwingTimer = 0;
             // Update eyes randomly when idle
             updateRandomEyeMovement();
         }
-
-        buildingPaths = isBuildingPaths(); // Read from data tracker
 
         if (this.getEntityWorld().isClient()) return;
         if (buildingPaths) {
@@ -1400,6 +1410,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private void updateArmAndEyePositions() {
+        float bodyYawRad = (float) Math.toRadians(this.getBodyYaw());
+
         // Update left arm and eye
         if (leftArmTargetBlock != null) {
             // SERVER: Has exact block position, calculate precise angle
@@ -1411,15 +1423,23 @@ public class GoldGolemEntity extends PathAwareEntity {
                 targetPos = new Vec3d(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5);
             }
 
-            // Calculate direction to target
+            // Calculate direction to target in world space
             double dx = targetPos.x - armPos.x;
             double dy = targetPos.y - armPos.y;
             double dz = targetPos.z - armPos.z;
             double horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
-            // Calculate pitch (vertical angle)
+            // Calculate world-space yaw to target, then make it relative to body yaw
+            float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+            leftArmYaw = worldYaw - this.getBodyYaw();
+            // Normalize to -180 to 180
+            while (leftArmYaw > 180) leftArmYaw -= 360;
+            while (leftArmYaw < -180) leftArmYaw += 360;
+
+            // Calculate pitch (vertical angle from horizontal)
             float pitch = (float) Math.toDegrees(Math.atan2(dy, horizontalDist));
-            leftArmRotation = -pitch; // Negative because positive rotation is forward/down
+            // Arm model points DOWN by default (0° = down, 90° = forward/horizontal)
+            leftArmRotation = 90.0f + pitch;
 
             // Update left eye to look at same target (relative to head)
             double eyeDx = targetPos.x - this.getX();
@@ -1431,13 +1451,13 @@ public class GoldGolemEntity extends PathAwareEntity {
             leftEyePitch = (float) Math.toDegrees(Math.atan2(-eyeDy, eyeHorizontalDist));
         } else if (leftHandAnimationTick >= 0) {
             // CLIENT: Animation is active but no block position - use default "placing" pose
-            // Point arm forward and down as if placing a block in front
-            leftArmRotation = 45.0f; // 45 degrees forward/down
-            // Eyes look forward and slightly down
+            leftArmRotation = 70.0f; // Mostly forward, slightly down
+            leftArmYaw = 0.0f;       // Straight ahead
             leftEyeYaw = 0.0f;
-            leftEyePitch = 15.0f; // Looking slightly down
+            leftEyePitch = 15.0f;
         } else {
             // Idle - neutral
+            leftArmYaw = 0.0f;
             leftEyeYaw = 0.0f;
             leftEyePitch = 0.0f;
         }
@@ -1453,15 +1473,23 @@ public class GoldGolemEntity extends PathAwareEntity {
                 targetPos = new Vec3d(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5);
             }
 
-            // Calculate direction to target
+            // Calculate direction to target in world space
             double dx = targetPos.x - armPos.x;
             double dy = targetPos.y - armPos.y;
             double dz = targetPos.z - armPos.z;
             double horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
-            // Calculate pitch (vertical angle)
+            // Calculate world-space yaw to target, then make it relative to body yaw
+            float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
+            rightArmYaw = worldYaw - this.getBodyYaw();
+            // Normalize to -180 to 180
+            while (rightArmYaw > 180) rightArmYaw -= 360;
+            while (rightArmYaw < -180) rightArmYaw += 360;
+
+            // Calculate pitch (vertical angle from horizontal)
             float pitch = (float) Math.toDegrees(Math.atan2(dy, horizontalDist));
-            rightArmRotation = -pitch;
+            // Arm model points DOWN by default, need 90° to reach horizontal
+            rightArmRotation = 90.0f + pitch;
 
             // Update right eye to look at same target
             double eyeDx = targetPos.x - this.getX();
@@ -1473,13 +1501,13 @@ public class GoldGolemEntity extends PathAwareEntity {
             rightEyePitch = (float) Math.toDegrees(Math.atan2(-eyeDy, eyeHorizontalDist));
         } else if (rightHandAnimationTick >= 0) {
             // CLIENT: Animation is active but no block position - use default "placing" pose
-            // Point arm forward and down as if placing a block in front
-            rightArmRotation = 45.0f; // 45 degrees forward/down
-            // Eyes look forward and slightly down
+            rightArmRotation = 70.0f; // Mostly forward, slightly down
+            rightArmYaw = 0.0f;       // Straight ahead
             rightEyeYaw = 0.0f;
-            rightEyePitch = 15.0f; // Looking slightly down
+            rightEyePitch = 15.0f;
         } else {
             // Idle - neutral
+            rightArmYaw = 0.0f;
             rightEyeYaw = 0.0f;
             rightEyePitch = 0.0f;
         }
