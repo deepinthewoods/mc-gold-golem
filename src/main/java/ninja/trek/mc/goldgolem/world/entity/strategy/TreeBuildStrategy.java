@@ -20,7 +20,10 @@ import ninja.trek.mc.goldgolem.tree.TreeTileCache;
 import ninja.trek.mc.goldgolem.tree.TreeTileExtractor;
 import ninja.trek.mc.goldgolem.tree.TreeWFCBuilder;
 import ninja.trek.mc.goldgolem.tree.TilingPreset;
+import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
@@ -31,11 +34,31 @@ import java.util.*;
  */
 public class TreeBuildStrategy extends AbstractBuildStrategy {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(TreeBuildStrategy.class);
+
+    // Gradient group manager for tree blocks
+    private final GradientGroupManager groups = new GradientGroupManager();
+
+    // E4: State machine for cache state consistency
+    private enum CacheState {
+        NOT_STARTED,
+        CACHING,
+        CACHED,
+        FAILED
+    }
+
+    // E6: Resource recovery check cooldown (in ticks)
+    private static final int RESOURCE_CHECK_COOLDOWN = 100; // 5 seconds
+
     // Tree building state
     private TreeTileCache treeTileCache = null;
     private TreeWFCBuilder treeWFCBuilder = null;
-    private boolean treeTilesCached = false;
+    // E4: Replace boolean flag with explicit state enum
+    private CacheState cacheState = CacheState.NOT_STARTED;
     private boolean treeWaitingForInventory = false;
+
+    // E6: Cooldown for resource recovery check
+    private int resourceCheckCooldown = 0;
 
     // PlacementPlanner for reach-aware building
     private PlacementPlanner planner = null;
@@ -82,9 +105,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void writeNbt(NbtCompound nbt) {
-        nbt.putBoolean("TilesCached", treeTilesCached);
+        // E4: Save cache state as string instead of boolean
+        nbt.putString("CacheState", cacheState.name());
         nbt.putBoolean("WaitingForInventory", treeWaitingForInventory);
         nbt.putBoolean("TileBlocksLoaded", tileBlocksLoaded);
+        // E6: Save resource check cooldown
+        nbt.putInt("ResourceCheckCooldown", resourceCheckCooldown);
 
         // Save current tile origin
         if (currentTileOrigin != null) {
@@ -99,13 +125,29 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
+
+        // Save gradient groups
+        groups.writeToNbt(nbt, "Groups");
     }
 
     @Override
     public void readNbt(NbtCompound nbt) {
-        treeTilesCached = nbt.getBoolean("TilesCached", false);
+        // E4: Load cache state from string, with backward compatibility for boolean
+        if (nbt.contains("CacheState")) {
+            String stateStr = nbt.getString("CacheState", CacheState.NOT_STARTED.name());
+            try {
+                cacheState = CacheState.valueOf(stateStr);
+            } catch (IllegalArgumentException e) {
+                cacheState = CacheState.NOT_STARTED;
+            }
+        } else if (nbt.contains("TilesCached")) {
+            // Backward compatibility: convert old boolean to new enum
+            cacheState = nbt.getBoolean("TilesCached", false) ? CacheState.CACHED : CacheState.NOT_STARTED;
+        }
         treeWaitingForInventory = nbt.getBoolean("WaitingForInventory", false);
         tileBlocksLoaded = nbt.getBoolean("TileBlocksLoaded", false);
+        // E6: Load resource check cooldown
+        resourceCheckCooldown = nbt.getInt("ResourceCheckCooldown", 0);
 
         // Load current tile origin
         if (nbt.contains("TileOriginX")) {
@@ -118,6 +160,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
         }
+
+        // Load gradient groups
+        groups.readFromNbt(nbt, "Groups");
     }
 
     @Override
@@ -131,13 +176,23 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     }
 
     /**
+     * Get the gradient group manager for tree blocks.
+     */
+    public GradientGroupManager getGroups() {
+        return groups;
+    }
+
+    /**
      * Clear building state.
      */
     public void clearState() {
         treeWFCBuilder = null;
-        treeTilesCached = false;
+        // E4: Reset cache state to NOT_STARTED
+        cacheState = CacheState.NOT_STARTED;
         treeTileCache = null;
         treeWaitingForInventory = false;
+        // E6: Reset resource check cooldown
+        resourceCheckCooldown = 0;
         tileBlocksLoaded = false;
         currentTileOrigin = null;
         currentTileBlocks.clear();
@@ -148,11 +203,13 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
     // ========== Getters ==========
 
-    public boolean isTilesCached() { return treeTilesCached; }
+    // E4: Updated to use CacheState enum
+    public boolean isTilesCached() { return cacheState == CacheState.CACHED; }
     public boolean isWaitingForInventory() { return treeWaitingForInventory; }
 
     public void setTilesCached(boolean cached) {
-        this.treeTilesCached = cached;
+        // E4: Convert boolean to appropriate state
+        this.cacheState = cached ? CacheState.CACHED : CacheState.NOT_STARTED;
     }
 
     public void setTileCache(TreeTileCache cache) {
@@ -237,8 +294,18 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         if (treeModules.isEmpty() || treeOrigin == null) return;
 
-        // If waiting for inventory, show angry particles and don't build
+        // E6: If waiting for inventory, check periodically if resources are available
         if (isWaitingForResources()) {
+            resourceCheckCooldown--;
+            if (resourceCheckCooldown <= 0) {
+                resourceCheckCooldown = RESOURCE_CHECK_COOLDOWN;
+                // Check if the golem now has required resources
+                if (hasRequiredResources(golem)) {
+                    setWaitingForResources(false);
+                    LOGGER.info("Resources available, resuming tree building");
+                }
+            }
+
             // Show thunder cloud particles periodically
             if (golem.age % 20 == 0) {
                 if (golem.getEntityWorld() instanceof ServerWorld sw) {
@@ -252,7 +319,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Cache tiles if not already done
-        if (!treeTilesCached || treeTileCache == null) {
+        if (cacheState != CacheState.CACHED || treeTileCache == null) {
             try {
                 // Build stop blocks set (air, gold, ground types)
                 Set<net.minecraft.block.Block> stopBlocks = new HashSet<>();
@@ -276,7 +343,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                 treeTileCache = TreeTileExtractor.extract(
                     golem.getEntityWorld(), def, treeTilingPreset, treeOrigin,
                     (stored != null && !stored.isEmpty()) ? stored : null);
-                treeTilesCached = true;
+                cacheState = CacheState.CACHED;
 
                 if (treeTileCache.isEmpty()) {
                     // No tiles extracted, stop building permanently
@@ -291,8 +358,22 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                         treeTileCache, golem.getEntityWorld(), golem.getBlockPos(), stopBlocks, random);
                 }
 
+            } catch (OutOfMemoryError e) {
+                LOGGER.error("Out of memory extracting tree tiles - tree may be too complex", e);
+                cacheState = CacheState.FAILED;
+                treeTileCache = null;
+                golem.setBuildingPaths(false);
+                return;
+            } catch (IllegalArgumentException e) {
+                LOGGER.error("Invalid tree definition: {}", e.getMessage());
+                cacheState = CacheState.FAILED;
+                treeTileCache = null;
+                golem.setBuildingPaths(false);
+                return;
             } catch (Exception e) {
-                // Failed to cache tiles, stop building
+                LOGGER.error("Failed to cache tree tiles", e);
+                cacheState = CacheState.FAILED;
+                treeTileCache = null;
                 golem.setBuildingPaths(false);
                 return;
             }
@@ -490,5 +571,36 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         if (id == null) return null;
         net.minecraft.block.Block sampledBlock = Registries.BLOCK.get(id);
         return sampledBlock.getDefaultState();
+    }
+
+    /**
+     * E6: Check if the golem has required resources to continue building.
+     * Returns true if there are blocks in inventory that match current tile needs.
+     */
+    private boolean hasRequiredResources(GoldGolemEntity golem) {
+        // If no current tile blocks to place, we don't need resources yet
+        if (currentTileBlocks.isEmpty()) {
+            return true;
+        }
+
+        // Gather required block IDs
+        Set<String> requiredBlockIds = new HashSet<>();
+        for (BlockState state : currentTileBlocks.values()) {
+            requiredBlockIds.add(Registries.BLOCK.getId(state.getBlock()).toString());
+        }
+
+        // Check if we have at least one of the required blocks in inventory
+        var inventory = golem.getInventory();
+        for (int i = 0; i < inventory.size(); i++) {
+            var stack = inventory.getStack(i);
+            if (stack.isEmpty()) continue;
+            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
+                String stackId = Registries.BLOCK.getId(bi.getBlock()).toString();
+                if (requiredBlockIds.contains(stackId)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

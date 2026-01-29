@@ -7,6 +7,11 @@ import net.minecraft.network.packet.CustomPayload;
 import net.minecraft.util.Identifier;
 
 public record SetPathWidthC2SPayload(int entityId, int width) implements CustomPayload {
+
+    public SetPathWidthC2SPayload {
+        width = PayloadValidator.clampInt(width, 1, 9, "width");
+    }
+
     public static final Id<SetPathWidthC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_path_width"));
     public static final PacketCodec<RegistryByteBuf, SetPathWidthC2SPayload> CODEC = PacketCodec.tuple(
             PacketCodecs.VAR_INT, SetPathWidthC2SPayload::entityId,

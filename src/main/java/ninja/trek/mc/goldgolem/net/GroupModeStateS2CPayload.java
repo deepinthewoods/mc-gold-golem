@@ -28,6 +28,16 @@ public record GroupModeStateS2CPayload(
         List<String> flatSlots,
         Map<String, Object> extraData
 ) implements CustomPayload {
+
+    public GroupModeStateS2CPayload {
+        windows = PayloadValidator.validateList(windows, 0, "windows");
+        noiseScales = PayloadValidator.validateList(noiseScales, 0, "noiseScales");
+        flatSlots = PayloadValidator.validateList(flatSlots, 0, "flatSlots");
+        if (extraData == null) {
+            extraData = Map.of();
+        }
+    }
+
     public static final Id<GroupModeStateS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "group_mode_state"));
 
     // Codec for extra data - serialize as string keys and primitive values

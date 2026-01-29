@@ -24,6 +24,15 @@ public record SyncTerraformingS2CPayload(
         List<String> horizontalGradient,
         List<String> slopedGradient
 ) implements CustomPayload {
+
+    private static final int GRADIENT_SIZE = 9;
+
+    public SyncTerraformingS2CPayload {
+        verticalGradient = PayloadValidator.validateListSize(verticalGradient, GRADIENT_SIZE, "verticalGradient");
+        horizontalGradient = PayloadValidator.validateListSize(horizontalGradient, GRADIENT_SIZE, "horizontalGradient");
+        slopedGradient = PayloadValidator.validateListSize(slopedGradient, GRADIENT_SIZE, "slopedGradient");
+    }
+
     public static final Id<SyncTerraformingS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "sync_terraforming"));
 
     public static final PacketCodec<RegistryByteBuf, SyncTerraformingS2CPayload> CODEC = PacketCodec.tuple(

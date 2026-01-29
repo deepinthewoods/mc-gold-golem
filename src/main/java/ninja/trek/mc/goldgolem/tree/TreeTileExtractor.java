@@ -30,7 +30,8 @@ public final class TreeTileExtractor {
                                         List<Map<BlockPos, BlockState>> storedModuleBlocks) {
         int tileSize = preset.getSize();
         List<TreeTile> allTiles = new ArrayList<>();
-        Map<Long, Set<String>> adjacencyRules = new HashMap<>();
+        // E1: Use nested map structure instead of encoded long keys to avoid hash collisions
+        Map<String, Map<Direction, Set<String>>> adjacencyRules = new HashMap<>();
         Map<Integer, String> patternToTileId = new HashMap<>(); // de-duplicate identical patterns
         int tileCounter = 0;
 
@@ -142,9 +143,10 @@ public final class TreeTileExtractor {
 
     /**
      * Builds adjacency rules by checking which tiles were neighbors in the input.
+     * E1: Updated to use nested map structure instead of encoded long keys to avoid hash collisions.
      */
     private static void buildAdjacencyRules(Map<BlockPos, String> positionToTileId, int tileSize,
-                                           Map<Long, Set<String>> adjacencyRules, List<TreeTile> allTiles) {
+                                           Map<String, Map<Direction, Set<String>>> adjacencyRules, List<TreeTile> allTiles) {
         // For each tile position, check neighbors in each direction
         for (Map.Entry<BlockPos, String> entry : positionToTileId.entrySet()) {
             BlockPos pos = entry.getKey();
@@ -157,8 +159,7 @@ public final class TreeTileExtractor {
 
                 if (neighborTileId != null) {
                     // Record that tileId can have neighborTileId in direction dir
-                    long key = TreeTileCache.encodeAdjacencyKey(tileId, dir);
-                    adjacencyRules.computeIfAbsent(key, k -> new HashSet<>()).add(neighborTileId);
+                    TreeTileCache.addAdjacencyRule(adjacencyRules, tileId, dir, neighborTileId);
                 }
             }
         }
@@ -178,48 +179,36 @@ public final class TreeTileExtractor {
         }
 
         // Propagate adjacency rules through rotations
-        Map<Long, Set<String>> newRules = new HashMap<>();
-        for (Map.Entry<Long, Set<String>> entry : adjacencyRules.entrySet()) {
-            long key = entry.getKey();
-            String fromTileId = null;
-            Direction dir = null;
+        // Collect new rules to add (to avoid modifying while iterating)
+        Map<String, Map<Direction, Set<String>>> newRules = new HashMap<>();
 
-            // Decode key to get tile ID and direction
-            for (TreeTile tile : allTiles) {
-                for (Direction d : Direction.values()) {
-                    if (TreeTileCache.encodeAdjacencyKey(tile.id, d) == key) {
-                        fromTileId = tile.id;
-                        dir = d;
-                        break;
-                    }
-                }
-                if (fromTileId != null) break;
-            }
-
-            if (fromTileId == null || dir == null) continue;
-
-            // Get base tile ID
-            String baseFromId = fromTileId.replaceFirst("_r\\d+$", "");
+        for (Map.Entry<String, Map<Direction, Set<String>>> tileEntry : adjacencyRules.entrySet()) {
+            String fromTileId = tileEntry.getKey();
             TreeTile fromTile = tileMap.get(fromTileId);
-            int rotation = fromTile.rotation;
+            if (fromTile == null) continue;
 
-            // For each valid neighbor in the original rule
-            for (String toTileId : entry.getValue()) {
-                String baseToId = toTileId.replaceFirst("_r\\d+$", "");
+            String baseFromId = fromTileId.replaceFirst("_r\\d+$", "");
 
-                // Apply the same rotation to both tiles and direction
-                Map<Integer, String> fromRotations = rotationMappings.get(baseFromId);
-                Map<Integer, String> toRotations = rotationMappings.get(baseToId);
+            for (Map.Entry<Direction, Set<String>> dirEntry : tileEntry.getValue().entrySet()) {
+                Direction dir = dirEntry.getKey();
 
-                if (fromRotations != null && toRotations != null) {
-                    for (int rot : Arrays.asList(0, 90, 180, 270)) {
-                        String rotatedFromId = fromRotations.get(rot);
-                        String rotatedToId = toRotations.get(rot);
-                        if (rotatedFromId != null && rotatedToId != null) {
-                            // Rotate the direction as well
-                            Direction rotatedDir = rotateDirection(dir, rot);
-                            long newKey = TreeTileCache.encodeAdjacencyKey(rotatedFromId, rotatedDir);
-                            newRules.computeIfAbsent(newKey, k -> new HashSet<>()).add(rotatedToId);
+                // For each valid neighbor in the original rule
+                for (String toTileId : dirEntry.getValue()) {
+                    String baseToId = toTileId.replaceFirst("_r\\d+$", "");
+
+                    // Apply the same rotation to both tiles and direction
+                    Map<Integer, String> fromRotations = rotationMappings.get(baseFromId);
+                    Map<Integer, String> toRotations = rotationMappings.get(baseToId);
+
+                    if (fromRotations != null && toRotations != null) {
+                        for (int rot : Arrays.asList(0, 90, 180, 270)) {
+                            String rotatedFromId = fromRotations.get(rot);
+                            String rotatedToId = toRotations.get(rot);
+                            if (rotatedFromId != null && rotatedToId != null) {
+                                // Rotate the direction as well
+                                Direction rotatedDir = rotateDirection(dir, rot);
+                                TreeTileCache.addAdjacencyRule(newRules, rotatedFromId, rotatedDir, rotatedToId);
+                            }
                         }
                     }
                 }
@@ -227,8 +216,14 @@ public final class TreeTileExtractor {
         }
 
         // Merge new rules back
-        for (Map.Entry<Long, Set<String>> entry : newRules.entrySet()) {
-            adjacencyRules.computeIfAbsent(entry.getKey(), k -> new HashSet<>()).addAll(entry.getValue());
+        for (Map.Entry<String, Map<Direction, Set<String>>> tileEntry : newRules.entrySet()) {
+            String tileId = tileEntry.getKey();
+            for (Map.Entry<Direction, Set<String>> dirEntry : tileEntry.getValue().entrySet()) {
+                Direction dir = dirEntry.getKey();
+                for (String neighborId : dirEntry.getValue()) {
+                    TreeTileCache.addAdjacencyRule(adjacencyRules, tileId, dir, neighborId);
+                }
+            }
         }
     }
 

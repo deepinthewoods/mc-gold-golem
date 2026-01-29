@@ -46,7 +46,7 @@ public final class GolemScreens {
         }
 
         // Build dynamic UI spec
-        int gradientRows = terraformingMode ? 3 : 2; // 3 rows for terraforming (vertical, horizontal, sloped)
+        int gradientRows = (terraformingMode || sliderEnabled) ? 3 : 2; // 3 rows for terraforming and path mode
         int golemSlots = golemInventory.size();
         int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : 0)))));
         String jsonName = "";
@@ -86,10 +86,13 @@ public final class GolemScreens {
                                 golem.getPathWidth(),
                                 golem.getGradientNoiseScaleMain(),
                                 golem.getGradientNoiseScaleStep(),
+                                golem.getGradientNoiseScaleSurface(),
                                 golem.getGradientWindow(),
                                 golem.getStepGradientWindow(),
+                                golem.getSurfaceGradientWindow(),
                                 java.util.Arrays.asList(golem.getGradientCopy()),
-                                java.util.Arrays.asList(golem.getStepGradientCopy())
+                                java.util.Arrays.asList(golem.getStepGradientCopy()),
+                                java.util.Arrays.asList(golem.getSurfaceGradientCopy())
                         ));
             }
 

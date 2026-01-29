@@ -69,12 +69,33 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategy;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategyRegistry;
 
 public class GoldGolemEntity extends PathAwareEntity {
     private static final Logger LOGGER = LoggerFactory.getLogger(GoldGolemEntity.class);
+
+    // Animation constants
+    private static final int ANIMATION_DURATION_TICKS = 12;
+    private static final float ARM_SWING_MIN_ANGLE = 15.0f;
+    private static final float ARM_SWING_MAX_ANGLE = 70.0f;
+
+    // Inventory constants
+    private static final int GRADIENT_SIZE = 9;
     public static final int INVENTORY_SIZE = 27;
+
+    // Ring buffer constants
+    private static final int PLACED_RING_BUFFER_SIZE = 8192;
+
+    // Timing constants
+    private static final int STUCK_TICK_THRESHOLD = 20;
+    private static final int EYE_UPDATE_COOLDOWN_MIN = 5;
+    private static final int EYE_UPDATE_COOLDOWN_MAX = 10;
+
+    // Owner cache constants
+    private static final int OWNER_CACHE_DURATION = 100; // 5 seconds (100 ticks)
+
     private static final String SNAPSHOT_FOLDER = "GoldGolemModules";
     private static final int SNAPSHOT_VERSION = 2;
     private static final String GOLEM_COUNTER_FILE = "golem_counters.json";
@@ -99,12 +120,18 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final TrackedData<ItemStack> RIGHT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
 
     private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
-    private final String[] gradient = new String[9];
-    private final String[] stepGradient = new String[9];
+    private final String[] gradient = new String[GRADIENT_SIZE];
+    private final String[] stepGradient = new String[GRADIENT_SIZE];
+    private final String[] surfaceGradient = new String[GRADIENT_SIZE];
+    // Gradient copy caching
+    private String[] cachedGradientCopy = null;
+    private boolean gradientCopyDirty = true;
     private float gradientWindow = 1.0f; // window width in slot units (0..9)
     private float stepGradientWindow = 1.0f; // window width for step gradient
+    private float surfaceGradientWindow = 1.0f; // window width for surface gradient
     private int gradientNoiseScaleMain = 1; // simplex noise scale (1..16)
     private int gradientNoiseScaleStep = 1; // simplex noise scale (1..16)
+    private int gradientNoiseScaleSurface = 1; // simplex noise scale (1..16)
     private int pathWidth = 3;
     private boolean buildingPaths = false;
     private long gradientNoiseSeedCache = Long.MIN_VALUE;
@@ -164,9 +191,9 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int terraformingScanRadius = 2; // slope detection radius (1-5)
     private int terraformingAlpha = 3; // alpha shape parameter (concavity control, 1-10)
     // Three gradients for terraforming mode
-    private final String[] terraformingGradientVertical = new String[9]; // steep/cliff surfaces
-    private final String[] terraformingGradientHorizontal = new String[9]; // flat surfaces
-    private final String[] terraformingGradientSloped = new String[9]; // diagonal surfaces
+    private final String[] terraformingGradientVertical = new String[GRADIENT_SIZE]; // steep/cliff surfaces
+    private final String[] terraformingGradientHorizontal = new String[GRADIENT_SIZE]; // flat surfaces
+    private final String[] terraformingGradientSloped = new String[GRADIENT_SIZE]; // diagonal surfaces
     private int terraformingGradientVerticalWindow = 1; // window for vertical gradient (0..9)
     private int terraformingGradientHorizontalWindow = 1; // window for horizontal gradient (0..9)
     private int terraformingGradientSlopedWindow = 1; // window for sloped gradient (0..9)
@@ -190,10 +217,11 @@ public class GoldGolemEntity extends PathAwareEntity {
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg> pendingLines = new java.util.ArrayDeque<>();
     private ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg currentLine = null;
-    private final LongOpenHashSet recentPlaced = new LongOpenHashSet(8192);
-    private final long[] placedRing = new long[8192];
+    private final LongOpenHashSet recentPlaced = new LongOpenHashSet(PLACED_RING_BUFFER_SIZE);
+    private final long[] placedRing = new long[PLACED_RING_BUFFER_SIZE];
     private int placedHead = 0;
     private int placedSize = 0;
+    private final Object ringBufferLock = new Object();
 
     private int stuckTicks = 0;
     private double wheelRotation = 0.0;
@@ -207,8 +235,6 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int eyeUpdateCooldown = 0;
     // Arm swing animation
     private static final int ARM_SWING_DURATION_TICKS = 15;
-    private static final float ARM_SWING_MIN_ANGLE = 15.0f;
-    private static final float ARM_SWING_MAX_ANGLE = 70.0f;
     private float leftArmRotation = 0.0f;  // Pitch rotation in degrees (up/down)
     private float rightArmRotation = 0.0f; // Pitch rotation in degrees (up/down)
     private float leftArmYaw = 0.0f;       // Yaw rotation in degrees (left/right, relative to body)
@@ -641,23 +667,32 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private static String sanitizeJsonBaseName(String name) {
-        if (name == null) return null;
-        String trimmed = name.trim();
-        if (trimmed.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder(trimmed.length());
-        for (int i = 0; i < trimmed.length(); i++) {
-            char c = trimmed.charAt(i);
-            if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
-                sb.append('_');
-            } else {
+        if (name == null || name.isEmpty()) return "golem";
+
+        StringBuilder sb = new StringBuilder(name.length());
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            // Only allow letters, digits, underscore, hyphen, space, period
+            if (Character.isLetterOrDigit(c) || c == '_' || c == '-' || c == ' ' || c == '.') {
                 sb.append(c);
             }
         }
-        String out = sb.toString().trim();
-        while (!out.isEmpty() && (out.endsWith(".") || out.endsWith(" "))) {
-            out = out.substring(0, out.length() - 1).trim();
+
+        // Trim trailing dots and spaces manually
+        int end = sb.length();
+        while (end > 0 && (sb.charAt(end - 1) == '.' || sb.charAt(end - 1) == ' ')) {
+            end--;
         }
-        return out.isEmpty() ? null : out;
+
+        // Also trim leading spaces
+        int start = 0;
+        while (start < end && sb.charAt(start) == ' ') {
+            start++;
+        }
+
+        if (start >= end) return "golem";
+        String result = sb.substring(start, end);
+        return result.isEmpty() ? "golem" : result;
     }
 
     private static Path resolveSnapshotPath(Path folder, String baseName) throws IOException {
@@ -694,10 +729,14 @@ public class GoldGolemEntity extends PathAwareEntity {
                         bestTime = savedAt;
                         best = p;
                     }
-                } catch (Exception ignored) {
+                } catch (IOException e) {
+                    LOGGER.warn("Failed to read snapshot file {}: {}", p, e.getMessage());
+                } catch (com.google.gson.JsonSyntaxException e) {
+                    LOGGER.warn("Invalid JSON in snapshot file {}: {}", p, e.getMessage());
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException e) {
+            LOGGER.warn("Failed to list snapshot folder {}: {}", folder, e.getMessage());
         }
         return best;
     }
@@ -990,7 +1029,11 @@ public class GoldGolemEntity extends PathAwareEntity {
             String rel = FabricLoader.getInstance().getGameDir().relativize(out).toString();
             setJsonFileForMode(getBuildMode(), rel);
             return out;
-        } catch (Exception ignored) {
+        } catch (IOException e) {
+            LOGGER.error("Failed to write snapshot {}: {}", desiredName, e.getMessage());
+            return null;
+        } catch (Exception e) {
+            LOGGER.error("Unexpected error writing snapshot {}", desiredName, e);
             return null;
         }
     }
@@ -1113,6 +1156,40 @@ public class GoldGolemEntity extends PathAwareEntity {
     public BlockPos getTreeOrigin() { return treeOrigin; }
     public java.util.Map<String, Integer> getTreeBlockGroup() { return treeBlockGroup; }
     public java.util.List<String[]> getTreeGroupSlots() { return treeGroupSlots; }
+
+    // Strategy-based group manager accessors (for future migration to strategy-owned groups)
+    /**
+     * Get the GradientGroupManager for wall mode via the strategy.
+     * Returns null if strategy is not a WallBuildStrategy.
+     */
+    public GradientGroupManager getWallGroupManager() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wallStrategy) {
+            return wallStrategy.getGroups();
+        }
+        return null;
+    }
+
+    /**
+     * Get the GradientGroupManager for tower mode via the strategy.
+     * Returns null if strategy is not a TowerBuildStrategy.
+     */
+    public GradientGroupManager getTowerGroupManager() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TowerBuildStrategy towerStrategy) {
+            return towerStrategy.getGroups();
+        }
+        return null;
+    }
+
+    /**
+     * Get the GradientGroupManager for tree mode via the strategy.
+     * Returns null if strategy is not a TreeBuildStrategy.
+     */
+    public GradientGroupManager getTreeGroupManager() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TreeBuildStrategy treeStrategy) {
+            return treeStrategy.getGroups();
+        }
+        return null;
+    }
 
     // Tree waiting state accessors (using polymorphic dispatch)
     public boolean isTreeWaitingForInventory() {
@@ -1326,6 +1403,11 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void tick() {
         super.tick();
 
+        // Decrement owner cache counter
+        if (ownerCacheTicksRemaining > 0) {
+            ownerCacheTicksRemaining--;
+        }
+
         // Update wheel rotation based on movement (both client and server for smooth animation)
         double wheelDx = this.getX() - prevX;
         double wheelDz = this.getZ() - prevZ;
@@ -1434,8 +1516,8 @@ public class GoldGolemEntity extends PathAwareEntity {
             rightEyeYaw = (this.getRandom().nextFloat() - 0.5f) * 120.0f;
             rightEyePitch = (this.getRandom().nextFloat() - 0.5f) * 60.0f;
 
-            // Set next update time (5-10 ticks)
-            eyeUpdateCooldown = 5 + this.getRandom().nextInt(6);
+            // Set next update time
+            eyeUpdateCooldown = EYE_UPDATE_COOLDOWN_MIN + this.getRandom().nextInt(EYE_UPDATE_COOLDOWN_MAX - EYE_UPDATE_COOLDOWN_MIN + 1);
         } else {
             eyeUpdateCooldown--;
         }
@@ -1462,8 +1544,10 @@ public class GoldGolemEntity extends PathAwareEntity {
             double horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
             // Calculate world-space yaw to target, then make it relative to body yaw
+            // Use -dx because Minecraft yaw convention: 0=South, -90=East, 90=West
+            // Add 180° because arm default is down, pitch rotates to backward (-Z), so yaw=180 is forward
             float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-            leftArmYaw = worldYaw - this.getBodyYaw();
+            leftArmYaw = worldYaw - this.getBodyYaw() + 180.0f;
             // Normalize to -180 to 180
             while (leftArmYaw > 180) leftArmYaw -= 360;
             while (leftArmYaw < -180) leftArmYaw += 360;
@@ -1512,8 +1596,10 @@ public class GoldGolemEntity extends PathAwareEntity {
             double horizontalDist = Math.sqrt(dx * dx + dz * dz);
 
             // Calculate world-space yaw to target, then make it relative to body yaw
+            // Use -dx because Minecraft yaw convention: 0=South, -90=East, 90=West
+            // Add 180° because arm default is down, pitch rotates to backward (-Z), so yaw=180 is forward
             float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-            rightArmYaw = worldYaw - this.getBodyYaw();
+            rightArmYaw = worldYaw - this.getBodyYaw() + 180.0f;
             // Normalize to -180 to 180
             while (rightArmYaw > 180) rightArmYaw -= 360;
             while (rightArmYaw < -180) rightArmYaw += 360;
@@ -2178,8 +2264,10 @@ public class GoldGolemEntity extends PathAwareEntity {
         view.putInt("PathWidth", this.pathWidth);
         view.putFloat("GradWindow", this.gradientWindow);
         view.putFloat("StepWindow", this.stepGradientWindow);
+        view.putFloat("FWindow", this.surfaceGradientWindow);
         view.putInt("GradNoiseMain", this.gradientNoiseScaleMain);
         view.putInt("GradNoiseStep", this.gradientNoiseScaleStep);
+        view.putInt("FNoiseScale", this.gradientNoiseScaleSurface);
 
         for (int i = 0; i < 9; i++) {
             String val = gradient[i] == null ? "" : gradient[i];
@@ -2188,6 +2276,10 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (int i = 0; i < 9; i++) {
             String val = stepGradient[i] == null ? "" : stepGradient[i];
             view.putString("S" + i, val);
+        }
+        for (int i = 0; i < 9; i++) {
+            String val = surfaceGradient[i] == null ? "" : surfaceGradient[i];
+            view.putString("F" + i, val);
         }
 
         DefaultedList<ItemStack> stacks = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
@@ -2384,15 +2476,21 @@ public class GoldGolemEntity extends PathAwareEntity {
         this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("GradWindow", this.gradientWindow)));
         this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("StepWindow", this.stepGradientWindow)));
+        this.surfaceGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("FWindow", this.surfaceGradientWindow)));
         int legacyScale = view.getInt("GradNoiseScale", 1);
         this.gradientNoiseScaleMain = Math.max(1, Math.min(16, view.getInt("GradNoiseMain", legacyScale)));
         this.gradientNoiseScaleStep = Math.max(1, Math.min(16, view.getInt("GradNoiseStep", legacyScale)));
+        this.gradientNoiseScaleSurface = Math.max(1, Math.min(16, view.getInt("FNoiseScale", 1)));
 
         for (int i = 0; i < 9; i++) {
             gradient[i] = view.getString("G" + i, "");
         }
+        gradientCopyDirty = true; // Invalidate cache after loading from NBT
         for (int i = 0; i < 9; i++) {
             stepGradient[i] = view.getString("S" + i, "");
+        }
+        for (int i = 0; i < 9; i++) {
+            surfaceGradient[i] = view.getString("F" + i, "");
         }
 
         DefaultedList<ItemStack> stacks = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
@@ -2624,10 +2722,14 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setGradientWindow(float w) { this.gradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
     public float getStepGradientWindow() { return stepGradientWindow; }
     public void setStepGradientWindow(float w) { this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
+    public float getSurfaceGradientWindow() { return surfaceGradientWindow; }
+    public void setSurfaceGradientWindow(float w) { this.surfaceGradientWindow = Math.max(0.0f, Math.min(9.0f, w)); }
     public int getGradientNoiseScaleMain() { return gradientNoiseScaleMain; }
     public int getGradientNoiseScaleStep() { return gradientNoiseScaleStep; }
+    public int getGradientNoiseScaleSurface() { return gradientNoiseScaleSurface; }
     public void setGradientNoiseScaleMain(int scale) { this.gradientNoiseScaleMain = Math.max(1, Math.min(16, scale)); }
     public void setGradientNoiseScaleStep(int scale) { this.gradientNoiseScaleStep = Math.max(1, Math.min(16, scale)); }
+    public void setGradientNoiseScaleSurface(int scale) { this.gradientNoiseScaleSurface = Math.max(1, Math.min(16, scale)); }
     public int getGradientNoiseScale(int row) { return row == 0 ? gradientNoiseScaleMain : gradientNoiseScaleStep; }
     public void setGradientNoiseScale(int row, int scale) {
         if (row == 0) setGradientNoiseScaleMain(scale);
@@ -2677,42 +2779,61 @@ public class GoldGolemEntity extends PathAwareEntity {
      * @return true if this is a new placement, false if already recorded
      */
     public boolean recordPlaced(long key) {
-        if (recentPlaced.contains(key)) return false;
-        if (placedSize == placedRing.length) {
-            long old = placedRing[placedHead];
-            recentPlaced.remove(old);
-            placedRing[placedHead] = key;
-            placedHead = (placedHead + 1) % placedRing.length;
-        } else {
-            placedRing[(placedHead + placedSize) % placedRing.length] = key;
-            placedSize++;
+        synchronized (ringBufferLock) {
+            if (recentPlaced.contains(key)) return false;
+            if (placedSize == placedRing.length) {
+                long old = placedRing[placedHead];
+                recentPlaced.remove(old);
+                placedRing[placedHead] = key;
+                placedHead = (placedHead + 1) % placedRing.length;
+            } else {
+                placedRing[(placedHead + placedSize) % placedRing.length] = key;
+                placedSize++;
+            }
+            recentPlaced.add(key);
+            return true;
         }
-        recentPlaced.add(key);
-        return true;
     }
 
     /**
      * Unrecord a block position (best-effort, no-op to avoid thrash).
      */
     public void unrecordPlaced(long key) {
-        // best-effort: keep it recorded to avoid thrash; no-op
+        synchronized (ringBufferLock) {
+            // best-effort: keep it recorded to avoid thrash; no-op
+        }
     }
 
     /**
      * Clear placement tracking state.
      */
     public void clearPlacementTracking() {
-        recentPlaced.clear();
-        placedHead = 0;
-        placedSize = 0;
+        synchronized (ringBufferLock) {
+            recentPlaced.clear();
+            placedHead = 0;
+            placedSize = 0;
+        }
+    }
+
+    /**
+     * Check if a block position was recently placed.
+     * @return true if the key is in the recent placement tracking
+     */
+    public boolean wasRecentlyPlaced(long key) {
+        synchronized (ringBufferLock) {
+            return recentPlaced.contains(key);
+        }
     }
 
     public String[] getGradientCopy() {
-        String[] copy = new String[9];
-        for (int i = 0; i < 9; i++) {
-            copy[i] = (gradient[i] == null) ? "" : gradient[i];
+        if (gradientCopyDirty || cachedGradientCopy == null) {
+            cachedGradientCopy = new String[9];
+            for (int i = 0; i < 9; i++) {
+                cachedGradientCopy[i] = (gradient[i] == null) ? "" : gradient[i];
+            }
+            gradientCopyDirty = false;
         }
-        return copy;
+        return cachedGradientCopy.clone(); // Return clone for safety
     }
     public String[] getStepGradientCopy() {
         String[] copy = new String[9];
@@ -2724,15 +2845,31 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setGradientSlot(int idx, String id) {
         if (idx < 0 || idx >= 9) return;
         String value = (id == null || id.isEmpty()) ? "" : id;
-        // Debug log to help trace slot updates from client → server
-        
         gradient[idx] = value;
+        gradientCopyDirty = true;
+    }
+    public void setGradient(int idx, String value) {
+        if (idx < 0 || idx >= 9) return;
+        gradient[idx] = value;
+        gradientCopyDirty = true;
     }
     public void setStepGradientSlot(int idx, String id) {
         if (idx < 0 || idx >= 9) return;
         String value = (id == null || id.isEmpty()) ? "" : id;
 
         stepGradient[idx] = value;
+    }
+    public String[] getSurfaceGradientCopy() {
+        String[] copy = new String[9];
+        for (int i = 0; i < 9; i++) {
+            copy[i] = (surfaceGradient[i] == null) ? "" : surfaceGradient[i];
+        }
+        return copy;
+    }
+    public void setSurfaceGradientSlot(int idx, String id) {
+        if (idx < 0 || idx >= 9) return;
+        String value = (id == null || id.isEmpty()) ? "" : id;
+        surfaceGradient[idx] = value;
     }
 
     // Terraforming gradient getters/setters
@@ -2795,13 +2932,30 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Ownership (simple UUID-based)
     private java.util.UUID ownerUuid;
+    private java.lang.ref.WeakReference<PlayerEntity> cachedOwner = null;
+    private int ownerCacheTicksRemaining = 0;
+
     public void setOwner(PlayerEntity player) { this.ownerUuid = player.getUuid(); }
     public boolean isOwner(PlayerEntity player) { return ownerUuid != null && player != null && ownerUuid.equals(player.getUuid()); }
 
     public PlayerEntity getOwnerPlayer() {
         if (ownerUuid == null) return null;
+
+        // Check cache first
+        if (ownerCacheTicksRemaining > 0 && cachedOwner != null) {
+            PlayerEntity cached = cachedOwner.get();
+            if (cached != null && cached.getUuid().equals(ownerUuid)) {
+                return cached;
+            }
+        }
+
+        // Cache miss - do lookup
         for (PlayerEntity p : this.getEntityWorld().getPlayers()) {
-            if (ownerUuid.equals(p.getUuid())) return p;
+            if (ownerUuid.equals(p.getUuid())) {
+                cachedOwner = new java.lang.ref.WeakReference<>(p);
+                ownerCacheTicksRemaining = OWNER_CACHE_DURATION;
+                return p;
+            }
         }
         return null;
     }
@@ -2875,8 +3029,7 @@ public class GoldGolemEntity extends PathAwareEntity {
                             if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
                                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
                             }
-                            recentPlaced.clear();
-                            placedHead = placedSize = 0;
+                            clearPlacementTracking();
                         }
                     }
                     case ALREADY_ACTIVE -> {
@@ -2915,11 +3068,11 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     @Override
     public boolean damage(net.minecraft.server.world.ServerWorld world, net.minecraft.entity.damage.DamageSource source, float amount) {
-        System.out.println("[GoldGolem] Taking damage - Source: " + source.getName() + ", Amount: " + amount + ", Type: " + source.getType());
+        LOGGER.debug("Taking damage - Source: {}, Amount: {}, Type: {}", source.getName(), amount, source.getType());
 
         // Immune to suffocation damage (being inside blocks)
         if (source.isOf(net.minecraft.entity.damage.DamageTypes.IN_WALL)) {
-            System.out.println("[GoldGolem] Blocked suffocation damage (IN_WALL)");
+            LOGGER.debug("Blocked suffocation damage (IN_WALL)");
             return false;
         }
         var attacker = source.getAttacker();
@@ -2945,20 +3098,19 @@ public class GoldGolemEntity extends PathAwareEntity {
             }
 
             spawnAngry();
-            recentPlaced.clear();
-            placedHead = placedSize = 0;
+            clearPlacementTracking();
             if (ignoreOwnerDamage) {
-                System.out.println("[GoldGolem] Ignored low owner damage (fist attack)");
+                LOGGER.debug("Ignored low owner damage (fist attack)");
                 return false; // cancel low (fist) damage
             }
         }
-        System.out.println("[GoldGolem] Applying damage - Source: " + source.getName() + ", Amount: " + amount);
+        LOGGER.debug("Applying damage - Source: {}, Amount: {}", source.getName(), amount);
         return super.damage(world, source, amount);
     }
 
     @Override
     public void onDeath(net.minecraft.entity.damage.DamageSource source) {
-        System.out.println("[GoldGolem] Died - Cause: " + source.getName() + ", Type: " + source.getType());
+        LOGGER.debug("Died - Cause: {}, Type: {}", source.getName(), source.getType());
         super.onDeath(source);
         if (!(this.getEntityWorld() instanceof ServerWorld world)) return;
 
@@ -3103,6 +3255,55 @@ public class GoldGolemEntity extends PathAwareEntity {
             inventory.setStack(invSlot, stInv);
 
             break; // only one placement per column
+        }
+
+        // Surface gradient placement (decorations on top of ground surface)
+        boolean hasSurfaceSlots = false;
+        for (int i = 0; i < surfaceGradient.length; i++) {
+            if (surfaceGradient[i] != null && !surfaceGradient[i].isEmpty()) { hasSurfaceSlots = true; break; }
+        }
+        if (hasSurfaceSlots && groundY != null) {
+            Integer topY = null;
+            for (int yy = groundY + 4; yy >= groundY - 4; yy--) {
+                BlockPos tp = new BlockPos(bx, yy, bz);
+                if (world.getBlockState(tp).isFullCube(world, tp)) { topY = yy; break; }
+            }
+            if (topY != null) {
+                BlockPos abovePos = new BlockPos(bx, topY + 1, bz);
+                BlockState aboveState = world.getBlockState(abovePos);
+                if (!aboveState.isFullCube(world, abovePos)) {
+                    int sIdx = sampleSurfaceGradientIndex(w, j, bx, topY, bz, gradientNoiseScaleSurface);
+                    if (sIdx >= 0) {
+                        String sid = surfaceGradient[sIdx] == null ? "" : surfaceGradient[sIdx];
+                        if (!sid.isEmpty()) {
+                            var sIdent = net.minecraft.util.Identifier.tryParse(sid);
+                            if (sIdent != null) {
+                                var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
+                                if (sBlock != null) {
+                                    long surfKey = abovePos.asLong();
+                                    if (recordPlaced(surfKey)) {
+                                        int invSlot3 = findItem(sBlock.asItem());
+                                        if (invSlot3 >= 0) {
+                                            if (!wouldBlockOverlapSelf(abovePos)) {
+                                                world.setBlockState(abovePos, sBlock.getDefaultState(), 3);
+                                                var st3 = inventory.getStack(invSlot3);
+                                                st3.decrement(1);
+                                                inventory.setStack(invSlot3, st3);
+                                            } else {
+                                                unrecordPlaced(surfKey);
+                                            }
+                                        } else {
+                                            unrecordPlaced(surfKey);
+                                            handleMissingBuildingBlock();
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Step placement in air with neighbor solid along major axis, with headroom
@@ -3284,6 +3485,41 @@ public class GoldGolemEntity extends PathAwareEntity {
         double s = (double) dist / (double) denom * (double) (G - 1);
 
         float Wcap = Math.min(this.stepGradientWindow, G);
+        double W = (double) Wcap;
+        if (W == 0.0) {
+            int idx = (int) Math.round(s);
+            return MathHelper.clamp(idx, 0, G - 1);
+        }
+
+        double u01 = sampleGradientNoise01(bx, by, bz, noiseScale);
+        double u = (u01 * W) - (W * 0.5);
+        double sprime = s + u;
+
+        double a = -0.5;
+        double b = (double) G - 0.5;
+        double L = b - a;
+        double y = (sprime - a) % (2.0 * L);
+        if (y < 0) y += 2.0 * L;
+        double r = (y <= L) ? y : (2.0 * L - y);
+        double sref = a + r;
+
+        int idx = (int) Math.round(sref);
+        return MathHelper.clamp(idx, 0, G - 1);
+    }
+
+    private int sampleSurfaceGradientIndex(int stripWidth, int j, int bx, int by, int bz, int noiseScale) {
+        int G = 0;
+        for (int i = surfaceGradient.length - 1; i >= 0; i--) {
+            if (surfaceGradient[i] != null && !surfaceGradient[i].isEmpty()) { G = i + 1; break; }
+        }
+        if (G <= 0) return -1;
+
+        int half = (stripWidth - 1) / 2;
+        int dist = Math.abs(j);
+        int denom = Math.max(1, half);
+        double s = (double) dist / (double) denom * (double) (G - 1);
+
+        float Wcap = Math.min(this.surfaceGradientWindow, G);
         double W = (double) Wcap;
         if (W == 0.0) {
             int idx = (int) Math.round(s);

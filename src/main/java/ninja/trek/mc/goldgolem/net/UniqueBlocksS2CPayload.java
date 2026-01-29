@@ -10,6 +10,11 @@ import ninja.trek.mc.goldgolem.BuildMode;
 import java.util.List;
 
 public record UniqueBlocksS2CPayload(int entityId, BuildMode mode, List<String> blockIds) implements CustomPayload {
+
+    public UniqueBlocksS2CPayload {
+        blockIds = PayloadValidator.validateList(blockIds, 0, "blockIds");
+    }
+
     public static final Id<UniqueBlocksS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "unique_blocks"));
 
     public static final PacketCodec<RegistryByteBuf, UniqueBlocksS2CPayload> CODEC = PacketCodec.tuple(

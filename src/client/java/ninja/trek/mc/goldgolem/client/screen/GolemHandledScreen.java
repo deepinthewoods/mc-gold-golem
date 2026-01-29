@@ -21,24 +21,34 @@ import ninja.trek.mc.goldgolem.client.screen.layout.*;
 import ninja.trek.mc.goldgolem.client.screen.layout.sections.*;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandler> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GolemHandledScreen.class);
     private static final Identifier GENERIC_CONTAINER_TEXTURE = Identifier.of("minecraft", "textures/gui/container/generic_54.png");
     private float gradientWindowMain = 1.0f; // 0..9 (server synced)
     private float gradientWindowStep = 1.0f; // 0..9 (server synced)
+    private float gradientWindowSurface = 1.0f; // 0..9 (server synced)
     private int pathWidth = 3;      // server synced
     private int gradientNoiseScaleMain = 1; // 1-16 (server synced)
     private int gradientNoiseScaleStep = 1; // 1-16 (server synced)
+    private int gradientNoiseScaleSurface = 1; // 1-16 (server synced)
     private String[] gradientMainBlocks = new String[9];
     private String[] gradientStepBlocks = new String[9];
+    private String[] gradientSurfaceBlocks = new String[9];
 
     private WindowSlider windowSliderMain;
     private WindowSlider windowSliderStep;
+    private WindowSlider windowSliderSurface;
     private WidthSlider widthSlider;
     private GradientNoiseScaleSlider gradientNoiseScaleSliderMain;
     private GradientNoiseScaleSlider gradientNoiseScaleSliderStep;
+    private GradientNoiseScaleSlider gradientNoiseScaleSliderSurface;
     private boolean isDragging = false;
     private int dragButton = -1;
     private java.util.Set<Integer> dragVisited = new java.util.HashSet<>();
@@ -75,7 +85,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private TowerLayersRangeSlider towerLayersSlider;
     private TextFieldWidget towerLayersField;
     private ButtonWidget towerOriginResetButton;
-    private boolean updatingTowerLayersField = false;
+    private volatile boolean updatingTowerLayersField = false;
     private boolean hasTowerModeData = false;
 
     // Excavation mode state
@@ -135,6 +145,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private List<GuiSection> sections = new ArrayList<>();
     private boolean useNewLayoutSystem = true; // Feature flag for gradual migration
 
+    // Thread safety for sync methods (C2: GUI Thread Safety)
+    private final Object stateLock = new Object();
+
+    // Mode-specific state containers (C3: ModeState consolidation)
+    private final Map<BuildMode, ModeState> modeStates = new EnumMap<>(BuildMode.class);
+
     private static final class IconHit {
         final String blockId; final int group; final int x; final int y; final int w; final int h;
         IconHit(String blockId, int group, int x, int y, int w, int h) { this.blockId = blockId; this.group = group; this.x = x; this.y = y; this.w = w; this.h = h; }
@@ -162,10 +178,12 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int g = effectiveG(row);
             float w = (g <= 0) ? 0.0f : Math.round(this.value * g * 10.0f) / 10.0f;
             w = Math.max(0.0f, Math.min(g, w));
-            float current = (row == 0) ? gradientWindowMain : gradientWindowStep;
+            float current = (row == 0) ? gradientWindowSurface : (row == 1) ? gradientWindowMain : gradientWindowStep;
             if (Math.abs(w - current) > 0.001f) {
-                if (row == 0) gradientWindowMain = w; else gradientWindowStep = w;
-                int scale = (row == 0) ? gradientNoiseScaleMain : gradientNoiseScaleStep;
+                if (row == 0) gradientWindowSurface = w;
+                else if (row == 1) gradientWindowMain = w;
+                else gradientWindowStep = w;
+                int scale = (row == 0) ? gradientNoiseScaleSurface : (row == 1) ? gradientNoiseScaleMain : gradientNoiseScaleStep;
                 ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(getEntityId(), row, w, scale));
             }
         }
@@ -239,15 +257,20 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         @Override
         protected void applyScale(int scale) {
             if (row == 0) {
+                if (scale == gradientNoiseScaleSurface) return;
+                gradientNoiseScaleSurface = scale;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(
+                        getEntityId(), 0, gradientWindowSurface, gradientNoiseScaleSurface));
+            } else if (row == 1) {
                 if (scale == gradientNoiseScaleMain) return;
                 gradientNoiseScaleMain = scale;
                 ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(
-                        getEntityId(), 0, gradientWindowMain, gradientNoiseScaleMain));
+                        getEntityId(), 1, gradientWindowMain, gradientNoiseScaleMain));
             } else {
                 if (scale == gradientNoiseScaleStep) return;
                 gradientNoiseScaleStep = scale;
                 ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientWindowC2SPayload(
-                        getEntityId(), 1, gradientWindowStep, gradientNoiseScaleStep));
+                        getEntityId(), 2, gradientWindowStep, gradientNoiseScaleStep));
             }
             updateMessage();
         }
@@ -499,59 +522,145 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
+    /**
+     * Get or create the ModeState for a specific build mode.
+     * This provides thread-safe access to mode-specific state.
+     */
+    public ModeState getModeState(BuildMode mode) {
+        return modeStates.computeIfAbsent(mode, k -> new ModeState());
+    }
+
+    // === SYNC METHODS (C5: Standardized naming with sync* prefix) ===
+
+    public void syncWallUniqueBlocks(java.util.List<String> ids) {
+        synchronized (stateLock) {
+            this.wallUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+            getModeState(BuildMode.WALL).setUniqueBlocks(ids);
+        }
+    }
+
+    /** @deprecated Use {@link #syncWallUniqueBlocks} instead */
+    @Deprecated
     public void setWallUniqueBlocks(java.util.List<String> ids) {
-        this.wallUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+        syncWallUniqueBlocks(ids);
     }
+
+    public void syncWallBlockGroups(java.util.List<Integer> groups) {
+        synchronized (stateLock) {
+            this.wallBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+            getModeState(BuildMode.WALL).setBlockGroups(groups);
+        }
+    }
+
+    /** @deprecated Use {@link #syncWallBlockGroups} instead */
+    @Deprecated
     public void setWallBlockGroups(java.util.List<Integer> groups) {
-        this.wallBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+        syncWallBlockGroups(groups);
     }
+
+    public void syncTreeUniqueBlocks(java.util.List<String> ids) {
+        synchronized (stateLock) {
+            this.treeUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+            getModeState(BuildMode.TREE).setUniqueBlocks(ids);
+        }
+    }
+
+    /** @deprecated Use {@link #syncTreeUniqueBlocks} instead */
+    @Deprecated
     public void setTreeUniqueBlocks(java.util.List<String> ids) {
-        this.treeUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+        syncTreeUniqueBlocks(ids);
     }
-    public void setTowerUniqueBlocks(java.util.List<String> ids) {
-        this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
-        this.hasTowerModeData = true;
+
+    public void syncTowerUniqueBlocks(java.util.List<String> ids) {
+        synchronized (stateLock) {
+            this.towerUniqueBlocks = (ids == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+            getModeState(BuildMode.TOWER).setUniqueBlocks(ids);
+            this.hasTowerModeData = true;
+        }
         ensureTowerLayersField();
     }
-    public void setWallGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
-        this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
-        this.wallGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
-        this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+
+    /** @deprecated Use {@link #syncTowerUniqueBlocks} instead */
+    @Deprecated
+    public void setTowerUniqueBlocks(java.util.List<String> ids) {
+        syncTowerUniqueBlocks(ids);
+    }
+
+    public void syncWallGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
+        synchronized (stateLock) {
+            this.wallGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+            this.wallGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
+            this.wallGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+            getModeState(BuildMode.WALL).updateGroupState(windows, noiseScales, flatSlots);
+        }
         // Invalidate strategy cache to force re-initialization with new data
         groupModeStrategy = null;
         GroupModeStrategy strategy = getGroupModeStrategy();
         if (strategy != null) {
             syncGroupSliders(strategy);
         }
-        refreshLayoutIfNeeded();
+        // Schedule UI update on render thread
+        MinecraftClient.getInstance().execute(this::refreshLayoutIfNeeded);
+    }
+
+    /** @deprecated Use {@link #syncWallGroupsState} instead */
+    @Deprecated
+    public void setWallGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
+        syncWallGroupsState(windows, noiseScales, flatSlots);
     }
 
     // Tower mode network sync methods
-    public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height) {
-        // Note: towerUniqueBlocks is set by UniqueBlocksS2CPayload, not here.
-        // Only update if we don't already have unique blocks (backward compatibility).
-        if (this.towerUniqueBlocks.isEmpty() && ids != null && !ids.isEmpty()) {
-            this.towerUniqueBlocks = new java.util.ArrayList<>(ids);
-        }
-        this.towerBlockCounts.clear();
-        if (ids != null && counts != null) {
-            for (int i = 0; i < Math.min(ids.size(), counts.size()); i++) {
-                this.towerBlockCounts.put(ids.get(i), counts.get(i));
+    public void syncTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height) {
+        synchronized (stateLock) {
+            // Note: towerUniqueBlocks is set by UniqueBlocksS2CPayload, not here.
+            // Only update if we don't already have unique blocks (backward compatibility).
+            if (this.towerUniqueBlocks.isEmpty() && ids != null && !ids.isEmpty()) {
+                this.towerUniqueBlocks = new java.util.ArrayList<>(ids);
+                getModeState(BuildMode.TOWER).setUniqueBlocks(ids);
             }
+            this.towerBlockCounts.clear();
+            java.util.Map<String, Integer> countMap = new java.util.HashMap<>();
+            if (ids != null && counts != null) {
+                for (int i = 0; i < Math.min(ids.size(), counts.size()); i++) {
+                    this.towerBlockCounts.put(ids.get(i), counts.get(i));
+                    countMap.put(ids.get(i), counts.get(i));
+                }
+            }
+            getModeState(BuildMode.TOWER).setBlockCounts(countMap);
+            this.towerLayers = Math.max(1, height);
+            this.hasTowerModeData = true;
         }
-        this.towerLayers = Math.max(1, height);
         setTowerLayersFieldText(this.towerLayers);
         setTowerLayersSliderValue(this.towerLayers);
-        this.hasTowerModeData = true;
         ensureTowerLayersField();
     }
-    public void setTowerBlockGroups(java.util.List<Integer> groups) {
-        this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+
+    /** @deprecated Use {@link #syncTowerBlockCounts} instead */
+    @Deprecated
+    public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height) {
+        syncTowerBlockCounts(ids, counts, height);
     }
-    public void setTowerGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
-        this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
-        this.towerGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
-        this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+
+    public void syncTowerBlockGroups(java.util.List<Integer> groups) {
+        synchronized (stateLock) {
+            this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+            getModeState(BuildMode.TOWER).setBlockGroups(groups);
+        }
+    }
+
+    /** @deprecated Use {@link #syncTowerBlockGroups} instead */
+    @Deprecated
+    public void setTowerBlockGroups(java.util.List<Integer> groups) {
+        syncTowerBlockGroups(groups);
+    }
+
+    public void syncTowerGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
+        synchronized (stateLock) {
+            this.towerGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+            this.towerGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
+            this.towerGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+            getModeState(BuildMode.TOWER).updateGroupState(windows, noiseScales, flatSlots);
+        }
         // Invalidate strategy cache to force re-initialization with new data
         groupModeStrategy = null;
         GroupModeStrategy strategy = getGroupModeStrategy();
@@ -559,14 +668,23 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             syncGroupSliders(strategy);
         }
         ensureTowerLayersField();
-        refreshLayoutIfNeeded();
+        // Schedule UI update on render thread
+        MinecraftClient.getInstance().execute(this::refreshLayoutIfNeeded);
+    }
+
+    /** @deprecated Use {@link #syncTowerGroupsState} instead */
+    @Deprecated
+    public void setTowerGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
+        syncTowerGroupsState(windows, noiseScales, flatSlots);
     }
 
     // Excavation mode network sync method
-    public void setExcavationValues(int height, int depth, int oreMiningMode) {
-        this.excavationHeight = height;
-        this.excavationDepth = depth;
-        this.excavationOreMiningMode = oreMiningMode;
+    public void syncExcavationState(int height, int depth, int oreMiningMode) {
+        synchronized (stateLock) {
+            this.excavationHeight = height;
+            this.excavationDepth = depth;
+            this.excavationOreMiningMode = oreMiningMode;
+        }
         if (this.excavationHeightSlider != null) {
             this.excavationHeightSlider.syncTo(height);
         }
@@ -578,12 +696,26 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
+    /** @deprecated Use {@link #syncExcavationState} instead */
+    @Deprecated
+    public void setExcavationValues(int height, int depth, int oreMiningMode) {
+        syncExcavationState(height, depth, oreMiningMode);
+    }
+
     // Mining mode network sync method
-    public void setMiningValues(int branchDepth, int branchSpacing, int tunnelHeight, int oreMiningMode) {
-        this.miningOreMiningMode = oreMiningMode;
+    public void syncMiningState(int branchDepth, int branchSpacing, int tunnelHeight, int oreMiningMode) {
+        synchronized (stateLock) {
+            this.miningOreMiningMode = oreMiningMode;
+        }
         if (this.miningOreModeButton != null) {
             this.miningOreModeButton.setMessage(Text.literal("Ores: " + getOreModeDisplayName(oreMiningMode)));
         }
+    }
+
+    /** @deprecated Use {@link #syncMiningState} instead */
+    @Deprecated
+    public void setMiningValues(int branchDepth, int branchSpacing, int tunnelHeight, int oreMiningMode) {
+        syncMiningState(branchDepth, branchSpacing, tunnelHeight, oreMiningMode);
     }
 
     private String getOreModeDisplayName(int ordinal) {
@@ -596,26 +728,28 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     // Terraforming mode network sync method
-    public void setTerraformingValues(int scanRadius, int verticalWindow, int horizontalWindow, int slopedWindow,
+    public void syncTerraformingState(int scanRadius, int verticalWindow, int horizontalWindow, int slopedWindow,
                                        int verticalScale, int horizontalScale, int slopedScale,
                                        java.util.List<String> verticalGradient, java.util.List<String> horizontalGradient,
                                        java.util.List<String> slopedGradient) {
-        this.terraformingScanRadius = scanRadius;
-        this.terraformingGradientVerticalWindow = verticalWindow;
-        this.terraformingGradientHorizontalWindow = horizontalWindow;
-        this.terraformingGradientSlopedWindow = slopedWindow;
-        this.terraformingGradientVerticalScale = verticalScale;
-        this.terraformingGradientHorizontalScale = horizontalScale;
-        this.terraformingGradientSlopedScale = slopedScale;
+        synchronized (stateLock) {
+            this.terraformingScanRadius = scanRadius;
+            this.terraformingGradientVerticalWindow = verticalWindow;
+            this.terraformingGradientHorizontalWindow = horizontalWindow;
+            this.terraformingGradientSlopedWindow = slopedWindow;
+            this.terraformingGradientVerticalScale = verticalScale;
+            this.terraformingGradientHorizontalScale = horizontalScale;
+            this.terraformingGradientSlopedScale = slopedScale;
 
-        // Sync gradient arrays
-        for (int i = 0; i < 9; i++) {
-            this.terraformingGradientVertical[i] = (verticalGradient != null && i < verticalGradient.size()) ? verticalGradient.get(i) : "";
-            this.terraformingGradientHorizontal[i] = (horizontalGradient != null && i < horizontalGradient.size()) ? horizontalGradient.get(i) : "";
-            this.terraformingGradientSloped[i] = (slopedGradient != null && i < slopedGradient.size()) ? slopedGradient.get(i) : "";
+            // Sync gradient arrays
+            for (int i = 0; i < 9; i++) {
+                this.terraformingGradientVertical[i] = (verticalGradient != null && i < verticalGradient.size()) ? verticalGradient.get(i) : "";
+                this.terraformingGradientHorizontal[i] = (horizontalGradient != null && i < horizontalGradient.size()) ? horizontalGradient.get(i) : "";
+                this.terraformingGradientSloped[i] = (slopedGradient != null && i < slopedGradient.size()) ? slopedGradient.get(i) : "";
+            }
         }
 
-        // Sync sliders if they exist
+        // Sync sliders if they exist (outside lock - UI operations)
         if (this.terraformingScanRadiusSlider != null) {
             this.terraformingScanRadiusSlider.syncTo(scanRadius);
         }
@@ -642,6 +776,17 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
     }
 
+    /** @deprecated Use {@link #syncTerraformingState} instead */
+    @Deprecated
+    public void setTerraformingValues(int scanRadius, int verticalWindow, int horizontalWindow, int slopedWindow,
+                                       int verticalScale, int horizontalScale, int slopedScale,
+                                       java.util.List<String> verticalGradient, java.util.List<String> horizontalGradient,
+                                       java.util.List<String> slopedGradient) {
+        syncTerraformingState(scanRadius, verticalWindow, horizontalWindow, slopedWindow,
+                verticalScale, horizontalScale, slopedScale,
+                verticalGradient, horizontalGradient, slopedGradient);
+    }
+
     private int effectiveTerraformingG(int gradientType) {
         String[] arr = switch (gradientType) {
             case 0 -> terraformingGradientVertical;
@@ -661,21 +806,41 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     // Tree mode network sync methods
-    public void setTreeBlockGroups(java.util.List<Integer> groups) {
-        this.treeBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+    public void syncTreeBlockGroups(java.util.List<Integer> groups) {
+        synchronized (stateLock) {
+            this.treeBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+            getModeState(BuildMode.TREE).setBlockGroups(groups);
+        }
     }
-    public void setTreeGroupsState(int presetOrdinal, java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
-        this.treeTilingPresetOrdinal = presetOrdinal;
-        this.treeGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
-        this.treeGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
-        this.treeGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+
+    /** @deprecated Use {@link #syncTreeBlockGroups} instead */
+    @Deprecated
+    public void setTreeBlockGroups(java.util.List<Integer> groups) {
+        syncTreeBlockGroups(groups);
+    }
+
+    public void syncTreeGroupsState(int presetOrdinal, java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
+        synchronized (stateLock) {
+            this.treeTilingPresetOrdinal = presetOrdinal;
+            this.treeGroupWindows = (windows == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+            this.treeGroupNoiseScales = (noiseScales == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
+            this.treeGroupFlatSlots = (flatSlots == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+            getModeState(BuildMode.TREE).updateGroupState(windows, noiseScales, flatSlots);
+        }
         // Invalidate strategy cache to force re-initialization with new data
         groupModeStrategy = null;
         GroupModeStrategy strategy = getGroupModeStrategy();
         if (strategy != null) {
             syncGroupSliders(strategy);
         }
-        refreshLayoutIfNeeded();
+        // Schedule UI update on render thread
+        MinecraftClient.getInstance().execute(this::refreshLayoutIfNeeded);
+    }
+
+    /** @deprecated Use {@link #syncTreeGroupsState} instead */
+    @Deprecated
+    public void setTreeGroupsState(int presetOrdinal, java.util.List<Float> windows, java.util.List<Integer> noiseScales, java.util.List<String> flatSlots) {
+        syncTreeGroupsState(presetOrdinal, windows, noiseScales, flatSlots);
     }
 
     private void scrollWall(int delta) {
@@ -1121,28 +1286,26 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 0f / texW, 176f / texW,
                 126f / texH, (126f + bottomH) / texH);
 
-        // Path mode only: draw gradient slot frames and items (two rows)
+        // Path mode only: draw gradient slot frames and items (three rows: surface, main, step)
         if (this.handler.isSliderEnabled()) {
             int slotsX = this.x + 8;
-            int slotY0 = this.y + 26; // first row
-            int slotY1 = slotY0 + 18 + 6; // second row below with small gap
+            int slotY0 = this.y + 26; // first row (surface)
+            int slotY1 = slotY0 + 18 + 6; // second row (main)
+            int slotY2 = slotY1 + 18 + 6; // third row (step)
             // Frames: 18x18 area with 1px border and darker inner background
             int borderColor = 0xFF555555; // medium-dark border
             int innerColor = 0xFF1C1C1C;  // darker inner background
-            for (int i = 0; i < 9; i++) {
-                int fx = slotsX + i * 18;
-                int fy = slotY0;
-                context.fill(fx - 1, fy - 1, fx + 17, fy + 17, borderColor);
-                context.fill(fx, fy, fx + 16, fy + 16, innerColor);
+            for (int row = 0; row < 3; row++) {
+                int slotY = slotY0 + row * (18 + 6);
+                for (int i = 0; i < 9; i++) {
+                    int fx = slotsX + i * 18;
+                    context.fill(fx - 1, slotY - 1, fx + 17, slotY + 17, borderColor);
+                    context.fill(fx, slotY, fx + 16, slotY + 16, innerColor);
+                }
             }
+            // Draw items for surface gradient (row 0)
             for (int i = 0; i < 9; i++) {
-                int fx = slotsX + i * 18;
-                int fy = slotY1;
-                context.fill(fx - 1, fy - 1, fx + 17, fy + 17, borderColor);
-                context.fill(fx, fy, fx + 16, fy + 16, innerColor);
-            }
-            for (int i = 0; i < 9; i++) {
-                String id = (gradientMainBlocks != null && i < gradientMainBlocks.length) ? gradientMainBlocks[i] : "";
+                String id = (gradientSurfaceBlocks != null && i < gradientSurfaceBlocks.length) ? gradientSurfaceBlocks[i] : "";
                 if (id != null && !id.isEmpty()) {
                     var ident = net.minecraft.util.Identifier.tryParse(id);
                     if (ident != null) {
@@ -1154,8 +1317,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     }
                 }
             }
+            // Draw items for main gradient (row 1)
             for (int i = 0; i < 9; i++) {
-                String id = (gradientStepBlocks != null && i < gradientStepBlocks.length) ? gradientStepBlocks[i] : "";
+                String id = (gradientMainBlocks != null && i < gradientMainBlocks.length) ? gradientMainBlocks[i] : "";
                 if (id != null && !id.isEmpty()) {
                     var ident = net.minecraft.util.Identifier.tryParse(id);
                     if (ident != null) {
@@ -1167,12 +1331,28 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     }
                 }
             }
+            // Draw items for step gradient (row 2)
+            for (int i = 0; i < 9; i++) {
+                String id = (gradientStepBlocks != null && i < gradientStepBlocks.length) ? gradientStepBlocks[i] : "";
+                if (id != null && !id.isEmpty()) {
+                    var ident = net.minecraft.util.Identifier.tryParse(id);
+                    if (ident != null) {
+                        var block = Registries.BLOCK.get(ident);
+                        if (block != null) {
+                            ItemStack stack = new ItemStack(block.asItem());
+                            context.drawItem(stack, slotsX + i * 18, slotY2);
+                        }
+                    }
+                }
+            }
             // Icons to the left (outside the window), aligned with each row
+            ItemStack iconSurface = new ItemStack(net.minecraft.item.Items.SHORT_GRASS);
             ItemStack iconMain = new ItemStack(net.minecraft.item.Items.OAK_PLANKS);
             ItemStack iconStep = new ItemStack(net.minecraft.item.Items.OAK_STAIRS);
             int iconX = this.x - 20;
-            context.drawItem(iconMain, iconX, slotY0);
-            context.drawItem(iconStep, iconX, slotY1);
+            context.drawItem(iconSurface, iconX, slotY0);
+            context.drawItem(iconMain, iconX, slotY1);
+            context.drawItem(iconStep, iconX, slotY2);
         } else if (isTerraformingMode()) {
             // Terraforming mode: draw 3 gradient slot rows (vertical, horizontal, sloped)
             int slotsX = this.x + 8;
@@ -1309,25 +1489,35 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         // int slotY = controlsTop + 18; // below title area
 
         if (this.handler.isSliderEnabled()) {
-            // Path mode: window sliders to the right of gradient rows
+            // Path mode: window sliders to the right of gradient rows (3 rows: surface, main, step)
             int wx = this.x + 8 + 9 * 18 + 12;
-            int wy0 = controlsTop + 18; // align with first gradient row
-            int wy1 = wy0 + 18 + 6;     // second row
+            int wy0 = controlsTop + 18; // align with first gradient row (surface)
+            int wy1 = wy0 + 18 + 6;     // second row (main)
+            int wy2 = wy1 + 18 + 6;     // third row (step)
             int windowW = 70;
             int scaleW = 50;
             int sliderGap = 6;
             int sliderHeight = 20;
-            int g0 = effectiveG(0);
+            // Surface row (row 0)
+            int gS = effectiveG(0);
+            double normS = gS <= 0 ? 0.0 : (double) Math.min(gradientWindowSurface, gS) / (double) gS;
+            windowSliderSurface = new WindowSlider(wx, wy0, windowW, sliderHeight, normS, 0);
+            this.addDrawableChild(windowSliderSurface);
+            gradientNoiseScaleSliderSurface = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy0, scaleW, sliderHeight, gradientNoiseScaleSurface, 0);
+            this.addDrawableChild(gradientNoiseScaleSliderSurface);
+            // Main row (row 1)
+            int g0 = effectiveG(1);
             double norm0 = g0 <= 0 ? 0.0 : (double) Math.min(gradientWindowMain, g0) / (double) g0;
-            windowSliderMain = new WindowSlider(wx, wy0, windowW, sliderHeight, norm0, 0);
+            windowSliderMain = new WindowSlider(wx, wy1, windowW, sliderHeight, norm0, 1);
             this.addDrawableChild(windowSliderMain);
-            gradientNoiseScaleSliderMain = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy0, scaleW, sliderHeight, gradientNoiseScaleMain, 0);
+            gradientNoiseScaleSliderMain = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy1, scaleW, sliderHeight, gradientNoiseScaleMain, 1);
             this.addDrawableChild(gradientNoiseScaleSliderMain);
-            int g1 = effectiveG(1);
+            // Step row (row 2)
+            int g1 = effectiveG(2);
             double norm1 = g1 <= 0 ? 0.0 : (double) Math.min(gradientWindowStep, g1) / (double) g1;
-            windowSliderStep = new WindowSlider(wx, wy1, windowW, sliderHeight, norm1, 1);
+            windowSliderStep = new WindowSlider(wx, wy2, windowW, sliderHeight, norm1, 2);
             this.addDrawableChild(windowSliderStep);
-            gradientNoiseScaleSliderStep = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy1, scaleW, sliderHeight, gradientNoiseScaleStep, 1);
+            gradientNoiseScaleSliderStep = new GradientNoiseScaleSlider(wx + windowW + sliderGap, wy2, scaleW, sliderHeight, gradientNoiseScaleStep, 2);
             this.addDrawableChild(gradientNoiseScaleSliderStep);
 
         }
@@ -1337,7 +1527,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int wsliderW = 50;
             int wsliderH = 12;
             int slotTop = this.y + 26; // top of first gradient row
-            int wsliderY = slotTop + (18 + 6) + 18 + 6; // below second row
+            int wsliderY = slotTop + (18 + 6) + (18 + 6) + 18 + 6; // below third row
             int right = this.x + this.backgroundWidth - 8;
             int widthX = right - wsliderW;
             widthSlider = new WidthSlider(widthX, wsliderY, wsliderW, wsliderH, pathWidth);
@@ -1650,7 +1840,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         int my = (int) click.y();
         if (click.button() == 0) {
             if (this.handler.isSliderEnabled()) {
-                RowCol rc = gradientIndexAt(mx, my, 2);
+                RowCol rc = gradientIndexAt(mx, my, 3);
                 if (rc != null) {
                     ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(
                         getEntityId(), rc.row, rc.col, getCursorBlockId()));
@@ -2042,6 +2232,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             int ly = widthSlider.getY() - this.y - 10;
             context.drawText(this.textRenderer, Text.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFFFF, false);
         }
+        if (gradientNoiseScaleSliderSurface != null && this.handler.isSliderEnabled()) {
+            int lx = gradientNoiseScaleSliderSurface.getX() - this.x;
+            int ly = gradientNoiseScaleSliderSurface.getY() - this.y - 10;
+            context.drawText(this.textRenderer, Text.literal("Scale: " + this.gradientNoiseScaleSurface), lx, ly, 0xFFFFFFFF, false);
+        }
         if (gradientNoiseScaleSliderMain != null && this.handler.isSliderEnabled()) {
             int lx = gradientNoiseScaleSliderMain.getX() - this.x;
             int ly = gradientNoiseScaleSliderMain.getY() - this.y - 10;
@@ -2055,8 +2250,9 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
         // Marker dots above each window slider (path mode)
         if (this.handler.isSliderEnabled()) {
-            drawSliderMarkers(context, windowSliderMain, effectiveG(0));
-            drawSliderMarkers(context, windowSliderStep, effectiveG(1));
+            drawSliderMarkers(context, windowSliderSurface, effectiveG(0));
+            drawSliderMarkers(context, windowSliderMain, effectiveG(1));
+            drawSliderMarkers(context, windowSliderStep, effectiveG(2));
         }
 
         // Marker dots above group mode sliders (Wall, Tower, Tree)
@@ -2082,13 +2278,26 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
 
             if (uniqueBlocks != null && blockGroups != null && !uniqueBlocks.isEmpty() && !blockGroups.isEmpty()) {
                 java.util.Map<Integer, java.util.List<String>> groupToBlocks = new java.util.HashMap<>();
+                // C4: Bounds checking - use min of both sizes to avoid IndexOutOfBoundsException
                 int n = Math.min(uniqueBlocks.size(), blockGroups.size());
+                int maxGroups = vis.isEmpty() ? 0 : vis.stream().max(Integer::compareTo).orElse(0) + 1;
                 for (int i = 0; i < n; i++) {
                     int g = blockGroups.get(i);
+                    // C4: Validate group index before use
+                    if (g < 0 || g >= maxGroups) {
+                        LOGGER.warn("Invalid group index {} for block {} (maxGroups={})", g, uniqueBlocks.get(i), maxGroups);
+                        continue;
+                    }
                     groupToBlocks.computeIfAbsent(g, k -> new java.util.ArrayList<>()).add(uniqueBlocks.get(i));
                 }
                 for (int r = 0; r < drawRows; r++) {
-                    int groupIdx = vis.get(r + strategy.getScroll());
+                    // C4: Bounds check for vis access
+                    int visIndex = r + strategy.getScroll();
+                    if (visIndex < 0 || visIndex >= vis.size()) {
+                        LOGGER.warn("Invalid vis index {} (vis.size={})", visIndex, vis.size());
+                        continue;
+                    }
+                    int groupIdx = vis.get(visIndex);
                     java.util.List<String> list = groupToBlocks.getOrDefault(groupIdx, java.util.Collections.emptyList());
                     int y = startY + r * rowSpacing;
                     for (int i = 0; i < list.size(); i++) {
@@ -2124,7 +2333,13 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             java.util.List<String> groupFlatSlots = strategy.getGroupFlatSlots();
 
             for (int r = 0; r < drawRows; r++) {
-                int groupIdx = vis.get(r + strategy.getScroll());
+                // C4: Bounds check for vis access
+                int visIndex = r + strategy.getScroll();
+                if (visIndex < 0 || visIndex >= vis.size()) {
+                    LOGGER.warn("Invalid vis index {} in group rows (vis.size={})", visIndex, vis.size());
+                    continue;
+                }
+                int groupIdx = vis.get(visIndex);
                 int y = startY + r * rowSpacing;
                 for (int c = 0; c < 9; c++) {
                     int x = gridX + c * 18;
@@ -2137,6 +2352,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                     context.fill(ix1 - 1, iy1, ix1, iy2, col); // left
                     context.fill(ix2, iy1, ix2 + 1, iy2, col); // right
                     int flatIndex = groupIdx * 9 + c;
+                    // C4: Bounds check for flatIndex (already present but add logging for invalid state)
+                    if (flatIndex < 0) {
+                        LOGGER.warn("Negative flatIndex {} for group {} col {}", flatIndex, groupIdx, c);
+                        continue;
+                    }
                     if (flatIndex >= 0 && flatIndex < groupFlatSlots.size()) {
                         String bid = groupFlatSlots.get(flatIndex);
                         if (bid != null && !bid.isEmpty()) {
@@ -2213,12 +2433,14 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return this.handler.getEntityId();
     }
 
-    public void applyServerSync(int width, int noiseScaleMain, int noiseScaleStep, float windowMain, float windowStep, String[] blocksMain, String[] blocksStep) {
+    public void applyServerSync(int width, int noiseScaleMain, int noiseScaleStep, int noiseScaleSurface, float windowMain, float windowStep, float windowSurface, String[] blocksMain, String[] blocksStep, String[] blocksSurface) {
         this.pathWidth = width;
         this.gradientNoiseScaleMain = noiseScaleMain;
         this.gradientNoiseScaleStep = noiseScaleStep;
+        this.gradientNoiseScaleSurface = noiseScaleSurface;
         this.gradientWindowMain = windowMain;
         this.gradientWindowStep = windowStep;
+        this.gradientWindowSurface = windowSurface;
         if (blocksMain != null) {
             if (blocksMain.length != 9) this.gradientMainBlocks = new String[9];
             System.arraycopy(blocksMain, 0, this.gradientMainBlocks, 0, Math.min(9, blocksMain.length));
@@ -2227,16 +2449,27 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             if (blocksStep.length != 9) this.gradientStepBlocks = new String[9];
             System.arraycopy(blocksStep, 0, this.gradientStepBlocks, 0, Math.min(9, blocksStep.length));
         }
-        if (this.windowSliderMain != null) {
+        if (blocksSurface != null) {
+            if (blocksSurface.length != 9) this.gradientSurfaceBlocks = new String[9];
+            System.arraycopy(blocksSurface, 0, this.gradientSurfaceBlocks, 0, Math.min(9, blocksSurface.length));
+        }
+        if (this.windowSliderSurface != null) {
             int g = effectiveG(0);
-            this.windowSliderMain.syncTo(0, g, gradientWindowMain);
+            this.windowSliderSurface.syncTo(0, g, gradientWindowSurface);
+        }
+        if (this.windowSliderMain != null) {
+            int g = effectiveG(1);
+            this.windowSliderMain.syncTo(1, g, gradientWindowMain);
         }
         if (this.windowSliderStep != null) {
-            int g = effectiveG(1);
-            this.windowSliderStep.syncTo(1, g, gradientWindowStep);
+            int g = effectiveG(2);
+            this.windowSliderStep.syncTo(2, g, gradientWindowStep);
         }
         if (this.widthSlider != null) {
             this.widthSlider.syncTo(this.pathWidth);
+        }
+        if (this.gradientNoiseScaleSliderSurface != null) {
+            this.gradientNoiseScaleSliderSurface.syncTo(this.gradientNoiseScaleSurface);
         }
         if (this.gradientNoiseScaleSliderMain != null) {
             this.gradientNoiseScaleSliderMain.syncTo(this.gradientNoiseScaleMain);
@@ -2247,7 +2480,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     }
 
     private int effectiveG(int row) {
-        String[] arr = row == 0 ? gradientMainBlocks : gradientStepBlocks;
+        String[] arr = row == 0 ? gradientSurfaceBlocks : row == 1 ? gradientMainBlocks : gradientStepBlocks;
         int G = 0;
         for (int i = arr.length - 1; i >= 0; i--) {
             String s = arr[i];

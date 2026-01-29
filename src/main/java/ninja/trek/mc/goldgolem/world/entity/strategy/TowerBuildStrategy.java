@@ -8,6 +8,7 @@ import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
+import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +23,9 @@ import java.util.List;
  */
 public class TowerBuildStrategy extends AbstractBuildStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(TowerBuildStrategy.class);
+
+    // Gradient group manager for tower blocks
+    private final GradientGroupManager groups = new GradientGroupManager();
 
     // Tower building state
     private int currentLayerY = 0;           // Current Y layer being processed
@@ -77,6 +81,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
+
+        // Save gradient groups
+        groups.writeToNbt(nbt, "Groups");
     }
 
     @Override
@@ -88,6 +95,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
         }
+
+        // Load gradient groups
+        groups.readFromNbt(nbt, "Groups");
     }
 
     @Override
@@ -98,6 +108,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     @Override
     public boolean usesPlayerTracking() {
         return true;
+    }
+
+    /**
+     * Get the gradient group manager for tower blocks.
+     */
+    public GradientGroupManager getGroups() {
+        return groups;
     }
 
     /**

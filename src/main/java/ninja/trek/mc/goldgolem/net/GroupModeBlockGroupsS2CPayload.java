@@ -14,6 +14,11 @@ import java.util.List;
  * Replaces WallBlockGroupsS2CPayload, TowerBlockGroupsS2CPayload, TreeBlockGroupsS2CPayload.
  */
 public record GroupModeBlockGroupsS2CPayload(int entityId, BuildMode mode, List<Integer> groups) implements CustomPayload {
+
+    public GroupModeBlockGroupsS2CPayload {
+        groups = PayloadValidator.validateList(groups, 0, "groups");
+    }
+
     public static final Id<GroupModeBlockGroupsS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "group_mode_block_groups"));
 
     public static final PacketCodec<RegistryByteBuf, GroupModeBlockGroupsS2CPayload> CODEC = PacketCodec.tuple(

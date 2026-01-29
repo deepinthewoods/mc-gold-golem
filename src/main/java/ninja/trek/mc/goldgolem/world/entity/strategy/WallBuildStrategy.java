@@ -7,6 +7,7 @@ import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
@@ -22,6 +23,9 @@ import java.util.*;
  * within reach of each block before placing it.
  */
 public class WallBuildStrategy extends AbstractBuildStrategy {
+
+    // Gradient group manager for wall blocks
+    private final GradientGroupManager groups = new GradientGroupManager();
 
     // Wall-mode captured data
     private List<String> wallUniqueBlockIds = Collections.emptyList();
@@ -130,6 +134,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
+
+        // Save gradient groups
+        groups.writeToNbt(nbt, "Groups");
     }
 
     @Override
@@ -197,6 +204,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
         }
+
+        // Load gradient groups
+        groups.readFromNbt(nbt, "Groups");
     }
 
     @Override
@@ -290,6 +300,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     public void setWallLastDir(int x, int z) {
         this.wallLastDirX = x;
         this.wallLastDirZ = z;
+    }
+
+    /**
+     * Get the gradient group manager for wall blocks.
+     */
+    public GradientGroupManager getGroups() {
+        return groups;
     }
 
     // UI state accessors (delegate to entity)

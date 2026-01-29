@@ -20,7 +20,7 @@ public class GradientsSection extends AbstractGuiSection {
      * Gradient mode type.
      */
     public enum GradientMode {
-        PATH(2),        // 2 rows of gradients
+        PATH(3),        // 3 rows of gradients (surface, main, step)
         TERRAFORMING(3); // 3 rows of gradients
 
         public final int rows;
@@ -124,11 +124,14 @@ public class GradientsSection extends AbstractGuiSection {
             int iconX = guiX - 20;
             int row0Y = baseY;
             int row1Y = baseY + ROW_SPACING;
+            int row2Y = baseY + ROW_SPACING * 2;
 
+            ItemStack iconSurface = new ItemStack(net.minecraft.item.Items.SHORT_GRASS);
             ItemStack iconMain = new ItemStack(net.minecraft.item.Items.OAK_PLANKS);
             ItemStack iconStep = new ItemStack(net.minecraft.item.Items.OAK_STAIRS);
-            context.drawItem(iconMain, iconX, row0Y);
-            context.drawItem(iconStep, iconX, row1Y);
+            context.drawItem(iconSurface, iconX, row0Y);
+            context.drawItem(iconMain, iconX, row1Y);
+            context.drawItem(iconStep, iconX, row2Y);
         }
     }
 

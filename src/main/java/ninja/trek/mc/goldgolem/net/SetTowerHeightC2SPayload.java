@@ -7,6 +7,11 @@ import net.minecraft.network.packet.CustomPayload;
 import net.minecraft.util.Identifier;
 
 public record SetTowerHeightC2SPayload(int entityId, int height) implements CustomPayload {
+
+    public SetTowerHeightC2SPayload {
+        height = PayloadValidator.clampInt(height, 1, 256, "height");
+    }
+
     public static final Id<SetTowerHeightC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_tower_height"));
     public static final PacketCodec<RegistryByteBuf, SetTowerHeightC2SPayload> CODEC = PacketCodec.tuple(
             PacketCodecs.VAR_INT, SetTowerHeightC2SPayload::entityId,

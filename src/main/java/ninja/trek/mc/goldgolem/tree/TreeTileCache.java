@@ -12,12 +12,23 @@ public final class TreeTileCache {
     public final int tileSize; // 3 or 5
     public final List<TreeTile> tiles; // all extracted tiles (including rotations)
     public final Map<String, Integer> tileIdToIndex; // tile ID -> index in tiles list
-    public final Map<Long, Set<String>> adjacencyRules; // adjacency key -> valid tile IDs
+    // E1: Fixed hash collision - use nested maps instead of encoded long keys
+    private final Map<String, Map<Direction, Set<String>>> adjacencyRules; // tileId -> direction -> valid neighbor tile IDs
 
-    public TreeTileCache(int tileSize, List<TreeTile> tiles, Map<Long, Set<String>> adjacencyRules) {
+    public TreeTileCache(int tileSize, List<TreeTile> tiles, Map<String, Map<Direction, Set<String>>> adjacencyRules) {
         this.tileSize = tileSize;
         this.tiles = Collections.unmodifiableList(new ArrayList<>(tiles));
-        this.adjacencyRules = Collections.unmodifiableMap(new HashMap<>(adjacencyRules));
+
+        // Deep copy the adjacency rules to make them immutable
+        Map<String, Map<Direction, Set<String>>> rulesCopy = new HashMap<>();
+        for (Map.Entry<String, Map<Direction, Set<String>>> entry : adjacencyRules.entrySet()) {
+            Map<Direction, Set<String>> dirMapCopy = new EnumMap<>(Direction.class);
+            for (Map.Entry<Direction, Set<String>> dirEntry : entry.getValue().entrySet()) {
+                dirMapCopy.put(dirEntry.getKey(), Collections.unmodifiableSet(new HashSet<>(dirEntry.getValue())));
+            }
+            rulesCopy.put(entry.getKey(), Collections.unmodifiableMap(dirMapCopy));
+        }
+        this.adjacencyRules = Collections.unmodifiableMap(rulesCopy);
 
         // Build index
         Map<String, Integer> index = new HashMap<>();
@@ -31,8 +42,10 @@ public final class TreeTileCache {
      * Gets the set of tile IDs that can be placed adjacent to the given tile in the given direction.
      */
     public Set<String> getValidNeighbors(String tileId, Direction direction) {
-        long key = encodeAdjacencyKey(tileId, direction);
-        return adjacencyRules.getOrDefault(key, Collections.emptySet());
+        Map<Direction, Set<String>> dirMap = adjacencyRules.get(tileId);
+        if (dirMap == null) return Collections.emptySet();
+        Set<String> neighbors = dirMap.get(direction);
+        return neighbors != null ? neighbors : Collections.emptySet();
     }
 
     /**
@@ -59,13 +72,14 @@ public final class TreeTileCache {
     }
 
     /**
-     * Encodes a tile ID and direction into a unique key for adjacency lookup.
+     * Adds an adjacency rule. Used during tile extraction.
+     * Note: This modifies the rules map, so should only be used with a mutable builder map.
      */
-    public static long encodeAdjacencyKey(String tileId, Direction direction) {
-        // Simple hash-based encoding
-        long tileHash = tileId.hashCode() & 0xFFFFFFFFL;
-        long dirOrdinal = direction.ordinal() & 0xFFL;
-        return (tileHash << 8) | dirOrdinal;
+    public static void addAdjacencyRule(Map<String, Map<Direction, Set<String>>> rules,
+                                        String fromTileId, Direction direction, String toTileId) {
+        rules.computeIfAbsent(fromTileId, k -> new EnumMap<>(Direction.class))
+             .computeIfAbsent(direction, k -> new HashSet<>())
+             .add(toTileId);
     }
 
     /**

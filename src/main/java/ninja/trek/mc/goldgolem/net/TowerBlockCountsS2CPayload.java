@@ -9,6 +9,17 @@ import net.minecraft.util.Identifier;
 import java.util.List;
 
 public record TowerBlockCountsS2CPayload(int entityId, List<String> blockIds, List<Integer> counts, int towerHeight) implements CustomPayload {
+
+    public TowerBlockCountsS2CPayload {
+        blockIds = PayloadValidator.validateList(blockIds, 0, "blockIds");
+        counts = PayloadValidator.validateList(counts, 0, "counts");
+        // blockIds and counts should have the same size
+        if (blockIds != null && counts != null && blockIds.size() != counts.size()) {
+            org.slf4j.LoggerFactory.getLogger(TowerBlockCountsS2CPayload.class)
+                    .warn("Payload blockIds and counts have mismatched sizes: {} vs {}", blockIds.size(), counts.size());
+        }
+    }
+
     public static final Id<TowerBlockCountsS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "tower_block_counts"));
 
     public static final PacketCodec<RegistryByteBuf, TowerBlockCountsS2CPayload> CODEC = PacketCodec.tuple(

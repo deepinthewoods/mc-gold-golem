@@ -1,17 +1,11 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
 import net.minecraft.block.BlockState;
-import net.minecraft.block.FallingBlock;
-import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.inventory.Inventory;
-import net.minecraft.item.BlockItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.particle.BlockStateParticleEffect;
-import net.minecraft.particle.ParticleTypes;
 import net.minecraft.registry.Registries;
-import net.minecraft.server.world.ServerWorld;
 import net.minecraft.storage.ReadView;
 import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
@@ -33,7 +27,7 @@ import java.util.Set;
  * Strategy for Mining mode.
  * Digs tunnels in a branch mining pattern and deposits ore in a chest.
  */
-public class MiningBuildStrategy extends AbstractBuildStrategy {
+public class MiningBuildStrategy extends BaseMiningStrategy {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MiningBuildStrategy.class);
 
@@ -56,18 +50,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     // Mining runtime state (not persisted)
     private final Set<BlockPos> pendingOres = new HashSet<>();
-    private String buildingBlockType = null;
-
-    // Dual-hand mining state - each hand mines independently at 4x player time
-    private BlockPos leftTarget = null;
-    private BlockPos rightTarget = null;
-    private int leftBreakProgress = 0;
-    private int rightBreakProgress = 0;
-    private int leftSwingTick = 0;
-    private int rightSwingTick = 0;
-    private ItemStack leftTool = ItemStack.EMPTY;
-    private ItemStack rightTool = ItemStack.EMPTY;
-    private static final int MINING_SWING_INTERVAL = 5; // ticks between swings
 
     @Override
     public BuildMode getMode() {
@@ -84,14 +66,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         super.initialize(golem);
         // Reset transient state
         pendingOres.clear();
-        leftTarget = null;
-        rightTarget = null;
-        leftBreakProgress = 0;
-        rightBreakProgress = 0;
-        leftSwingTick = 0;
-        rightSwingTick = 0;
-        leftTool = ItemStack.EMPTY;
-        rightTool = ItemStack.EMPTY;
     }
 
     @Override
@@ -102,15 +76,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void cleanup(GoldGolemEntity golem) {
-        // Clear breaking overlays for both hands before cleanup
-        if (entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            if (leftTarget != null) {
-                sw.setBlockBreakingInfo(entity.getId(), leftTarget, -1);
-            }
-            if (rightTarget != null) {
-                sw.setBlockBreakingInfo(entity.getId() + 1000, rightTarget, -1);
-            }
-        }
         super.cleanup(golem);
         clearState();
     }
@@ -123,6 +88,23 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     @Override
     public boolean usesPlayerTracking() {
         return false; // Mining operates autonomously
+    }
+
+    // ==================== Block Mining Callbacks ====================
+
+    @Override
+    protected void onBlockAlreadyAir(BlockPos pos, boolean isLeftHand) {
+        pendingOres.remove(pos);
+    }
+
+    @Override
+    protected void onBlockBroken(BlockPos pos, boolean isLeftHand, BlockState brokenState) {
+        pendingOres.remove(pos);
+
+        String blockId = Registries.BLOCK.getId(brokenState.getBlock()).toString();
+        if (isOreBlock(blockId)) {
+            mineOreSurroundings(pos);
+        }
     }
 
     // ==================== Configuration Methods ====================
@@ -152,27 +134,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
     public void resetToIdle() {
         idleAtChest = true;
         returningToChest = false;
-        // Clear breaking overlays for both hands
-        if (entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            if (leftTarget != null) {
-                sw.setBlockBreakingInfo(entity.getId(), leftTarget, -1);
-            }
-            if (rightTarget != null) {
-                sw.setBlockBreakingInfo(entity.getId() + 1000, rightTarget, -1);
-            }
-        }
-        leftTarget = null;
-        rightTarget = null;
-        leftBreakProgress = 0;
-        rightBreakProgress = 0;
-        leftSwingTick = 0;
-        rightSwingTick = 0;
-        leftTool = ItemStack.EMPTY;
-        rightTool = ItemStack.EMPTY;
-        if (entity != null) {
-            entity.setLeftMiningTool(ItemStack.EMPTY);
-            entity.setRightMiningTool(ItemStack.EMPTY);
-        }
+        resetMiningState();
     }
 
     public void startFromIdle() {
@@ -186,27 +148,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         returningToChest = false;
         idleAtChest = false;
         pendingOres.clear();
-        // Clear breaking overlays for both hands
-        if (entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            if (leftTarget != null) {
-                sw.setBlockBreakingInfo(entity.getId(), leftTarget, -1);
-            }
-            if (rightTarget != null) {
-                sw.setBlockBreakingInfo(entity.getId() + 1000, rightTarget, -1);
-            }
-        }
-        leftTarget = null;
-        rightTarget = null;
-        leftBreakProgress = 0;
-        rightBreakProgress = 0;
-        leftSwingTick = 0;
-        rightSwingTick = 0;
-        leftTool = ItemStack.EMPTY;
-        rightTool = ItemStack.EMPTY;
-        if (entity != null) {
-            entity.setLeftMiningTool(ItemStack.EMPTY);
-            entity.setRightMiningTool(ItemStack.EMPTY);
-        }
+        resetMiningState();
     }
 
     // ==================== NBT Serialization ====================
@@ -236,9 +178,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         nbt.putBoolean("ReturningToChest", returningToChest);
         nbt.putBoolean("IdleAtChest", idleAtChest);
         nbt.putInt("OreMiningMode", oreMiningMode.ordinal());
-        if (buildingBlockType != null) {
-            nbt.putString("BuildingBlock", buildingBlockType);
-        }
+        writeBaseMiningNbt(nbt);
     }
 
     @Override
@@ -270,7 +210,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         returningToChest = nbt.getBoolean("ReturningToChest", false);
         idleAtChest = nbt.getBoolean("IdleAtChest", false);
         oreMiningMode = OreMiningMode.fromOrdinal(nbt.getInt("OreMiningMode", 0));
-        buildingBlockType = nbt.contains("BuildingBlock") ? nbt.getString("BuildingBlock", null) : null;
+        readBaseMiningNbt(nbt);
     }
 
     // ==================== Polymorphic Dispatch Methods ====================
@@ -444,7 +384,7 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
             }
         } else {
             entity.getNavigation().stop();
-            depositInventoryToChest();
+            depositInventoryToChest(chestPos);
             returningToChest = false;
             if (isInventoryFull()) {
                 idleAtChest = true;
@@ -490,22 +430,22 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
 
         // Mine with left hand if in range
         if (leftTarget != null) {
-            double dx = entity.getX() - (leftTarget.getX() + 0.5);
-            double dy = entity.getY() - leftTarget.getY();
-            double dz = entity.getZ() - (leftTarget.getZ() + 0.5);
-            double distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq <= 25.0) {
+            double ldx = entity.getX() - (leftTarget.getX() + 0.5);
+            double ldy = entity.getY() - leftTarget.getY();
+            double ldz = entity.getZ() - (leftTarget.getZ() + 0.5);
+            double lDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
+            if (lDistSq <= 25.0) {
                 mineBlockWithHand(leftTarget, true);
             }
         }
 
         // Mine with right hand if in range
         if (rightTarget != null) {
-            double dx = entity.getX() - (rightTarget.getX() + 0.5);
-            double dy = entity.getY() - rightTarget.getY();
-            double dz = entity.getZ() - (rightTarget.getZ() + 0.5);
-            double distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq <= 25.0) {
+            double rdx = entity.getX() - (rightTarget.getX() + 0.5);
+            double rdy = entity.getY() - rightTarget.getY();
+            double rdz = entity.getZ() - (rightTarget.getZ() + 0.5);
+            double rDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
+            if (rDistSq <= 25.0) {
                 mineBlockWithHand(rightTarget, false);
             }
         }
@@ -513,11 +453,11 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         // Stuck detection
         BlockPos primaryTarget = leftTarget != null ? leftTarget : rightTarget;
         if (primaryTarget != null) {
-            double dx = entity.getX() - (primaryTarget.getX() + 0.5);
-            double dy = entity.getY() - primaryTarget.getY();
-            double dz = entity.getZ() - (primaryTarget.getZ() + 0.5);
-            double distSq = dx * dx + dy * dy + dz * dz;
-            if (entity.getNavigation().isIdle() && distSq > 16.0) {
+            double pdx = entity.getX() - (primaryTarget.getX() + 0.5);
+            double pdy = entity.getY() - primaryTarget.getY();
+            double pdz = entity.getZ() - (primaryTarget.getZ() + 0.5);
+            double pDistSq = pdx * pdx + pdy * pdy + pdz * pdz;
+            if (entity.getNavigation().isIdle() && pDistSq > 16.0) {
                 stuckTicks++;
                 if (stuckTicks >= 60) {
                     teleportToStart();
@@ -575,113 +515,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
             }
         }
         return emptySlots < 2;
-    }
-
-    private void depositInventoryToChest() {
-        if (chestPos == null || entity.getEntityWorld().isClient()) return;
-
-        var chestEntity = entity.getEntityWorld().getBlockEntity(chestPos);
-        if (!(chestEntity instanceof Inventory chestInv)) return;
-
-        Inventory inventory = entity.getInventory();
-        int buildingBlocksKept = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty()) continue;
-
-            String blockId = getBlockIdFromStack(stack);
-            boolean isBuildingBlock = buildingBlockType != null && blockId != null &&
-                blockId.equals(buildingBlockType);
-
-            if (isBuildingBlock && buildingBlocksKept < 64) {
-                int toKeep = Math.min(64 - buildingBlocksKept, stack.getCount());
-                buildingBlocksKept += toKeep;
-                if (stack.getCount() > toKeep) {
-                    ItemStack toDeposit = stack.copy();
-                    toDeposit.setCount(stack.getCount() - toKeep);
-                    ItemStack remainder = transferToInventory(toDeposit, chestInv);
-                    stack.setCount(toKeep + (remainder.isEmpty() ? 0 : remainder.getCount()));
-                    inventory.setStack(i, stack);
-                }
-            } else {
-                ItemStack remainder = transferToInventory(stack, chestInv);
-                inventory.setStack(i, remainder);
-            }
-        }
-    }
-
-    private ItemStack transferToInventory(ItemStack stack, Inventory targetInv) {
-        if (stack.isEmpty()) return ItemStack.EMPTY;
-
-        for (int i = 0; i < targetInv.size(); i++) {
-            ItemStack targetStack = targetInv.getStack(i);
-            if (targetStack.isEmpty()) continue;
-            if (ItemStack.areItemsAndComponentsEqual(stack, targetStack)) {
-                int space = targetStack.getMaxCount() - targetStack.getCount();
-                if (space > 0) {
-                    int toTransfer = Math.min(space, stack.getCount());
-                    targetStack.setCount(targetStack.getCount() + toTransfer);
-                    targetInv.setStack(i, targetStack);
-                    stack.decrement(toTransfer);
-                    if (stack.isEmpty()) return ItemStack.EMPTY;
-                }
-            }
-        }
-
-        for (int i = 0; i < targetInv.size(); i++) {
-            if (targetInv.getStack(i).isEmpty()) {
-                targetInv.setStack(i, stack.copy());
-                return ItemStack.EMPTY;
-            }
-        }
-
-        return stack;
-    }
-
-    private void placeBlocksUnderFeet() {
-        if (entity.getEntityWorld().isClient()) return;
-
-        BlockPos below = entity.getBlockPos().down();
-        if (!entity.getEntityWorld().getBlockState(below).isAir()) return;
-
-        Inventory inventory = entity.getInventory();
-        if (buildingBlockType == null) {
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-
-                var block = blockItem.getBlock();
-                String blockId = Registries.BLOCK.getId(block).toString();
-
-                if (!isOreBlock(blockId) && !isGravityBlock(block)) {
-                    buildingBlockType = blockId;
-                    break;
-                }
-            }
-            if (buildingBlockType == null) {
-                entity.handleMissingBuildingBlock();
-                return;
-            }
-        }
-
-        if (buildingBlockType != null) {
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-
-                String blockId = Registries.BLOCK.getId(blockItem.getBlock()).toString();
-                if (blockId.equals(buildingBlockType)) {
-                    BlockState state = blockItem.getBlock().getDefaultState();
-                    entity.getEntityWorld().setBlockState(below, state);
-                    entity.beginHandAnimation(isLeftHandActive(), below, null);
-                    alternateHand();
-                    stack.decrement(1);
-                    inventory.setStack(i, stack);
-                    return;
-                }
-            }
-            entity.handleMissingBuildingBlock();
-        }
     }
 
     private void scanForOres() {
@@ -768,51 +601,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         return false;
     }
 
-    /**
-     * Find the best enchanted tool for mining ores.
-     * Prefers Silk Touch over Fortune 3+.
-     */
-    private ItemStack findBestEnchantedTool(BlockState state) {
-        Inventory inventory = entity.getInventory();
-        var world = entity.getEntityWorld();
-        if (world == null) return ItemStack.EMPTY;
-
-        var registryManager = world.getRegistryManager();
-        var enchantmentRegistry = registryManager.getOrThrow(RegistryKeys.ENCHANTMENT);
-
-        // Get entries using identifier from registry key
-        var silkTouchEntry = enchantmentRegistry.getEntry(Enchantments.SILK_TOUCH.getValue());
-        var fortuneEntry = enchantmentRegistry.getEntry(Enchantments.FORTUNE.getValue());
-
-        ItemStack silkTouchTool = ItemStack.EMPTY;
-        ItemStack fortuneTool = ItemStack.EMPTY;
-        int bestFortuneLevel = 0;
-
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
-
-            // Check for Silk Touch (preferred)
-            if (silkTouchEntry.isPresent() && EnchantmentHelper.getLevel(silkTouchEntry.get(), stack) > 0) {
-                silkTouchTool = stack;
-            }
-
-            // Check for Fortune
-            if (fortuneEntry.isPresent()) {
-                int fortuneLevel = EnchantmentHelper.getLevel(fortuneEntry.get(), stack);
-                if (fortuneLevel >= 3 && fortuneLevel > bestFortuneLevel) {
-                    bestFortuneLevel = fortuneLevel;
-                    fortuneTool = stack;
-                }
-            }
-        }
-
-        // Prefer Silk Touch over Fortune
-        if (!silkTouchTool.isEmpty()) return silkTouchTool;
-        if (!fortuneTool.isEmpty()) return fortuneTool;
-        return ItemStack.EMPTY;
-    }
-
     private BlockPos getNextBranchMiningTarget() {
         if (currentBranch == -1) {
             BlockPos primaryStart = startPos.offset(direction, 1);
@@ -895,187 +683,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
         return true;
     }
 
-    private boolean isOreBlock(String blockId) {
-        return blockId.contains("_ore") || blockId.contains("ancient_debris") ||
-               blockId.equals("minecraft:gilded_blackstone");
-    }
-
-    private boolean isChestBlock(String blockId) {
-        return blockId.contains("chest") || blockId.contains("barrel") ||
-               blockId.contains("shulker_box");
-    }
-
-    private boolean isGravityBlock(net.minecraft.block.Block block) {
-        return block instanceof FallingBlock;
-    }
-
-    private String getBlockIdFromStack(ItemStack stack) {
-        if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) {
-            return null;
-        }
-        return Registries.BLOCK.getId(blockItem.getBlock()).toString();
-    }
-
-    /**
-     * Mine a block with a specific hand. Each hand mines independently at 4x player time.
-     * @param pos The block position to mine
-     * @param isLeftHand True for left hand, false for right hand
-     */
-    private void mineBlockWithHand(BlockPos pos, boolean isLeftHand) {
-        if (entity.getEntityWorld().isClient()) return;
-
-        BlockState state = entity.getEntityWorld().getBlockState(pos);
-        if (state.isAir()) {
-            pendingOres.remove(pos);
-            if (isLeftHand) {
-                leftTarget = null;
-                leftBreakProgress = 0;
-            } else {
-                rightTarget = null;
-                rightBreakProgress = 0;
-            }
-            return;
-        }
-
-        // Use unique entity ID for break overlay (offset for right hand)
-        int breakId = isLeftHand ? entity.getId() : entity.getId() + 1000;
-
-        // Find tool for this hand (uses different tools for each hand)
-        ItemStack tool = isLeftHand ? leftTool : rightTool;
-        if (tool.isEmpty() || !tool.isSuitableFor(state)) {
-            // Find appropriate tool for this hand
-            ItemStack[] tools = findTwoTools(state);
-            if (isLeftHand) {
-                leftTool = tools[0];
-                tool = leftTool;
-            } else {
-                rightTool = tools[1];
-                tool = rightTool;
-            }
-        }
-
-        float breakSpeed = tool.isEmpty() ? 1.0f : tool.getMiningSpeedMultiplier(state);
-        // 4x player time = 0.25f multiplier (each hand is 4x slower, but together they equal 2x)
-        breakSpeed *= 0.25f;
-
-        float hardness = state.getHardness(entity.getEntityWorld(), pos);
-        if (hardness < 0) {
-            if (isLeftHand) {
-                leftTarget = null;
-                leftBreakProgress = 0;
-            } else {
-                rightTarget = null;
-                rightBreakProgress = 0;
-            }
-            return;
-        }
-
-        int requiredTicks = (int) Math.ceil((hardness * 30.0f) / breakSpeed);
-        requiredTicks = Math.max(1, requiredTicks);
-
-        // Increment progress for this hand
-        int breakProgress;
-        int swingTick;
-        if (isLeftHand) {
-            leftBreakProgress++;
-            leftSwingTick++;
-            breakProgress = leftBreakProgress;
-            swingTick = leftSwingTick;
-        } else {
-            rightBreakProgress++;
-            rightSwingTick++;
-            breakProgress = rightBreakProgress;
-            swingTick = rightSwingTick;
-        }
-
-        // Set the mining tool for display on this hand
-        if (isLeftHand) {
-            entity.setLeftMiningTool(tool);
-        } else {
-            entity.setRightMiningTool(tool);
-        }
-
-        // Update breaking overlay (stages 0-9)
-        if (entity.getEntityWorld() instanceof ServerWorld sw) {
-            int breakStage = (int) ((float) breakProgress / requiredTicks * 10.0f);
-            breakStage = Math.min(9, Math.max(0, breakStage));
-            sw.setBlockBreakingInfo(breakId, pos, breakStage);
-        }
-
-        // Trigger arm swing animation - each hand points at its own target
-        if (swingTick >= MINING_SWING_INTERVAL) {
-            if (isLeftHand) {
-                leftSwingTick = 0;
-            } else {
-                rightSwingTick = 0;
-            }
-            entity.beginHandAnimation(isLeftHand, pos, null);
-
-            // Spawn small block particles during mining
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
-                sw.spawnParticles(particleEffect,
-                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                    3, 0.2, 0.2, 0.2, 0.05);
-            }
-        }
-
-        if (breakProgress >= requiredTicks) {
-            String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
-            boolean isOre = isOreBlock(blockId);
-
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, pos,
-                    entity.getEntityWorld().getBlockEntity(pos), entity, tool);
-
-                for (ItemStack drop : drops) {
-                    addToInventory(drop);
-                }
-            }
-
-            entity.getEntityWorld().breakBlock(pos, false);
-
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                // Clear breaking overlay
-                sw.setBlockBreakingInfo(breakId, pos, -1);
-
-                // Spawn burst of block-specific particles
-                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
-                sw.spawnParticles(particleEffect,
-                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                    30, 0.4, 0.4, 0.4, 0.15);
-            }
-
-            if (!tool.isEmpty() && tool.isDamageable()) {
-                tool.damage(1, entity, EquipmentSlot.MAINHAND);
-                Inventory inventory = entity.getInventory();
-                for (int i = 0; i < inventory.size(); i++) {
-                    if (inventory.getStack(i) == tool) {
-                        inventory.setStack(i, tool);
-                        break;
-                    }
-                }
-            }
-
-            pendingOres.remove(pos);
-            if (isLeftHand) {
-                leftTarget = null;
-                leftBreakProgress = 0;
-                leftSwingTick = 0;
-                leftTool = ItemStack.EMPTY;
-            } else {
-                rightTarget = null;
-                rightBreakProgress = 0;
-                rightSwingTick = 0;
-                rightTool = ItemStack.EMPTY;
-            }
-
-            if (isOre) {
-                mineOreSurroundings(pos);
-            }
-        }
-    }
-
     private void mineOreSurroundings(BlockPos center) {
         for (Direction dir : Direction.values()) {
             BlockPos adjacent = center.offset(dir);
@@ -1086,100 +693,6 @@ public class MiningBuildStrategy extends AbstractBuildStrategy {
                     pendingOres.add(adjacent);
                 }
             }
-        }
-    }
-
-    private ItemStack findBestTool(BlockState state) {
-        ItemStack bestTool = ItemStack.EMPTY;
-        float bestSpeed = 1.0f;
-
-        Inventory inventory = entity.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
-
-            float speed = stack.getMiningSpeedMultiplier(state);
-            if (speed > bestSpeed) {
-                bestSpeed = speed;
-                bestTool = stack;
-            }
-        }
-
-        return bestTool;
-    }
-
-    /**
-     * Find two different tools for dual-hand mining.
-     * Returns [leftTool, rightTool] - tries to use different tool stacks for each hand.
-     */
-    private ItemStack[] findTwoTools(BlockState state) {
-        ItemStack firstTool = ItemStack.EMPTY;
-        ItemStack secondTool = ItemStack.EMPTY;
-        float firstSpeed = 1.0f;
-        float secondSpeed = 1.0f;
-        int firstSlot = -1;
-
-        Inventory inventory = entity.getInventory();
-
-        // First pass: find the best tool
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
-
-            float speed = stack.getMiningSpeedMultiplier(state);
-            if (speed > firstSpeed) {
-                firstSpeed = speed;
-                firstTool = stack;
-                firstSlot = i;
-            }
-        }
-
-        // Second pass: find a different tool (different stack) for the other hand
-        for (int i = 0; i < inventory.size(); i++) {
-            if (i == firstSlot) continue; // Skip the first tool's slot
-
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
-
-            float speed = stack.getMiningSpeedMultiplier(state);
-            if (speed > secondSpeed) {
-                secondSpeed = speed;
-                secondTool = stack;
-            }
-        }
-
-        return new ItemStack[] { firstTool, secondTool };
-    }
-
-    private void addToInventory(ItemStack stack) {
-        if (stack.isEmpty()) return;
-
-        Inventory inventory = entity.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack slot = inventory.getStack(i);
-            if (slot.isEmpty()) continue;
-
-            if (ItemStack.areItemsAndComponentsEqual(stack, slot)) {
-                int space = slot.getMaxCount() - slot.getCount();
-                if (space > 0) {
-                    int toAdd = Math.min(space, stack.getCount());
-                    slot.setCount(slot.getCount() + toAdd);
-                    inventory.setStack(i, slot);
-                    stack.decrement(toAdd);
-                    if (stack.isEmpty()) return;
-                }
-            }
-        }
-
-        for (int i = 0; i < inventory.size(); i++) {
-            if (inventory.getStack(i).isEmpty()) {
-                inventory.setStack(i, stack.copy());
-                return;
-            }
-        }
-
-        if (entity.getEntityWorld() instanceof ServerWorld sw) {
-            entity.dropStack(sw, stack);
         }
     }
 }

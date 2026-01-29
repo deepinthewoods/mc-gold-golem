@@ -6,6 +6,8 @@ import net.minecraft.block.Blocks;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.World;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 
@@ -14,6 +16,8 @@ import java.util.*;
  * Starts from a seed position and expands outward, stopping at boundaries (air/gold/ground).
  */
 public final class TreeWFCBuilder {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TreeWFCBuilder.class);
+
     private final TreeTileCache tileCache;
     private final World world;
     private final Set<Block> stopBlocks; // blocks that act as boundaries
@@ -22,8 +26,10 @@ public final class TreeWFCBuilder {
     // Wave function: for each position, track possible tile IDs
     private final Map<BlockPos, Set<String>> waveFunction;
 
-    // Frontier: positions where we could place next
-    private final Set<BlockPos> frontier;
+    // E5: Priority queue for entropy search - positions with lowest entropy at front
+    // Using a Set for O(1) contains checks, and rebuilding priority when needed
+    private final Set<BlockPos> frontierSet;
+    private final PriorityQueue<BlockPos> frontierQueue;
 
     // Already collapsed/placed positions
     private final Map<BlockPos, String> collapsed;
@@ -38,7 +44,12 @@ public final class TreeWFCBuilder {
         this.random = random;
 
         this.waveFunction = new HashMap<>();
-        this.frontier = new HashSet<>();
+        this.frontierSet = new HashSet<>();
+        // E5: Priority queue comparator - lower entropy (fewer possible tiles) = higher priority
+        this.frontierQueue = new PriorityQueue<>(Comparator.comparingInt(pos -> {
+            Set<String> tiles = waveFunction.get(pos);
+            return tiles != null ? tiles.size() : Integer.MAX_VALUE;
+        }));
         this.collapsed = new HashMap<>();
         this.buildQueue = new ArrayDeque<>();
 
@@ -53,49 +64,96 @@ public final class TreeWFCBuilder {
         // Start position can have any tile
         Set<String> allTiles = new HashSet<>(tileCache.getAllTileIds());
         waveFunction.put(startPos, allTiles);
-        frontier.add(startPos);
+        addToFrontier(startPos);
+    }
+
+    /**
+     * E5: Add a position to the frontier (both set and priority queue).
+     */
+    private void addToFrontier(BlockPos pos) {
+        if (frontierSet.add(pos)) {
+            frontierQueue.add(pos);
+        }
+    }
+
+    /**
+     * E5: Remove a position from the frontier.
+     */
+    private void removeFromFrontier(BlockPos pos) {
+        if (frontierSet.remove(pos)) {
+            frontierQueue.remove(pos);
+        }
+    }
+
+    /**
+     * E5: Update frontier priority for a position (when its entropy changes).
+     */
+    private void updateFrontierPriority(BlockPos pos) {
+        if (frontierSet.contains(pos)) {
+            frontierQueue.remove(pos);
+            frontierQueue.add(pos);
+        }
     }
 
     /**
      * Performs one step of the WFC algorithm.
      * Returns true if there's more work to do, false if finished or failed.
+     * E3: Fixed ConcurrentModificationException by collecting positions to remove first.
+     * E5: Uses priority queue for O(log n) entropy search instead of O(n) linear scan.
      */
     public boolean step() {
-        if (frontier.isEmpty()) {
+        if (frontierSet.isEmpty()) {
             return false; // Done
         }
 
-        // Find position with lowest entropy (fewest possible tiles)
+        // E3: Collect positions to remove first (those with no valid tiles)
+        List<BlockPos> toRemove = new ArrayList<>();
         BlockPos minEntropyPos = null;
-        int minEntropy = Integer.MAX_VALUE;
 
-        for (BlockPos pos : frontier) {
-            Set<String> possibleTiles = waveFunction.get(pos);
+        // E5: Use priority queue to find minimum entropy position
+        // First, clean up any invalid positions from the queue
+        while (!frontierQueue.isEmpty()) {
+            BlockPos candidate = frontierQueue.peek();
+
+            // Check if still in frontier set (may have been removed)
+            if (!frontierSet.contains(candidate)) {
+                frontierQueue.poll();
+                continue;
+            }
+
+            Set<String> possibleTiles = waveFunction.get(candidate);
             if (possibleTiles == null || possibleTiles.isEmpty()) {
-                // Contradiction - this position has no valid tiles
-                frontier.remove(pos);
-                return frontier.size() > 0;
+                // Contradiction - this position has no valid tiles, mark for removal
+                frontierQueue.poll();
+                toRemove.add(candidate);
+                continue;
             }
 
-            int entropy = possibleTiles.size();
-            if (entropy < minEntropy) {
-                minEntropy = entropy;
-                minEntropyPos = pos;
-            }
+            // This is our minimum entropy position
+            minEntropyPos = frontierQueue.poll();
+            break;
+        }
+
+        // E3: Remove invalid positions after iteration
+        for (BlockPos pos : toRemove) {
+            frontierSet.remove(pos);
         }
 
         if (minEntropyPos == null) {
-            return false; // Done
+            return !frontierSet.isEmpty(); // May have more work if queue was just out of sync
         }
+
+        // Remove from frontier set
+        frontierSet.remove(minEntropyPos);
 
         // Collapse this position
         collapse(minEntropyPos);
 
-        // Remove from frontier
-        frontier.remove(minEntropyPos);
+        // E2: Propagate constraints using iterative arc consistency
+        String chosenTile = collapsed.get(minEntropyPos);
+        propagate(minEntropyPos, chosenTile);
 
-        // Propagate constraints and expand frontier
-        propagate(minEntropyPos);
+        // Expand frontier
         expandFrontier(minEntropyPos);
 
         return true;
@@ -123,41 +181,85 @@ public final class TreeWFCBuilder {
     }
 
     /**
-     * Propagates constraints from a collapsed position to its neighbors.
+     * E2: Propagates constraints from a collapsed position using iterative arc consistency.
+     * Uses a worklist algorithm to propagate changes until no more constraints can be applied.
      */
-    private void propagate(BlockPos pos) {
-        String tileId = collapsed.get(pos);
-        if (tileId == null) return;
+    private void propagate(BlockPos collapsedPos, String chosenTile) {
+        if (chosenTile == null) return;
 
-        // Check each neighbor
-        for (Direction dir : Direction.values()) {
-            BlockPos neighborPos = pos.offset(dir);
+        // E2: Use a worklist for iterative arc consistency
+        Queue<BlockPos> worklist = new LinkedList<>();
+        worklist.add(collapsedPos);
 
-            // Skip if already collapsed
-            if (collapsed.containsKey(neighborPos)) continue;
+        // Track which positions we've already processed in this propagation wave
+        // to avoid redundant processing
+        Set<BlockPos> inWorklist = new HashSet<>();
+        inWorklist.add(collapsedPos);
 
-            // Skip if it's a stop block
-            if (isStopBlock(neighborPos)) continue;
+        while (!worklist.isEmpty()) {
+            BlockPos current = worklist.poll();
+            inWorklist.remove(current);
 
-            // Get valid tiles for this neighbor based on adjacency constraints
-            Set<String> validNeighbors = tileCache.getValidNeighbors(tileId, dir);
-
-            if (validNeighbors.isEmpty()) {
-                // No valid tiles in this direction - don't expand here
-                continue;
+            // Get the tile(s) at current position
+            String currentTile = collapsed.get(current);
+            Set<String> currentPossible = null;
+            if (currentTile == null) {
+                currentPossible = waveFunction.get(current);
+                if (currentPossible == null || currentPossible.isEmpty()) {
+                    continue;
+                }
             }
 
-            // Update wave function for neighbor
-            Set<String> currentPossible = waveFunction.get(neighborPos);
-            if (currentPossible == null) {
-                // First constraint for this position
-                waveFunction.put(neighborPos, new HashSet<>(validNeighbors));
-            } else {
-                // Intersect with existing constraints
-                currentPossible.retainAll(validNeighbors);
-                if (currentPossible.isEmpty()) {
-                    // Contradiction - remove from wave function
-                    waveFunction.remove(neighborPos);
+            // Check each neighbor
+            for (Direction dir : Direction.values()) {
+                BlockPos neighborPos = current.offset(dir);
+
+                // Skip if already collapsed
+                if (collapsed.containsKey(neighborPos)) continue;
+
+                // Skip if it's a stop block
+                if (isStopBlock(neighborPos)) continue;
+
+                // Compute valid neighbors based on current position's possibilities
+                Set<String> validNeighbors = new HashSet<>();
+                if (currentTile != null) {
+                    // Collapsed position - single tile
+                    validNeighbors.addAll(tileCache.getValidNeighbors(currentTile, dir));
+                } else {
+                    // Uncollapsed position - union of all possible tiles' neighbors
+                    for (String possibleTile : currentPossible) {
+                        validNeighbors.addAll(tileCache.getValidNeighbors(possibleTile, dir));
+                    }
+                }
+
+                if (validNeighbors.isEmpty()) {
+                    // No valid tiles in this direction - don't expand here
+                    continue;
+                }
+
+                // Update wave function for neighbor
+                Set<String> neighborPossible = waveFunction.get(neighborPos);
+                if (neighborPossible == null) {
+                    // First constraint for this position
+                    waveFunction.put(neighborPos, new HashSet<>(validNeighbors));
+                } else {
+                    int sizeBefore = neighborPossible.size();
+                    neighborPossible.retainAll(validNeighbors);
+
+                    if (neighborPossible.isEmpty()) {
+                        // Contradiction - remove from wave function and log warning
+                        waveFunction.remove(neighborPos);
+                        removeFromFrontier(neighborPos);
+                        LOGGER.debug("WFC contradiction at {} - no valid tiles remain", neighborPos);
+                    } else if (neighborPossible.size() < sizeBefore) {
+                        // Constraints changed - add to worklist to propagate further
+                        if (!inWorklist.contains(neighborPos)) {
+                            worklist.add(neighborPos);
+                            inWorklist.add(neighborPos);
+                        }
+                        // E5: Update priority since entropy changed
+                        updateFrontierPriority(neighborPos);
+                    }
                 }
             }
         }
@@ -165,13 +267,14 @@ public final class TreeWFCBuilder {
 
     /**
      * Expands the frontier by adding neighboring positions.
+     * E5: Uses the new addToFrontier method for priority queue management.
      */
     private void expandFrontier(BlockPos pos) {
         for (Direction dir : Direction.values()) {
             BlockPos neighborPos = pos.offset(dir);
 
             // Skip if already collapsed or in frontier
-            if (collapsed.containsKey(neighborPos) || frontier.contains(neighborPos)) {
+            if (collapsed.containsKey(neighborPos) || frontierSet.contains(neighborPos)) {
                 continue;
             }
 
@@ -183,7 +286,7 @@ public final class TreeWFCBuilder {
             // Add to frontier if it has valid tiles
             Set<String> possibleTiles = waveFunction.get(neighborPos);
             if (possibleTiles != null && !possibleTiles.isEmpty()) {
-                frontier.add(neighborPos);
+                addToFrontier(neighborPos);
             }
         }
     }
@@ -227,7 +330,7 @@ public final class TreeWFCBuilder {
      * Checks if the builder has finished (frontier is empty).
      */
     public boolean isFinished() {
-        return frontier.isEmpty();
+        return frontierSet.isEmpty();
     }
 
     /**

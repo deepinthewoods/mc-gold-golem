@@ -146,6 +146,8 @@ public class NetworkInit {
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     String id = payload.block().map(Identifier::toString).orElse("");
                     if (payload.row() == 0) {
+                        golem.setSurfaceGradientSlot(payload.slot(), id);
+                    } else if (payload.row() == 1) {
                         golem.setGradientSlot(payload.slot(), id);
                     } else {
                         golem.setStepGradientSlot(payload.slot(), id);
@@ -174,6 +176,9 @@ public class NetworkInit {
                 var e = world.getEntityById(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     if (payload.row() == 0) {
+                        golem.setSurfaceGradientWindow(payload.window());
+                        golem.setGradientNoiseScaleSurface(payload.scale());
+                    } else if (payload.row() == 1) {
                         golem.setGradientWindow(payload.window());
                         golem.setGradientNoiseScaleMain(payload.scale());
                     } else {
@@ -351,10 +356,13 @@ public class NetworkInit {
                 golem.getPathWidth(),
                 golem.getGradientNoiseScaleMain(),
                 golem.getGradientNoiseScaleStep(),
+                golem.getGradientNoiseScaleSurface(),
                 golem.getGradientWindow(),
                 golem.getStepGradientWindow(),
+                golem.getSurfaceGradientWindow(),
                 java.util.Arrays.asList(golem.getGradientCopy()),
-                java.util.Arrays.asList(golem.getStepGradientCopy())
+                java.util.Arrays.asList(golem.getStepGradientCopy()),
+                java.util.Arrays.asList(golem.getSurfaceGradientCopy())
         );
         ServerPlayNetworking.send(player, payload);
     }

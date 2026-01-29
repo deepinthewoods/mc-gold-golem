@@ -11,6 +11,12 @@ import net.minecraft.util.Identifier;
  * targetMode: 0 = Mining, 1 = Excavation
  */
 public record SetOreMiningModeC2SPayload(int entityId, int targetMode, int oreMiningModeOrdinal) implements CustomPayload {
+
+    public SetOreMiningModeC2SPayload {
+        targetMode = PayloadValidator.clampInt(targetMode, 0, 1, "targetMode");
+        oreMiningModeOrdinal = PayloadValidator.clampInt(oreMiningModeOrdinal, 0, 2, "oreMiningModeOrdinal");
+    }
+
     public static final Id<SetOreMiningModeC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_ore_mining_mode"));
     public static final PacketCodec<RegistryByteBuf, SetOreMiningModeC2SPayload> CODEC = PacketCodec.tuple(
             PacketCodecs.VAR_INT, SetOreMiningModeC2SPayload::entityId,

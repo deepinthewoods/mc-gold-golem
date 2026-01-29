@@ -7,6 +7,11 @@ import net.minecraft.network.packet.CustomPayload;
 import net.minecraft.util.Identifier;
 
 public record SetExcavationDepthC2SPayload(int entityId, int depth) implements CustomPayload {
+
+    public SetExcavationDepthC2SPayload {
+        depth = PayloadValidator.clampInt(depth, 1, 64, "depth");
+    }
+
     public static final Id<SetExcavationDepthC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_excavation_depth"));
     public static final PacketCodec<RegistryByteBuf, SetExcavationDepthC2SPayload> CODEC = PacketCodec.tuple(
             PacketCodecs.VAR_INT, SetExcavationDepthC2SPayload::entityId,
