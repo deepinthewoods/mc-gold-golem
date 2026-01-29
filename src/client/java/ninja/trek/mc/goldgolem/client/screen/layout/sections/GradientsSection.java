@@ -7,6 +7,7 @@ import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen;
+import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.client.screen.layout.AbstractGuiSection;
 import ninja.trek.mc.goldgolem.client.screen.layout.LayoutContext;
 import ninja.trek.mc.goldgolem.client.screen.layout.WidgetAdder;
@@ -103,16 +104,23 @@ public class GradientsSection extends AbstractGuiSection {
                 context.fill(fx, slotY, fx + 16, slotY + 16, INNER_COLOR);
             }
 
-            // Draw block items
+            // Draw block items (or tool icon for mine slots)
             for (int col = 0; col < SLOTS_PER_ROW; col++) {
                 String blockId = gradientBlocks[row][col];
                 if (blockId != null && !blockId.isEmpty()) {
-                    Identifier ident = Identifier.tryParse(blockId);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + col * SLOT_SIZE, slotY);
+                    if (GradientSlotUtil.isMineAction(blockId)) {
+                        var toolItem = GradientSlotUtil.getToolItem(blockId);
+                        if (toolItem != null) {
+                            context.drawItem(new ItemStack(toolItem), slotsX + col * SLOT_SIZE, slotY);
+                        }
+                    } else {
+                        Identifier ident = Identifier.tryParse(blockId);
+                        if (ident != null) {
+                            var block = Registries.BLOCK.get(ident);
+                            if (block != null) {
+                                ItemStack stack = new ItemStack(block.asItem());
+                                context.drawItem(stack, slotsX + col * SLOT_SIZE, slotY);
+                            }
                         }
                     }
                 }

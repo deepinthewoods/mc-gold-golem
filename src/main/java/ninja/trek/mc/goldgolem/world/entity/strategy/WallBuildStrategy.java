@@ -49,6 +49,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private PlacementPlanner planner = null;
     private boolean moduleBlocksLoaded = false;
 
+    // Gradient mining helper for mine-action slots
+    private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
+
     @Override
     public BuildMode getMode() {
         return BuildMode.WALL;
@@ -407,6 +410,15 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 moduleBlocksLoaded = true;
             }
 
+            // Tick gradient mining if active
+            if (gradientMiner.isMining()) {
+                boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
+                if (done) {
+                    gradientMiner.reset(golem);
+                }
+                return;
+            }
+
             // Tick with 2-tick pacing
             if (!shouldPlaceThisTick()) {
                 return;
@@ -516,6 +528,11 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
      */
     private boolean placeWallBlockAt(GoldGolemEntity golem, BlockPos pos, BlockPos nextPos) {
         if (currentModulePlacement == null) return false;
+        // Check for mine action
+        if (currentModulePlacement.isMinePosition(pos)) {
+            gradientMiner.startMining(pos);
+            return false; // will mine over subsequent ticks
+        }
         return currentModulePlacement.placeBlockAt(golem, this, pos, nextPos);
     }
 

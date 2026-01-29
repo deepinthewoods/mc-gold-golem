@@ -21,6 +21,7 @@ import ninja.trek.mc.goldgolem.tree.TreeTileExtractor;
 import ninja.trek.mc.goldgolem.tree.TreeWFCBuilder;
 import ninja.trek.mc.goldgolem.tree.TilingPreset;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
+import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +68,11 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     // Current tile being placed
     private BlockPos currentTileOrigin = null;
     private Map<BlockPos, BlockState> currentTileBlocks = new HashMap<>();
+    // Positions where gradient sampled a mine action
+    private Set<BlockPos> minePositions = new HashSet<>();
+
+    // Gradient mining helper for mine-action slots
+    private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
 
     @Override
     public BuildMode getMode() {
@@ -401,9 +407,15 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Load tile blocks into planner if needed
-        if (currentTileOrigin != null && !tileBlocksLoaded && !currentTileBlocks.isEmpty()) {
+        if (currentTileOrigin != null && !tileBlocksLoaded && (!currentTileBlocks.isEmpty() || !minePositions.isEmpty())) {
+            // Combine placement and mine positions
+            List<BlockPos> allPositions = new ArrayList<>(currentTileBlocks.keySet());
+            allPositions.addAll(minePositions);
             // Use block checker to skip already-correct blocks
-            planner.setBlocks(new ArrayList<>(currentTileBlocks.keySet()), pos -> {
+            planner.setBlocks(allPositions, pos -> {
+                if (minePositions.contains(pos)) {
+                    return golem.getEntityWorld().getBlockState(pos).isAir(); // already mined
+                }
                 BlockState expected = currentTileBlocks.get(pos);
                 if (expected == null) return true; // Skip if no expected state
                 BlockState current = golem.getEntityWorld().getBlockState(pos);
@@ -421,6 +433,15 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Tick with 2-tick pacing
+        // Tick gradient mining if active
+        if (gradientMiner.isMining()) {
+            boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
+            if (done) {
+                gradientMiner.reset(golem);
+            }
+            return;
+        }
+
         if (!shouldPlaceThisTick()) {
             return;
         }
@@ -459,6 +480,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
      */
     private void loadTileBlocks(GoldGolemEntity golem, BlockPos tileOriginPos) {
         currentTileBlocks.clear();
+        minePositions.clear();
 
         if (treeWFCBuilder == null) return;
 
@@ -482,6 +504,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                     // Don't overwrite existing non-air blocks
                     if (!golem.getEntityWorld().getBlockState(placePos).isAir()) continue;
 
+                    // Check if gradient maps to a mine action
+                    if (isTreeGradientMineAction(golem, targetState, placePos)) {
+                        minePositions.add(placePos);
+                        continue;
+                    }
+
                     // Sample from gradient for this block type
                     BlockState finalState = sampleTreeGradient(golem, targetState, placePos);
                     // If null, gradient slot was empty - skip this block
@@ -498,6 +526,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
      * @return true if the block was placed successfully
      */
     private boolean placeTreeBlock(GoldGolemEntity golem, BlockPos pos, BlockPos nextPos) {
+        // Check for mine action
+        if (minePositions.contains(pos)) {
+            minePositions.remove(pos);
+            gradientMiner.startMining(pos);
+            return false; // will mine over subsequent ticks
+        }
         BlockState stateToPlace = currentTileBlocks.get(pos);
         if (stateToPlace == null) return false;
 
@@ -567,10 +601,42 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             return null;
         }
 
+        // Mine actions are handled by isTreeGradientMineAction, not here
+        if (GradientSlotUtil.isMineAction(sampledBlockId)) return null;
+
         Identifier id = Identifier.tryParse(sampledBlockId);
         if (id == null) return null;
         net.minecraft.block.Block sampledBlock = Registries.BLOCK.get(id);
         return sampledBlock.getDefaultState();
+    }
+
+    /**
+     * Check if the gradient for a tree block maps to a mine action.
+     * Uses the same sampling logic as sampleTreeGradient but only checks the result.
+     */
+    private boolean isTreeGradientMineAction(GoldGolemEntity golem, BlockState originalState, BlockPos pos) {
+        String blockId = Registries.BLOCK.getId(originalState.getBlock()).toString();
+        Integer groupIdx = golem.getTreeBlockGroup().get(blockId);
+        if (groupIdx == null || groupIdx >= golem.getTreeGroupSlots().size()) return false;
+
+        String[] gradientSlots = golem.getTreeGroupSlots().get(groupIdx);
+        float window = golem.getTreeGroupWindows().get(groupIdx);
+        int noiseScale = (groupIdx < golem.getTreeGroupNoiseScales().size()) ? golem.getTreeGroupNoiseScales().get(groupIdx) : 1;
+
+        int lastNonEmpty = -1;
+        for (int i = gradientSlots.length - 1; i >= 0; i--) {
+            if (gradientSlots[i] != null && !gradientSlots[i].isEmpty()) { lastNonEmpty = i; break; }
+        }
+        if (lastNonEmpty < 0) return false;
+
+        int w = (int) Math.max(1, Math.round(window));
+        double u01 = golem.sampleGradientNoise01(pos, noiseScale);
+        int idx = (int) Math.floor(u01 * (double) w);
+        if (idx >= w) idx = w - 1;
+        if (idx > lastNonEmpty) idx = lastNonEmpty;
+
+        String sampledBlockId = gradientSlots[idx];
+        return sampledBlockId != null && GradientSlotUtil.isMineAction(sampledBlockId);
     }
 
     /**

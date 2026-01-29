@@ -5,13 +5,11 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
+import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Represents a wall module placement operation.
@@ -29,6 +27,8 @@ public class ModulePlacement {
 
     // Cached block positions and states for PlacementPlanner integration
     protected Map<BlockPos, BlockState> blockStatesMap = null;
+    // Positions where gradient sampled a mine action (instead of placing a block)
+    protected Set<BlockPos> minePositions = new HashSet<>();
     protected int moduleMinY = 0;
     protected int moduleHeight = 1;
 
@@ -142,12 +142,18 @@ public class ModulePlacement {
                 if (sampledIndex >= 0 && sampledIndex < 9) {
                     String sampledId = slots[sampledIndex];
                     if (sampledId != null && !sampledId.isEmpty()) {
-                        BlockState sampledState = golem.getBlockStateFromId(sampledId);
-                        if (sampledState != null) {
-                            stateToPlace = sampledState;
-                        } else {
-                            // Sampled slot is empty - skip this block entirely
+                        if (GradientSlotUtil.isMineAction(sampledId)) {
+                            // Mine action - record for mining instead of placing
+                            minePositions.add(new BlockPos(wx, wy, wz));
                             skipBlock = true;
+                        } else {
+                            BlockState sampledState = golem.getBlockStateFromId(sampledId);
+                            if (sampledState != null) {
+                                stateToPlace = sampledState;
+                            } else {
+                                // Sampled slot is empty - skip this block entirely
+                                skipBlock = true;
+                            }
                         }
                     } else {
                         // Sampled slot is empty - skip this block entirely
@@ -170,10 +176,19 @@ public class ModulePlacement {
      * Used by PlacementPlanner to determine what blocks need to be placed.
      */
     public List<BlockPos> getRemainingBlockPositions(GoldGolemEntity golem, WallBuildStrategy strategy) {
-        if (blockStatesMap == null) {
-            return List.of();
+        List<BlockPos> positions = new ArrayList<>();
+        if (blockStatesMap != null) {
+            positions.addAll(blockStatesMap.keySet());
         }
-        return new ArrayList<>(blockStatesMap.keySet());
+        positions.addAll(minePositions);
+        return positions;
+    }
+
+    /**
+     * Check if a position is marked for mining (not placing).
+     */
+    public boolean isMinePosition(BlockPos pos) {
+        return minePositions.contains(pos);
     }
 
     /**
@@ -181,6 +196,11 @@ public class ModulePlacement {
      * Used to skip blocks when resuming a build.
      */
     public boolean isBlockAlreadyCorrect(GoldGolemEntity golem, BlockPos pos) {
+        // Mine positions: "correct" if already air
+        if (minePositions.contains(pos)) {
+            return golem.getEntityWorld().getBlockState(pos).isAir();
+        }
+
         if (blockStatesMap == null) return true;
 
         BlockState expected = blockStatesMap.get(pos);

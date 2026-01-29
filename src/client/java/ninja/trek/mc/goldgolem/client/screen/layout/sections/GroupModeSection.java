@@ -9,6 +9,7 @@ import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.client.screen.GroupModeStrategy;
 import ninja.trek.mc.goldgolem.client.screen.layout.AbstractGuiSection;
 import ninja.trek.mc.goldgolem.client.screen.layout.LayoutContext;
+import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 
 import java.util.*;
 
@@ -155,17 +156,24 @@ public class GroupModeSection extends AbstractGuiSection {
             context.fill(slotX - 1, rowY - 1, slotX + 17, rowY + 17, borderColor);
             context.fill(slotX, rowY, slotX + 16, rowY + 16, innerColor);
 
-            // Draw block item if present
+            // Draw block item (or tool icon for mine slots)
             int slotIndex = groupIdx * SLOTS_PER_ROW + col;
             if (slotIndex >= 0 && slotIndex < flatSlots.size()) {
                 String blockId = flatSlots.get(slotIndex);
                 if (blockId != null && !blockId.isEmpty()) {
-                    Identifier ident = Identifier.tryParse(blockId);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotX, rowY);
+                    if (GradientSlotUtil.isMineAction(blockId)) {
+                        var toolItem = GradientSlotUtil.getToolItem(blockId);
+                        if (toolItem != null) {
+                            context.drawItem(new ItemStack(toolItem), slotX, rowY);
+                        }
+                    } else {
+                        Identifier ident = Identifier.tryParse(blockId);
+                        if (ident != null) {
+                            var block = Registries.BLOCK.get(ident);
+                            if (block != null) {
+                                ItemStack stack = new ItemStack(block.asItem());
+                                context.drawItem(stack, slotX, rowY);
+                            }
                         }
                     }
                 }

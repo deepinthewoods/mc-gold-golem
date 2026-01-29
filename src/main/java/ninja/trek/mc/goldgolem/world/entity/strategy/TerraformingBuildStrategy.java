@@ -10,6 +10,7 @@ import net.minecraft.storage.ReadView;
 import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
+import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 import java.util.*;
@@ -37,6 +38,11 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
 
     // Cache for block states (position -> state to place)
     private Map<BlockPos, BlockState> layerBlockStates = new HashMap<>();
+    // Positions where gradient sampled a mine action
+    private Set<BlockPos> minePositions = new HashSet<>();
+
+    // Gradient mining helper for mine-action slots
+    private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
 
     @Override
     public BuildMode getMode() {
@@ -457,21 +463,41 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         if (!layerLoaded) {
             // Pre-compute block states for this layer
             layerBlockStates.clear();
+            minePositions.clear();
             for (BlockPos pos : currentLayer) {
-                BlockState toPlace = sampleTerraformingGradient(golem, pos);
-                if (toPlace != null) {
-                    layerBlockStates.put(pos, toPlace);
+                if (isTerraformingGradientMineAction(golem, pos)) {
+                    minePositions.add(pos);
+                } else {
+                    BlockState toPlace = sampleTerraformingGradient(golem, pos);
+                    if (toPlace != null) {
+                        layerBlockStates.put(pos, toPlace);
+                    }
                 }
             }
 
+            // Combine placement and mine positions
+            List<BlockPos> allPositions = new ArrayList<>(layerBlockStates.keySet());
+            allPositions.addAll(minePositions);
             // Use block checker to skip already-correct blocks
-            planner.setBlocks(new ArrayList<>(layerBlockStates.keySet()), pos -> {
+            planner.setBlocks(allPositions, pos -> {
+                if (minePositions.contains(pos)) {
+                    return golem.getEntityWorld().getBlockState(pos).isAir();
+                }
                 BlockState expected = layerBlockStates.get(pos);
                 if (expected == null) return true; // Skip if no expected state
                 BlockState current = golem.getEntityWorld().getBlockState(pos);
                 return current.getBlock() == expected.getBlock();
             });
             layerLoaded = true;
+        }
+
+        // Tick gradient mining if active
+        if (gradientMiner.isMining()) {
+            boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
+            if (done) {
+                gradientMiner.reset(golem);
+            }
+            return;
         }
 
         // Tick with 2-tick pacing
@@ -515,6 +541,12 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
      * @return true if the block was placed successfully
      */
     private boolean placeTerraformBlock(GoldGolemEntity golem, BlockPos pos, BlockPos nextPos) {
+        // Check for mine action
+        if (minePositions.contains(pos)) {
+            minePositions.remove(pos);
+            gradientMiner.startMining(pos);
+            return false; // will mine over subsequent ticks
+        }
         BlockState toPlace = layerBlockStates.get(pos);
         if (toPlace == null) return false;
 
@@ -633,6 +665,9 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         String blockId = gradientArray[idx];
         if (blockId == null || blockId.isEmpty()) return null;
 
+        // Mine actions handled separately
+        if (GradientSlotUtil.isMineAction(blockId)) return null;
+
         var ident = net.minecraft.util.Identifier.tryParse(blockId);
         if (ident == null) return null;
 
@@ -640,5 +675,69 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         if (block == null) return null;
 
         return block.getDefaultState();
+    }
+
+    /**
+     * Check if a gradient array samples to a mine action at the given position.
+     */
+    private boolean isGradientArrayMineAction(String[] gradientArray, int window, int noiseScale, BlockPos pos) {
+        if (gradientArray == null || window <= 0) return false;
+        int g = 0;
+        for (int i = gradientArray.length - 1; i >= 0; i--) {
+            if (gradientArray[i] != null && !gradientArray[i].isEmpty()) { g = i + 1; break; }
+        }
+        if (g == 0) return false;
+        int w = Math.max(0, Math.min(g, window));
+        if (w == 0) return false;
+        GoldGolemEntity golem = this.entity;
+        double u01 = golem != null ? golem.sampleGradientNoise01(pos, noiseScale) : 0.0;
+        int idx = (int) Math.floor(u01 * (double) w);
+        if (idx >= w) idx = w - 1;
+        String blockId = gradientArray[idx];
+        return blockId != null && GradientSlotUtil.isMineAction(blockId);
+    }
+
+    /**
+     * Check if the terraforming gradient samples to a mine action at the given position.
+     */
+    private boolean isTerraformingGradientMineAction(GoldGolemEntity golem, BlockPos pos) {
+        int scanRadius = golem.getTerraformingScanRadius();
+        int vertical = 0, horizontal = 0;
+        for (BlockPos nearPos : BlockPos.iterate(
+                pos.add(-scanRadius, -scanRadius, -scanRadius),
+                pos.add(scanRadius, scanRadius, scanRadius))) {
+            if (nearPos.equals(pos)) continue;
+            boolean isShellOrSkeleton = false;
+            if (skeletonBlocks != null && skeletonBlocks.contains(nearPos)) {
+                isShellOrSkeleton = true;
+            } else {
+                int nearY = nearPos.getY();
+                if (shellByLayer.containsKey(nearY)) {
+                    List<BlockPos> layer = shellByLayer.get(nearY);
+                    if (layer != null && layer.contains(nearPos)) isShellOrSkeleton = true;
+                }
+            }
+            if (!isShellOrSkeleton) continue;
+            int dx = Math.abs(nearPos.getX() - pos.getX());
+            int dy = Math.abs(nearPos.getY() - pos.getY());
+            int dz = Math.abs(nearPos.getZ() - pos.getZ());
+            if (dy > dx && dy > dz) vertical++; else horizontal++;
+        }
+        float total = vertical + horizontal;
+        if (total == 0) {
+            return isGradientArrayMineAction(golem.getTerraformingGradientHorizontalCopy(),
+                    golem.getTerraformingGradientHorizontalWindow(), golem.getTerraformingGradientHorizontalScale(), pos);
+        }
+        float ratio = vertical / total;
+        if (ratio > 0.7f) {
+            return isGradientArrayMineAction(golem.getTerraformingGradientVerticalCopy(),
+                    golem.getTerraformingGradientVerticalWindow(), golem.getTerraformingGradientVerticalScale(), pos);
+        } else if (ratio < 0.3f) {
+            return isGradientArrayMineAction(golem.getTerraformingGradientHorizontalCopy(),
+                    golem.getTerraformingGradientHorizontalWindow(), golem.getTerraformingGradientHorizontalScale(), pos);
+        } else {
+            return isGradientArrayMineAction(golem.getTerraformingGradientSlopedCopy(),
+                    golem.getTerraformingGradientSlopedWindow(), golem.getTerraformingGradientSlopedScale(), pos);
+        }
     }
 }

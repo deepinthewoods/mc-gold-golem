@@ -1306,44 +1306,17 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             // Draw items for surface gradient (row 0)
             for (int i = 0; i < 9; i++) {
                 String id = (gradientSurfaceBlocks != null && i < gradientSurfaceBlocks.length) ? gradientSurfaceBlocks[i] : "";
-                if (id != null && !id.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(id);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + i * 18, slotY0);
-                        }
-                    }
-                }
+                drawGradientSlotItem(context, id, slotsX + i * 18, slotY0);
             }
             // Draw items for main gradient (row 1)
             for (int i = 0; i < 9; i++) {
                 String id = (gradientMainBlocks != null && i < gradientMainBlocks.length) ? gradientMainBlocks[i] : "";
-                if (id != null && !id.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(id);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + i * 18, slotY1);
-                        }
-                    }
-                }
+                drawGradientSlotItem(context, id, slotsX + i * 18, slotY1);
             }
             // Draw items for step gradient (row 2)
             for (int i = 0; i < 9; i++) {
                 String id = (gradientStepBlocks != null && i < gradientStepBlocks.length) ? gradientStepBlocks[i] : "";
-                if (id != null && !id.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(id);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + i * 18, slotY2);
-                        }
-                    }
-                }
+                drawGradientSlotItem(context, id, slotsX + i * 18, slotY2);
             }
             // Icons to the left (outside the window), aligned with each row
             ItemStack iconSurface = new ItemStack(net.minecraft.item.Items.SHORT_GRASS);
@@ -1376,46 +1349,19 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             // Draw items for vertical gradient
             for (int i = 0; i < 9; i++) {
                 String id = (terraformingGradientVertical != null && i < terraformingGradientVertical.length) ? terraformingGradientVertical[i] : "";
-                if (id != null && !id.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(id);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + i * 18, slotY0);
-                        }
-                    }
-                }
+                drawGradientSlotItem(context, id, slotsX + i * 18, slotY0);
             }
 
             // Draw items for horizontal gradient
             for (int i = 0; i < 9; i++) {
                 String id = (terraformingGradientHorizontal != null && i < terraformingGradientHorizontal.length) ? terraformingGradientHorizontal[i] : "";
-                if (id != null && !id.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(id);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + i * 18, slotY1);
-                        }
-                    }
-                }
+                drawGradientSlotItem(context, id, slotsX + i * 18, slotY1);
             }
 
             // Draw items for sloped gradient
             for (int i = 0; i < 9; i++) {
                 String id = (terraformingGradientSloped != null && i < terraformingGradientSloped.length) ? terraformingGradientSloped[i] : "";
-                if (id != null && !id.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(id);
-                    if (ident != null) {
-                        var block = Registries.BLOCK.get(ident);
-                        if (block != null) {
-                            ItemStack stack = new ItemStack(block.asItem());
-                            context.drawItem(stack, slotsX + i * 18, slotY2);
-                        }
-                    }
-                }
+                drawGradientSlotItem(context, id, slotsX + i * 18, slotY2);
             }
 
             // Draw labels to the left of each row
@@ -1432,10 +1378,38 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         var player = mc.player;
         if (player == null || player.currentScreenHandler == null) return java.util.Optional.empty();
         ItemStack cursor = player.currentScreenHandler.getCursorStack();
-        if (cursor.isEmpty() || !(cursor.getItem() instanceof BlockItem)) {
-            return java.util.Optional.empty();
+        if (cursor.isEmpty()) return java.util.Optional.empty();
+        if (cursor.getItem() instanceof BlockItem) {
+            return java.util.Optional.of(Registries.BLOCK.getId(((BlockItem) cursor.getItem()).getBlock()));
         }
-        return java.util.Optional.of(Registries.BLOCK.getId(((BlockItem) cursor.getItem()).getBlock()));
+        // Detect tools (pickaxe, shovel, axe) → mine action with tool ID encoded
+        Identifier toolItemId = Registries.ITEM.getId(cursor.getItem());
+        String toolIdStr = toolItemId.toString();
+        if (toolIdStr.contains("_pickaxe") || toolIdStr.contains("_shovel") || toolIdStr.contains("_axe")) {
+            return java.util.Optional.of(ninja.trek.mc.goldgolem.util.GradientSlotUtil.mineIdentifier(toolItemId));
+        }
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * Draw a gradient slot item. Handles mine-action slots (shows tool icon) and normal block slots.
+     */
+    private void drawGradientSlotItem(DrawContext context, String id, int x, int y) {
+        if (id == null || id.isEmpty()) return;
+        if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(id)) {
+            var toolItem = ninja.trek.mc.goldgolem.util.GradientSlotUtil.getToolItem(id);
+            if (toolItem != null) {
+                context.drawItem(new ItemStack(toolItem), x, y);
+            }
+        } else {
+            var ident = net.minecraft.util.Identifier.tryParse(id);
+            if (ident != null) {
+                var block = Registries.BLOCK.get(ident);
+                if (block != null) {
+                    context.drawItem(new ItemStack(block.asItem()), x, y);
+                }
+            }
+        }
     }
 
     /**

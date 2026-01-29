@@ -9,6 +9,7 @@ import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
+import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
     // Gradient group manager for tower blocks
     private final GradientGroupManager groups = new GradientGroupManager();
+
+    // Gradient mining helper for mine-action slots
+    private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
 
     // Tower building state
     private int currentLayerY = 0;           // Current Y layer being processed
@@ -229,6 +233,15 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             layerInitialized = true;
         }
 
+        // Tick gradient mining if active
+        if (gradientMiner.isMining()) {
+            boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
+            if (done) {
+                gradientMiner.reset(golem);
+            }
+            return;
+        }
+
         // Tick the planner with 2-tick pacing (same as before)
         if (!shouldPlaceThisTick()) {
             return;
@@ -325,6 +338,11 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         if (sampledIndex >= 0 && sampledIndex < 9) {
             String sampledId = slots[sampledIndex];
             if (sampledId != null && !sampledId.isEmpty()) {
+                // Check for mine action
+                if (GradientSlotUtil.isMineAction(sampledId)) {
+                    gradientMiner.startMining(pos);
+                    return false; // will mine over subsequent ticks
+                }
                 BlockState sampledState = golem.getBlockStateFromId(sampledId);
                 if (sampledState != null) {
                     // Pass both template state and sampled state for proper block state preservation

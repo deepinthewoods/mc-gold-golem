@@ -281,6 +281,25 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
     // ========== Main tick logic ==========
 
     private void tickPathMode(GoldGolemEntity golem, PlayerEntity owner) {
+        // Process pending path-mode mining
+        var pathMiner = golem.getPathGradientMiner();
+        if (pathMiner.isMining()) {
+            boolean done = pathMiner.tickMining(golem, leftHandActive);
+            if (done) {
+                pathMiner.reset(golem);
+            }
+            return; // busy mining
+        }
+        // Start next mine if queued
+        var pendingMines = golem.getPathPendingMines();
+        if (!pendingMines.isEmpty()) {
+            BlockPos mineTarget = pendingMines.pollFirst();
+            if (!golem.getEntityWorld().getBlockState(mineTarget).isAir()) {
+                pathMiner.startMining(mineTarget);
+                return;
+            }
+        }
+
         Vec3d trackStart = golem.getTrackStart();
         var pendingLines = golem.getPendingLines();
         LineSeg currentLine = golem.getCurrentLine();

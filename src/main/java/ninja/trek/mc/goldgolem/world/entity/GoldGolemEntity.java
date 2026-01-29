@@ -217,6 +217,10 @@ public class GoldGolemEntity extends PathAwareEntity {
     private Vec3d trackStart = null;
     private java.util.ArrayDeque<ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg> pendingLines = new java.util.ArrayDeque<>();
     private ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg currentLine = null;
+
+    // Path-mode pending mine queue and helper (for gradient mine actions in placeOffsetAt)
+    private final java.util.ArrayDeque<BlockPos> pathPendingMines = new java.util.ArrayDeque<>();
+    private final ninja.trek.mc.goldgolem.world.entity.strategy.GradientMiningHelper pathGradientMiner = new ninja.trek.mc.goldgolem.world.entity.strategy.GradientMiningHelper();
     private final LongOpenHashSet recentPlaced = new LongOpenHashSet(PLACED_RING_BUFFER_SIZE);
     private final long[] placedRing = new long[PLACED_RING_BUFFER_SIZE];
     private int placedHead = 0;
@@ -2774,6 +2778,13 @@ public class GoldGolemEntity extends PathAwareEntity {
     public ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg getCurrentLine() { return currentLine; }
     public void setCurrentLine(ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg line) { this.currentLine = line; }
 
+    /** Queue a position for mining during path mode. */
+    public void enqueuePathMine(BlockPos pos) { pathPendingMines.addLast(pos); }
+    /** Get the path-mode gradient mining helper. */
+    public ninja.trek.mc.goldgolem.world.entity.strategy.GradientMiningHelper getPathGradientMiner() { return pathGradientMiner; }
+    /** Get the path-mode pending mine queue. */
+    public java.util.ArrayDeque<BlockPos> getPathPendingMines() { return pathPendingMines; }
+
     /**
      * Record a block position as placed to prevent duplicate placements.
      * @return true if this is a new placement, false if already recorded
@@ -3223,6 +3234,23 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (gIdx < 0) return;
         String id = gradient[gIdx] == null ? "" : gradient[gIdx];
         if (id.isEmpty()) return;
+
+        // Check for mine action in main gradient
+        if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(id)) {
+            // Mine the surface block at this column
+            for (int dy = -1; dy <= 1; dy++) {
+                BlockPos rp = new BlockPos(bx, groundY + dy, bz);
+                var rs = world.getBlockState(rp);
+                if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
+                BlockPos ap = rp.up();
+                var as2 = world.getBlockState(ap);
+                if (as2.isFullCube(world, ap)) continue;
+                enqueuePathMine(rp);
+                break;
+            }
+            return; // don't process surface/step when main is mine
+        }
+
         var ident = net.minecraft.util.Identifier.tryParse(id);
         if (ident == null) return;
         var block = net.minecraft.registry.Registries.BLOCK.get(ident);
@@ -3276,26 +3304,38 @@ public class GoldGolemEntity extends PathAwareEntity {
                     if (sIdx >= 0) {
                         String sid = surfaceGradient[sIdx] == null ? "" : surfaceGradient[sIdx];
                         if (!sid.isEmpty()) {
-                            var sIdent = net.minecraft.util.Identifier.tryParse(sid);
-                            if (sIdent != null) {
-                                var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
-                                if (sBlock != null) {
-                                    long surfKey = abovePos.asLong();
-                                    if (recordPlaced(surfKey)) {
-                                        int invSlot3 = findItem(sBlock.asItem());
-                                        if (invSlot3 >= 0) {
-                                            if (!wouldBlockOverlapSelf(abovePos)) {
-                                                world.setBlockState(abovePos, sBlock.getDefaultState(), 3);
-                                                var st3 = inventory.getStack(invSlot3);
-                                                st3.decrement(1);
-                                                inventory.setStack(invSlot3, st3);
+                            // Surface gradient mine action: shovel special case → dirt path
+                            if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(sid)) {
+                                BlockPos surfaceBlock = new BlockPos(bx, topY, bz);
+                                BlockState surfState = world.getBlockState(surfaceBlock);
+                                if (surfState.isOf(net.minecraft.block.Blocks.GRASS_BLOCK) || surfState.isOf(net.minecraft.block.Blocks.DIRT)) {
+                                    world.setBlockState(surfaceBlock, net.minecraft.block.Blocks.DIRT_PATH.getDefaultState(), 3);
+                                } else {
+                                    // Not grass/dirt: queue for mining
+                                    enqueuePathMine(surfaceBlock);
+                                }
+                            } else {
+                                var sIdent = net.minecraft.util.Identifier.tryParse(sid);
+                                if (sIdent != null) {
+                                    var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
+                                    if (sBlock != null) {
+                                        long surfKey = abovePos.asLong();
+                                        if (recordPlaced(surfKey)) {
+                                            int invSlot3 = findItem(sBlock.asItem());
+                                            if (invSlot3 >= 0) {
+                                                if (!wouldBlockOverlapSelf(abovePos)) {
+                                                    world.setBlockState(abovePos, sBlock.getDefaultState(), 3);
+                                                    var st3 = inventory.getStack(invSlot3);
+                                                    st3.decrement(1);
+                                                    inventory.setStack(invSlot3, st3);
+                                                } else {
+                                                    unrecordPlaced(surfKey);
+                                                }
                                             } else {
                                                 unrecordPlaced(surfKey);
+                                                handleMissingBuildingBlock();
+                                                return;
                                             }
-                                        } else {
-                                            unrecordPlaced(surfKey);
-                                            handleMissingBuildingBlock();
-                                            return;
                                         }
                                     }
                                 }
@@ -3333,6 +3373,12 @@ public class GoldGolemEntity extends PathAwareEntity {
                     if (gIdxStep >= 0) {
                         String sid = stepGradient[gIdxStep] == null ? "" : stepGradient[gIdxStep];
                         if (!sid.isEmpty()) {
+                            // Step gradient mine action: mine the step position
+                            if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(sid)) {
+                                // Step is air, mine the block below it (ground)
+                                enqueuePathMine(new BlockPos(bx, groundY, bz));
+                                return;
+                            }
                             var sIdent = net.minecraft.util.Identifier.tryParse(sid);
                             if (sIdent != null) {
                                 var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
