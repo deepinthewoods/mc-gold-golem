@@ -16,6 +16,7 @@ public enum BuildMode {
     EXCAVATION,
     TERRAFORMING,
     TREE,
+    TUNNEL,
     GRADIENT       // Alias for PATH (gradient-based building)
     ;
 

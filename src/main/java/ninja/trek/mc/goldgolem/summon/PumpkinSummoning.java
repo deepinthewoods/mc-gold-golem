@@ -57,9 +57,10 @@ public class PumpkinSummoning {
             }
         }
 
-        // Check for Mining/Excavation Mode: check chest placement
+        // Check for Mining/Excavation/Tunnel Mode: check chest placement
         net.minecraft.util.math.Direction chestDirection1 = null;
         net.minecraft.util.math.Direction chestDirection2 = null;
+        net.minecraft.util.math.Direction chestDirection3 = null;
         int chestCount = 0;
         for (var dir : new net.minecraft.util.math.Direction[]{
                 net.minecraft.util.math.Direction.NORTH,
@@ -74,6 +75,7 @@ public class PumpkinSummoning {
             if (isStorageBlock) {
                 if (chestCount == 0) chestDirection1 = dir;
                 else if (chestCount == 1) chestDirection2 = dir;
+                else if (chestCount == 2) chestDirection3 = dir;
                 chestCount++;
             }
         }
@@ -83,7 +85,8 @@ public class PumpkinSummoning {
             if (chestCount > 0) {
                 sp.sendMessage(net.minecraft.text.Text.literal("[Debug] Found " + chestCount + " storage block(s) at: " +
                     (chestDirection1 != null ? chestDirection1.asString() : "none") +
-                    (chestDirection2 != null ? ", " + chestDirection2.asString() : "")), false);
+                    (chestDirection2 != null ? ", " + chestDirection2.asString() : "") +
+                    (chestDirection3 != null ? ", " + chestDirection3.asString() : "")), false);
             } else {
                 // Show what blocks are around the gold block
                 StringBuilder blockInfo = new StringBuilder("[Debug] No chests detected. Adjacent blocks: ");
@@ -101,22 +104,25 @@ public class PumpkinSummoning {
             }
         }
 
+        // Check if tunnel mode (3 chests on 3 sides, empty 4th side is tunnel direction)
+        boolean tunnelMode = (chestCount == 3);
+
         // Check if excavation mode (2 chests on adjacent/non-opposite sides)
         boolean excavationMode = false;
-        if (chestCount == 2) {
+        if (!tunnelMode && chestCount == 2) {
             // Check if directions are not opposite
             excavationMode = (chestDirection1 != chestDirection2.getOpposite());
         }
 
-        boolean miningMode = (chestCount == 1);
+        boolean miningMode = (!tunnelMode && chestCount == 1);
 
         // Check for Tower Mode: gold block below the pumpkin's gold block
         BlockPos belowBelow = below.down();
-        boolean towerMode = !miningMode && !excavationMode && world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
+        boolean towerMode = !tunnelMode && !miningMode && !excavationMode && world.getBlockState(belowBelow).isOf(Blocks.GOLD_BLOCK);
 
         // Check for Terraforming Mode: 3x3 layer of gold blocks
         boolean terraformingMode = false;
-        if (!towerMode && !miningMode && !excavationMode) {
+        if (!tunnelMode && !towerMode && !miningMode && !excavationMode) {
             // Check if this gold block is the center of a 3x3 horizontal gold platform
             boolean is3x3Gold = true;
             for (int dx = -1; dx <= 1 && is3x3Gold; dx++) {
@@ -133,7 +139,7 @@ public class PumpkinSummoning {
         // Check for Tree Mode: second gold block touching pumpkin's gold block
         boolean treeMode = false;
         BlockPos secondGoldPos = null;
-        if (!towerMode && !miningMode && !excavationMode && !terraformingMode) {
+        if (!tunnelMode && !towerMode && !miningMode && !excavationMode && !terraformingMode) {
             for (var dir : new net.minecraft.util.math.Direction[]{
                     net.minecraft.util.math.Direction.NORTH,
                     net.minecraft.util.math.Direction.SOUTH,
@@ -154,7 +160,7 @@ public class PumpkinSummoning {
         // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
         // Tower, mining, excavation, terraforming, and tree modes take precedence over wall mode
         boolean wallMode = false;
-        if (!towerMode && !miningMode && !excavationMode && !terraformingMode && !treeMode) {
+        if (!tunnelMode && !towerMode && !miningMode && !excavationMode && !terraformingMode && !treeMode) {
             for (var dir : new net.minecraft.util.math.Direction[]{
                     net.minecraft.util.math.Direction.NORTH,
                     net.minecraft.util.math.Direction.SOUTH,
@@ -168,7 +174,39 @@ public class PumpkinSummoning {
             }
         }
 
-        if (excavationMode) {
+        if (tunnelMode) {
+            // Tunnel Mode: 3 chests on 3 sides, dig in the direction of the empty side
+            // Find the empty direction (the one without a chest)
+            net.minecraft.util.math.Direction emptyDir = null;
+            for (var dir : new net.minecraft.util.math.Direction[]{
+                    net.minecraft.util.math.Direction.NORTH,
+                    net.minecraft.util.math.Direction.SOUTH,
+                    net.minecraft.util.math.Direction.EAST,
+                    net.minecraft.util.math.Direction.WEST
+            }) {
+                if (dir != chestDirection1 && dir != chestDirection2 && dir != chestDirection3) {
+                    emptyDir = dir;
+                    break;
+                }
+            }
+            if (emptyDir == null) emptyDir = net.minecraft.util.math.Direction.NORTH; // fallback
+
+            BlockPos chest1 = below.offset(chestDirection1);
+            BlockPos chest2 = below.offset(chestDirection2);
+            BlockPos chest3 = below.offset(chestDirection3);
+
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerWorld) world);
+            golem.refreshPositionAndAngles(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYaw(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(BuildMode.TUNNEL);
+            golem.setCustomName(Text.literal(GoldGolemEntity.getNextGolemName(BuildMode.TUNNEL)));
+            golem.setTunnelConfig(chest1, chest2, chest3, emptyDir, below);
+
+            world.breakBlock(below, false, player);
+            ((ServerWorld) world).spawnEntity(golem);
+            if (!player.isCreative()) stack.decrement(1);
+            return ActionResult.SUCCESS;
+        } else if (excavationMode) {
             // Excavation Mode: 2 chests on adjacent sides, excavate in opposite diagonal
             BlockPos chest1 = below.offset(chestDirection1);
             BlockPos chest2 = below.offset(chestDirection2);

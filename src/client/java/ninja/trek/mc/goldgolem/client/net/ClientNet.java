@@ -104,6 +104,16 @@ public final class ClientNet {
             });
         });
 
+        // === TUNNEL MODE ===
+        ClientPlayNetworking.registerGlobalReceiver(SyncTunnelS2CPayload.ID, (payload, context) -> {
+            var mc = MinecraftClient.getInstance();
+            mc.execute(() -> {
+                if (mc.currentScreen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                    screen.syncTunnelState(payload.width(), payload.height(), payload.oreMiningMode());
+                }
+            });
+        });
+
         // === TERRAFORMING MODE ===
         ClientPlayNetworking.registerGlobalReceiver(SyncTerraformingS2CPayload.ID, (payload, context) -> {
             var mc = MinecraftClient.getInstance();

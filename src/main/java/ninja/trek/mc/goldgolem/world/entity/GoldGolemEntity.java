@@ -1279,6 +1279,44 @@ public class GoldGolemEntity extends PathAwareEntity {
         return ninja.trek.mc.goldgolem.OreMiningMode.ALWAYS;
     }
 
+    // Tunnel mode configuration
+    public void setTunnelConfig(BlockPos c1, BlockPos c2, BlockPos c3, net.minecraft.util.math.Direction dir, BlockPos start) {
+        if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy)) {
+            setBuildMode(BuildMode.TUNNEL);
+            initializeStrategyForCurrentMode();
+        }
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy tunnelStrategy) {
+            tunnelStrategy.setConfig(c1, c2, c3, dir, start);
+        }
+    }
+    public void setTunnelWidth(int width) {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy tunnelStrategy) {
+            tunnelStrategy.setWidth(width);
+        }
+    }
+    public void setTunnelHeight(int height) {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy tunnelStrategy) {
+            tunnelStrategy.setHeight(height);
+        }
+    }
+    public int getTunnelWidth() {
+        return activeStrategy != null ? activeStrategy.getConfigInt("width", 3) : 3;
+    }
+    public int getTunnelHeight() {
+        return activeStrategy != null ? activeStrategy.getConfigInt("height", 3) : 3;
+    }
+    public ninja.trek.mc.goldgolem.OreMiningMode getTunnelOreMiningMode() {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy tunnelStrategy) {
+            return tunnelStrategy.getOreMiningMode();
+        }
+        return ninja.trek.mc.goldgolem.OreMiningMode.ALWAYS;
+    }
+    public void setTunnelOreMiningMode(ninja.trek.mc.goldgolem.OreMiningMode mode) {
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy tunnelStrategy) {
+            tunnelStrategy.setOreMiningMode(mode);
+        }
+    }
+
     // Ore Mining Mode helpers for Excavation strategy
     public void setExcavationOreMiningMode(ninja.trek.mc.goldgolem.OreMiningMode mode) {
         if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy excavationStrategy) {

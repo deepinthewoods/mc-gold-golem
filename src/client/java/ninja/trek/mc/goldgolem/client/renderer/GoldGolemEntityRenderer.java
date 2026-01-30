@@ -78,6 +78,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
             case EXCAVATION -> 4;       // 2-wheel config for excavation
             case TERRAFORMING -> 5;     // 1-wheel config (right side) for terraforming
             case TREE -> 0;             // Shares with PATH (4-wheel config for tree building)
+            case TUNNEL -> 4;           // Shares with EXCAVATION (2-wheel config for tunnel mining)
         };
         state.bodyYaw = entity.getBodyYaw();
         state.pitch = entity.getPitch();

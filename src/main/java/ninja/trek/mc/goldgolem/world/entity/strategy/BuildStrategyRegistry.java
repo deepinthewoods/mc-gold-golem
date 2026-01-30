@@ -20,6 +20,7 @@ public class BuildStrategyRegistry {
         register(BuildMode.EXCAVATION, ExcavationBuildStrategy::new);
         register(BuildMode.TERRAFORMING, TerraformingBuildStrategy::new);
         register(BuildMode.TREE, TreeBuildStrategy::new);
+        register(BuildMode.TUNNEL, TunnelBuildStrategy::new);
         register(BuildMode.GRADIENT, PathBuildStrategy::new); // GRADIENT is an alias for PATH
     }
 

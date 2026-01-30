@@ -13,7 +13,7 @@ import net.minecraft.util.Identifier;
 public record SetOreMiningModeC2SPayload(int entityId, int targetMode, int oreMiningModeOrdinal) implements CustomPayload {
 
     public SetOreMiningModeC2SPayload {
-        targetMode = PayloadValidator.clampInt(targetMode, 0, 1, "targetMode");
+        targetMode = PayloadValidator.clampInt(targetMode, 0, 2, "targetMode");
         oreMiningModeOrdinal = PayloadValidator.clampInt(oreMiningModeOrdinal, 0, 2, "oreMiningModeOrdinal");
     }
 

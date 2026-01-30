@@ -39,7 +39,12 @@ public class NetworkInit {
         // === MINING MODE PAYLOADS ===
         PayloadTypeRegistry.playS2C().register(SyncMiningS2CPayload.ID, SyncMiningS2CPayload.CODEC);
 
-        // === ORE MINING MODE PAYLOAD (shared by Mining and Excavation) ===
+        // === TUNNEL MODE PAYLOADS ===
+        PayloadTypeRegistry.playC2S().register(SetTunnelWidthC2SPayload.ID, SetTunnelWidthC2SPayload.CODEC);
+        PayloadTypeRegistry.playC2S().register(SetTunnelHeightC2SPayload.ID, SetTunnelHeightC2SPayload.CODEC);
+        PayloadTypeRegistry.playS2C().register(SyncTunnelS2CPayload.ID, SyncTunnelS2CPayload.CODEC);
+
+        // === ORE MINING MODE PAYLOAD (shared by Mining, Excavation, and Tunnel) ===
         PayloadTypeRegistry.playC2S().register(SetOreMiningModeC2SPayload.ID, SetOreMiningModeC2SPayload.CODEC);
 
         // === TERRAFORMING MODE PAYLOADS ===
@@ -214,6 +219,30 @@ public class NetworkInit {
             });
         });
 
+        // === TUNNEL MODE HANDLERS ===
+
+        ServerPlayNetworking.registerGlobalReceiver(SetTunnelWidthC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTunnelWidth(payload.width());
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetTunnelHeightC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var world = player.getEntityWorld();
+                var e = world.getEntityById(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                    golem.setTunnelHeight(payload.height());
+                }
+            });
+        });
+
         // === ORE MINING MODE HANDLER ===
         ServerPlayNetworking.registerGlobalReceiver(SetOreMiningModeC2SPayload.ID, (payload, context) -> {
             var player = context.player();
@@ -225,9 +254,12 @@ public class NetworkInit {
                     if (payload.targetMode() == 0) {
                         // Mining mode
                         golem.setMiningOreMiningMode(mode);
-                    } else {
+                    } else if (payload.targetMode() == 1) {
                         // Excavation mode
                         golem.setExcavationOreMiningMode(mode);
+                    } else {
+                        // Tunnel mode
+                        golem.setTunnelOreMiningMode(mode);
                     }
                 }
             });

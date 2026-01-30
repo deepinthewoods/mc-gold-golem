@@ -25,6 +25,7 @@ public final class GolemScreens {
         boolean terraformingMode = false;
         boolean treeMode = false;
         boolean towerMode = false;
+        boolean tunnelMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             BuildMode mode = g0.getBuildMode();
             if (mode == BuildMode.WALL || mode == BuildMode.TOWER) {
@@ -42,13 +43,16 @@ public final class GolemScreens {
             } else if (mode == BuildMode.TREE) {
                 treeMode = true;
                 sliderEnabled = false;
+            } else if (mode == BuildMode.TUNNEL) {
+                tunnelMode = true;
+                sliderEnabled = false;
             }
         }
 
         // Build dynamic UI spec
         int gradientRows = (terraformingMode || sliderEnabled) ? 3 : 2; // 3 rows for terraforming and path mode
         int golemSlots = golemInventory.size();
-        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : 0)))));
+        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : 0))))));
         String jsonName = "";
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             jsonName = g0.getCurrentJsonName();
@@ -116,6 +120,13 @@ public final class GolemScreens {
                                 golem.getActiveStrategy() != null ? golem.getActiveStrategy().getConfigInt("branchSpacing", 3) : 3,
                                 golem.getActiveStrategy() != null ? golem.getActiveStrategy().getConfigInt("tunnelHeight", 2) : 2,
                                 golem.getMiningOreMiningMode().ordinal()));
+            }
+
+            // Send tunnel sync
+            if (mode == BuildMode.TUNNEL) {
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                        new SyncTunnelS2CPayload(entityId, golem.getTunnelWidth(), golem.getTunnelHeight(),
+                                golem.getTunnelOreMiningMode().ordinal()));
             }
 
             // Send terraforming sync

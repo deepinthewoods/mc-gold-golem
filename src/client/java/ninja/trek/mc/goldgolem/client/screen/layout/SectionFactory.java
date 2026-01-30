@@ -111,6 +111,14 @@ public class SectionFactory {
                 sections.add(inventories);
                 break;
 
+            case TUNNEL:
+                // SettingsSection for width/height sliders + ore button
+                settingsSection = new SettingsSection();
+                sections.add(settingsSection);
+
+                sections.add(inventories);
+                break;
+
             case WALL:
             case TOWER:
             case TREE:

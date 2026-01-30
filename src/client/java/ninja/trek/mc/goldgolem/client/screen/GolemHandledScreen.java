@@ -96,6 +96,14 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
     private ExcavationDepthSlider excavationDepthSlider;
     private ButtonWidget excavationOreModeButton;
 
+    // Tunnel mode state
+    private int tunnelWidth = 3; // 1-9
+    private int tunnelHeight = 3; // 2-6
+    private int tunnelOreMiningMode = 0; // 0=Always, 1=Never, 2=Silk/Fortune
+    private TunnelWidthSlider tunnelWidthSlider;
+    private TunnelHeightSlider tunnelHeightSlider;
+    private ButtonWidget tunnelOreModeButton;
+
     // Mining mode state
     private int miningOreMiningMode = 0; // 0=Always, 1=Never, 2=Silk/Fortune
     private ButtonWidget miningOreModeButton;
@@ -327,6 +335,56 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         }
         public void syncTo(int d) {
             this.value = toValueInit(d);
+            updateMessage();
+        }
+    }
+
+    private class TunnelWidthSlider extends SliderWidget {
+        public TunnelWidthSlider(int x, int y, int width, int height, int initialWidth) {
+            super(x, y, width, height, Text.literal("Width"), toValueInit(initialWidth));
+        }
+        private static double toValueInit(int w) { return (Math.max(1, Math.min(9, w)) - 1) / 8.0; }
+        private static int toWidth(double v) { return Math.max(1, Math.min(9, 1 + (int)Math.round(v * 8.0))); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Width: " + toWidth(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int w = toWidth(this.value);
+            if (w != tunnelWidth) {
+                tunnelWidth = w;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTunnelWidthC2SPayload(getEntityId(), tunnelWidth));
+                updateMessage();
+            }
+        }
+        public void syncTo(int w) {
+            this.value = toValueInit(w);
+            updateMessage();
+        }
+    }
+
+    private class TunnelHeightSlider extends SliderWidget {
+        public TunnelHeightSlider(int x, int y, int width, int height, int initialHeight) {
+            super(x, y, width, height, Text.literal("Height"), toValueInit(initialHeight));
+        }
+        private static double toValueInit(int h) { return (Math.max(2, Math.min(6, h)) - 2) / 4.0; }
+        private static int toHeight(double v) { return Math.max(2, Math.min(6, 2 + (int)Math.round(v * 4.0))); }
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Text.literal("Height: " + toHeight(this.value)));
+        }
+        @Override
+        protected void applyValue() {
+            int h = toHeight(this.value);
+            if (h != tunnelHeight) {
+                tunnelHeight = h;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTunnelHeightC2SPayload(getEntityId(), tunnelHeight));
+                updateMessage();
+            }
+        }
+        public void syncTo(int h) {
+            this.value = toValueInit(h);
             updateMessage();
         }
     }
@@ -718,6 +776,24 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         syncMiningState(branchDepth, branchSpacing, tunnelHeight, oreMiningMode);
     }
 
+    // Tunnel mode network sync method
+    public void syncTunnelState(int width, int height, int oreMiningMode) {
+        synchronized (stateLock) {
+            this.tunnelWidth = width;
+            this.tunnelHeight = height;
+            this.tunnelOreMiningMode = oreMiningMode;
+        }
+        if (this.tunnelWidthSlider != null) {
+            this.tunnelWidthSlider.syncTo(width);
+        }
+        if (this.tunnelHeightSlider != null) {
+            this.tunnelHeightSlider.syncTo(height);
+        }
+        if (this.tunnelOreModeButton != null) {
+            this.tunnelOreModeButton.setMessage(Text.literal("Ores: " + getOreModeDisplayName(oreMiningMode)));
+        }
+    }
+
     private String getOreModeDisplayName(int ordinal) {
         return switch (ordinal) {
             case 0 -> "Always";
@@ -1066,6 +1142,11 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         return this.handler.getSliderMode() == 5;
     }
 
+    private boolean isTunnelMode() {
+        // slider value of 7 indicates tunnel mode
+        return this.handler.getSliderMode() == 7;
+    }
+
     /**
      * Get the current BuildMode based on the screen state.
      */
@@ -1082,6 +1163,8 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
             return BuildMode.TERRAFORMING;
         } else if (isMiningMode()) {
             return BuildMode.MINING;
+        } else if (isTunnelMode()) {
+            return BuildMode.TUNNEL;
         } else if (this.handler.isSliderEnabled()) {
             // Default slider mode is PATH/GRADIENT
             return BuildMode.PATH;
@@ -1119,6 +1202,7 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
         if (sliderMode == 3) return BuildMode.MINING;
         if (sliderMode == 4) return BuildMode.TERRAFORMING;
         if (sliderMode == 5) return BuildMode.TREE;
+        if (sliderMode == 7) return BuildMode.TUNNEL;
         return BuildMode.PATH;
     }
 
@@ -1681,6 +1765,38 @@ public class GolemHandledScreen extends HandledScreen<GolemInventoryScreenHandle
                 }
             ).dimensions(sliderX, buttonY, sliderW, buttonH).build();
             this.addDrawableChild(miningOreModeButton);
+        } else if (isTunnelMode()) {
+            // Tunnel Mode UI: width slider, height slider, ore mode button
+            int margin = this.handler.getControlsMargin();
+            int sliderW = 120;
+            int sliderH = 12;
+            int buttonH = 16;
+            int gap = 4;
+            int sliderX = this.x + this.backgroundWidth - 8 - sliderW;
+
+            // Total height needed: 12 + 4 + 12 + 4 + 16 = 48 pixels
+            int startY = this.y + margin - 52;
+            int sliderY1 = startY;
+            int sliderY2 = sliderY1 + sliderH + gap;
+            int buttonY = sliderY2 + sliderH + gap;
+
+            tunnelWidthSlider = new TunnelWidthSlider(sliderX, sliderY1, sliderW, sliderH, tunnelWidth);
+            tunnelHeightSlider = new TunnelHeightSlider(sliderX, sliderY2, sliderW, sliderH, tunnelHeight);
+
+            this.addDrawableChild(tunnelWidthSlider);
+            this.addDrawableChild(tunnelHeightSlider);
+
+            // Ore mining mode cycling button
+            tunnelOreModeButton = ButtonWidget.builder(
+                Text.literal("Ores: " + getOreModeDisplayName(tunnelOreMiningMode)),
+                b -> {
+                    tunnelOreMiningMode = (tunnelOreMiningMode + 1) % 3;
+                    b.setMessage(Text.literal("Ores: " + getOreModeDisplayName(tunnelOreMiningMode)));
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetOreMiningModeC2SPayload(
+                        getEntityId(), 2, tunnelOreMiningMode)); // targetMode=2 for tunnel
+                }
+            ).dimensions(sliderX, buttonY, sliderW, buttonH).build();
+            this.addDrawableChild(tunnelOreModeButton);
         } else if (isTerraformingMode()) {
             // Terraforming mode: 3 gradient rows + window sliders + scan radius slider
             int wx = this.x + 8 + 9 * 18 + 12;
