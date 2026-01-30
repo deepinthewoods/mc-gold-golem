@@ -406,6 +406,29 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 if (!moduleBlocks.isEmpty()) {
                     // Use block checker to skip already-correct blocks
                     planner.setBlocks(moduleBlocks, pos -> currentModulePlacement.isBlockAlreadyCorrect(golem, pos));
+
+                    // Set up exclusion zone filter (inverted pyramid above golem)
+                    planner.setBlockFilter(pos -> {
+                        BlockPos golemFeet = golem.getBlockPos();
+                        int dy = pos.getY() - golemFeet.getY();
+                        if (dy <= 0) return false;
+                        int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
+                        int dzAbs = Math.abs(pos.getZ() - golemFeet.getZ());
+                        int chebyshev = Math.max(dxAbs, dzAbs);
+                        return chebyshev <= dy;
+                    });
+
+                    // Set up neighbor scorer
+                    planner.setBlockScorer(pos -> {
+                        var world = golem.getEntityWorld();
+                        int neighbors = 0;
+                        if (!world.getBlockState(pos.north()).isAir()) neighbors++;
+                        if (!world.getBlockState(pos.south()).isAir()) neighbors++;
+                        if (!world.getBlockState(pos.east()).isAir()) neighbors++;
+                        if (!world.getBlockState(pos.west()).isAir()) neighbors++;
+                        if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                        return neighbors;
+                    });
                 }
                 moduleBlocksLoaded = true;
             }

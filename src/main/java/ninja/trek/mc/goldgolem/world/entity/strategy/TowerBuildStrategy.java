@@ -24,6 +24,7 @@ import java.util.List;
  */
 public class TowerBuildStrategy extends AbstractBuildStrategy {
     private static final Logger LOGGER = LoggerFactory.getLogger(TowerBuildStrategy.class);
+    private static final int LAYER_WINDOW_SIZE = 3;  // Load this many layers ahead
 
     // Gradient group manager for tower blocks
     private final GradientGroupManager groups = new GradientGroupManager();
@@ -36,6 +37,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     private boolean layerInitialized = false; // Whether current layer blocks are loaded into planner
     private PlacementPlanner planner = null;
     private int totalHeight = 0;             // Cached for progress tracking
+    private int lowestLoadedY = 0;           // Lowest Y layer currently in planner
+    private int highestLoadedY = -1;         // Highest Y layer currently in planner
 
     @Override
     public BuildMode getMode() {
@@ -70,7 +73,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     @Override
     public boolean isComplete() {
         if (entity == null) return false;
-        return currentLayerY >= entity.getTowerHeight() && (planner == null || planner.isComplete());
+        return highestLoadedY >= entity.getTowerHeight() - 1 && (planner == null || planner.isComplete());
     }
 
     @Override
@@ -78,6 +81,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("CurrentLayerY", currentLayerY);
         nbt.putBoolean("LayerInitialized", layerInitialized);
         nbt.putInt("TotalHeight", totalHeight);
+        nbt.putInt("LowestLoadedY", lowestLoadedY);
+        nbt.putInt("HighestLoadedY", highestLoadedY);
 
         // Save planner state
         if (planner != null) {
@@ -95,6 +100,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         currentLayerY = nbt.getInt("CurrentLayerY", 0);
         layerInitialized = nbt.getBoolean("LayerInitialized", false);
         totalHeight = nbt.getInt("TotalHeight", 0);
+        lowestLoadedY = nbt.getInt("LowestLoadedY", 0);
+        highestLoadedY = nbt.getInt("HighestLoadedY", -1);
 
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
@@ -127,6 +134,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     public void clearState() {
         currentLayerY = 0;
         layerInitialized = false;
+        lowestLoadedY = 0;
+        highestLoadedY = -1;
         if (planner != null) {
             planner.clear();
         }
@@ -213,23 +222,71 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Check if we've finished building the tower
-        if (currentLayerY >= height && planner.isComplete()) {
+        if (highestLoadedY >= height - 1 && planner.isComplete()) {
             golem.setBuildingPaths(false);
             return;
         }
 
-        // Initialize current layer if needed
+        // Initialize layers if needed — load up to LAYER_WINDOW_SIZE layers at once
         if (!layerInitialized && currentLayerY < height) {
-            List<BlockPos> layerBlocks = getLayerVoxels(golem, template, origin, currentLayerY);
-            if (layerBlocks.isEmpty()) {
-                // Empty layer, move to next
-                currentLayerY++;
-                return;
-            }
-            // Use block checker to skip already-correct blocks
             TowerModuleTemplate templateFinal = template;
             BlockPos originFinal = origin;
-            planner.setBlocks(layerBlocks, pos -> isBlockAlreadyCorrect(golem, templateFinal, originFinal, pos));
+
+            // Find the first non-empty layer starting from currentLayerY
+            int startY = currentLayerY;
+            while (startY < height) {
+                List<BlockPos> firstLayer = getLayerVoxels(golem, template, origin, startY);
+                if (!firstLayer.isEmpty()) {
+                    break;
+                }
+                startY++;
+            }
+            if (startY >= height) {
+                currentLayerY = height;
+                return;
+            }
+
+            // Load first layer with setBlocks (resets planner)
+            List<BlockPos> firstLayerBlocks = getLayerVoxels(golem, template, origin, startY);
+            planner.setBlocks(firstLayerBlocks, pos -> isBlockAlreadyCorrect(golem, templateFinal, originFinal, pos));
+            lowestLoadedY = startY;
+            highestLoadedY = startY;
+
+            // Load additional layers with addBlocks
+            for (int i = 1; i < LAYER_WINDOW_SIZE; i++) {
+                int nextY = startY + i;
+                if (nextY >= height) break;
+                List<BlockPos> nextLayerBlocks = getLayerVoxels(golem, template, origin, nextY);
+                if (!nextLayerBlocks.isEmpty()) {
+                    planner.addBlocks(nextLayerBlocks, pos -> isBlockAlreadyCorrect(golem, templateFinal, originFinal, pos));
+                }
+                highestLoadedY = nextY;
+            }
+
+            // Set up exclusion zone filter (inverted pyramid above golem)
+            planner.setBlockFilter(pos -> {
+                BlockPos golemFeet = golem.getBlockPos();
+                int dy = pos.getY() - golemFeet.getY();
+                if (dy <= 0) return false; // Only exclude above
+                int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
+                int dzAbs = Math.abs(pos.getZ() - golemFeet.getZ());
+                int chebyshev = Math.max(dxAbs, dzAbs);
+                return chebyshev <= dy; // Inverted pyramid: at height H, exclude within Chebyshev H
+            });
+
+            // Set up neighbor scorer
+            planner.setBlockScorer(pos -> {
+                var world = golem.getEntityWorld();
+                int neighbors = 0;
+                if (!world.getBlockState(pos.north()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.south()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.east()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.west()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                return neighbors;
+            });
+
+            currentLayerY = lowestLoadedY;
             layerInitialized = true;
         }
 
@@ -255,12 +312,48 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         switch (result) {
             case PLACED_BLOCK:
                 alternateHand();
+                // Check if lowest loaded layer is now complete — slide window up
+                if (!planner.hasBlocksAtY(lowestLoadedY)) {
+                    lowestLoadedY++;
+                    currentLayerY = lowestLoadedY;
+                    // Load next layer at highestLoadedY + 1 if available
+                    if (highestLoadedY + 1 < height) {
+                        highestLoadedY++;
+                        List<BlockPos> nextLayer = getLayerVoxels(golem, template, origin, highestLoadedY);
+                        if (!nextLayer.isEmpty()) {
+                            TowerModuleTemplate templateFinal2 = template;
+                            BlockPos originFinal2 = origin;
+                            planner.addBlocks(nextLayer, pos -> isBlockAlreadyCorrect(golem, templateFinal2, originFinal2, pos));
+                        }
+                    }
+                }
                 break;
 
             case COMPLETED:
-                // Layer complete, move to next
-                currentLayerY++;
-                layerInitialized = false;
+                // Planner queue empty — check if there are more layers to load
+                if (highestLoadedY + 1 < height) {
+                    // Slide window: advance lowestLoadedY and load next layers
+                    lowestLoadedY = highestLoadedY + 1;
+                    currentLayerY = lowestLoadedY;
+                    for (int i = 0; i < LAYER_WINDOW_SIZE; i++) {
+                        int nextY = lowestLoadedY + i;
+                        if (nextY >= height) break;
+                        List<BlockPos> nextLayer = getLayerVoxels(golem, template, origin, nextY);
+                        if (!nextLayer.isEmpty()) {
+                            TowerModuleTemplate templateFinal3 = template;
+                            BlockPos originFinal3 = origin;
+                            if (i == 0) {
+                                planner.setBlocks(nextLayer, pos -> isBlockAlreadyCorrect(golem, templateFinal3, originFinal3, pos));
+                            } else {
+                                planner.addBlocks(nextLayer, pos -> isBlockAlreadyCorrect(golem, templateFinal3, originFinal3, pos));
+                            }
+                        }
+                        highestLoadedY = nextY;
+                    }
+                } else {
+                    // Tower done
+                    golem.setBuildingPaths(false);
+                }
                 break;
 
             case DEFERRED:

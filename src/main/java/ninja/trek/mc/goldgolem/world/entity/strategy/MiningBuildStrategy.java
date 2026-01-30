@@ -680,6 +680,11 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             return false;
         }
 
+        // Don't mine non-solid blocks on the floor (flowers, saplings, grass, etc.)
+        if (pos.getY() == startPos.getY() && state.getCollisionShape(entity.getEntityWorld(), pos).isEmpty()) {
+            return false;
+        }
+
         return true;
     }
 

@@ -35,12 +35,26 @@ public class PlacementPlanner {
     private static final int DEFERRED_RETRY_INTERVAL = 4;
     private static final int MAX_CANDIDATES_PER_TICK = 3;
     private static final int SKIP_RETRY_TICKS = 12;
+    private static final int NEIGHBOR_CANDIDATE_COUNT = 8;  // Score top-N nearest candidates by neighbor count
     private static final int MAX_PATHFINDS_PER_TICK = 4;
     private static final int PATH_CACHE_TTL_TICKS = 60;
     private static final int MIN_NAV_FAILURES_FOR_TELEPORT = 2;
     private static final int PATH_FAILURE_WINDOW_TICKS = 20;
     private static final boolean DEBUG_COUNTERS = false;
     private static final int MAX_CONSECUTIVE_OVERLAP_DEFERRALS = 3;  // Teleport if we defer this many blocks in a row due to overlap
+
+    // Callback interfaces for organic placement
+    @FunctionalInterface
+    public interface BlockFilter {
+        /** Return true if this block should be SKIPPED (excluded) right now. */
+        boolean shouldExclude(BlockPos pos);
+    }
+
+    @FunctionalInterface
+    public interface BlockScorer {
+        /** Return a score for this block — higher = place sooner. */
+        int score(BlockPos pos);
+    }
 
     // Reference to golem
     private final GoldGolemEntity golem;
@@ -66,6 +80,10 @@ public class PlacementPlanner {
     private long lastPathBudgetTick = Long.MIN_VALUE;
     private int remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
     private int consecutiveOverlapDeferrals = 0;  // Track when golem is trapped by its own builds
+
+    // Optional filter and scorer for organic placement
+    private BlockFilter blockFilter = null;
+    private BlockScorer blockScorer = null;
 
     private long debugLastTick = Long.MIN_VALUE;
     private int debugPathfindCalls = 0;
@@ -125,6 +143,42 @@ public class PlacementPlanner {
 
     public PlacementPlanner(GoldGolemEntity golem) {
         this.golem = golem;
+    }
+
+    public void setBlockFilter(BlockFilter filter) { this.blockFilter = filter; }
+    public void setBlockScorer(BlockScorer scorer) { this.blockScorer = scorer; }
+
+    /**
+     * Return the lowest Y among remaining + deferred + currentTarget.
+     * Used by strategies to know when to feed the next layer.
+     */
+    public int getLowestPendingY() {
+        int minY = Integer.MAX_VALUE;
+        if (currentTarget != null) {
+            minY = Math.min(minY, currentTarget.getY());
+        }
+        for (BlockPos pos : remainingBlocks) {
+            minY = Math.min(minY, pos.getY());
+        }
+        for (DeferredBlock db : deferredBlocks) {
+            minY = Math.min(minY, db.pos.getY());
+        }
+        return minY;
+    }
+
+    /**
+     * Return true if any remaining/deferred/currentTarget blocks exist at this Y level.
+     * Used by strategies to detect when the lowest layer is fully placed.
+     */
+    public boolean hasBlocksAtY(int y) {
+        if (currentTarget != null && currentTarget.getY() == y) return true;
+        for (BlockPos pos : remainingBlocks) {
+            if (pos.getY() == y) return true;
+        }
+        for (DeferredBlock db : deferredBlocks) {
+            if (db.pos.getY() == y) return true;
+        }
+        return false;
     }
 
     /**
@@ -537,7 +591,21 @@ public class PlacementPlanner {
 
         if (!deferredBlocks.isEmpty()) {
             if (remainingBlocks.isEmpty() || deferredRetryCountdown <= 0) {
-                DeferredBlock deferred = deferredBlocks.pollFirst();
+                // Find first non-excluded deferred block
+                DeferredBlock deferred = null;
+                int checked = 0;
+                int size = deferredBlocks.size();
+                while (checked < size) {
+                    DeferredBlock candidate = deferredBlocks.pollFirst();
+                    if (candidate == null) break;
+                    if (blockFilter != null && blockFilter.shouldExclude(candidate.pos)) {
+                        deferredBlocks.addLast(candidate); // Put back at end
+                        checked++;
+                        continue;
+                    }
+                    deferred = candidate;
+                    break;
+                }
                 if (deferred != null) {
                     deferredRetryCountdown = DEFERRED_RETRY_INTERVAL;
                     return deferred.pos;
@@ -560,44 +628,88 @@ public class PlacementPlanner {
         // This ensures when we do teleport/pathfind, it's to the nearest cluster
         resortByDistanceToGolem();
 
-        // PHASE 3: Select with pathfinding for blocks that require movement
+        // PHASE 3: Collect up to NEIGHBOR_CANDIDATE_COUNT non-excluded candidates for scoring
+        List<BlockPos> scoringCandidates = new ArrayList<>();
+        int scanned = 0;
+        while (scoringCandidates.size() < NEIGHBOR_CANDIDATE_COUNT && scanned < remainingBlocks.size()) {
+            BlockPos pos = remainingBlocks.pollFirst();
+            if (pos == null) break;
+            scanned++;
+            Long skipUntil = skipUntilTick.get(pos);
+            if (skipUntil != null && skipUntil > now) {
+                remainingBlocks.addLast(pos);
+                continue;
+            }
+            if (blockFilter != null && blockFilter.shouldExclude(pos)) {
+                remainingBlocks.addLast(pos);
+                continue;
+            }
+            scoringCandidates.add(pos);
+        }
+
+        // Sort candidates by scorer if set (descending score, distance as tiebreak)
+        if (blockScorer != null && scoringCandidates.size() > 1) {
+            Vec3d golemPos = new Vec3d(golem.getX(), golem.getY(), golem.getZ());
+            scoringCandidates.sort((a, b) -> {
+                int sa = blockScorer.score(a);
+                int sb = blockScorer.score(b);
+                if (sa != sb) return Integer.compare(sb, sa); // descending
+                double da = golemPos.squaredDistanceTo(a.getX() + 0.5, a.getY() + 0.5, a.getZ() + 0.5);
+                double db = golemPos.squaredDistanceTo(b.getX() + 0.5, b.getY() + 0.5, b.getZ() + 0.5);
+                return Double.compare(da, db);
+            });
+        }
+
+        // Try candidates with pathfinding, tracking which have been consumed
         int attempts = 0;
         BlockPos fallback = null;
-        while (attempts < MAX_CANDIDATES_PER_TICK && !remainingBlocks.isEmpty()) {
-            BlockPos pos = remainingBlocks.pollFirst();
-            if (pos == null) {
-                break;
+        Set<BlockPos> consumed = new HashSet<>();
+        BlockPos selected = null;
+        for (BlockPos pos : scoringCandidates) {
+            if (attempts >= MAX_CANDIDATES_PER_TICK) {
+                break; // Will be put back below
             }
             if (fallback == null) {
                 fallback = pos;
             }
-            Long skipUntil = skipUntilTick.get(pos);
-            if (skipUntil != null && skipUntil > now) {
-                remainingBlocks.addLast(pos);
-                attempts++;
-                continue;
-            }
 
             // Double-check reach (golem might have moved slightly)
             if (isWithinReach(golemEyePos, pos, MAX_REACH)) {
-                return pos;
+                consumed.add(pos);
+                selected = pos;
+                break;
             }
 
             PlacementSearchResult placement = findPlacementResult(pos);
             if (placement.budgetLimited && placement.standPosition == null) {
                 selectionBlockedByBudget = true;
-                // Defer to increment attempt count and try later (prevents getting stuck on one block)
                 defer(pos);
+                consumed.add(pos);
                 break;
             }
             if (placement.standPosition != null) {
                 preselectedStandPos = placement.standPosition;
-                return pos;
+                consumed.add(pos);
+                selected = pos;
+                break;
             }
 
             skipUntilTick.put(pos, now + SKIP_RETRY_TICKS);
             remainingBlocks.addLast(pos);
+            consumed.add(pos);
             attempts++;
+        }
+
+        // Put unconsumed candidates back at the front of the queue
+        for (int i = scoringCandidates.size() - 1; i >= 0; i--) {
+            BlockPos pos = scoringCandidates.get(i);
+            if (!consumed.contains(pos)) {
+                remainingBlocks.addFirst(pos);
+            }
+        }
+
+        if (selected != null) {
+            return selected;
         }
 
         if (!selectionBlockedByBudget && fallback != null) {
@@ -624,6 +736,9 @@ public class PlacementPlanner {
             Long skipUntil = skipUntilTick.get(pos);
             if (skipUntil != null && skipUntil > now) {
                 continue;
+            }
+            if (blockFilter != null && blockFilter.shouldExclude(pos)) {
+                continue; // Don't remove — may become valid when golem moves
             }
             if (isWithinReach(golemEyePos, pos, MAX_REACH)) {
                 it.remove();
@@ -1155,6 +1270,8 @@ public class PlacementPlanner {
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
         consecutiveOverlapDeferrals = 0;
+        blockFilter = null;
+        blockScorer = null;
     }
 
     /**

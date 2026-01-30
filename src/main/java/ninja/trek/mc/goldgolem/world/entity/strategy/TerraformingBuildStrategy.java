@@ -32,9 +32,13 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     private int minY = 0;
     private int maxY = 0;
 
+    private static final int LAYER_WINDOW_SIZE = 3;  // Load this many layers ahead
+
     // PlacementPlanner for reach-aware building
     private PlacementPlanner planner = null;
     private boolean layerLoaded = false;
+    private int lowestLoadedY = 0;
+    private int highestLoadedY = -1;
 
     // Cache for block states (position -> state to place)
     private Map<BlockPos, BlockState> layerBlockStates = new HashMap<>();
@@ -100,6 +104,8 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("MaxY", maxY);
         nbt.putInt("CurrentY", currentY);
         nbt.putBoolean("LayerLoaded", layerLoaded);
+        nbt.putInt("LowestLoadedY", lowestLoadedY);
+        nbt.putInt("HighestLoadedY", highestLoadedY);
 
         // Save skeleton blocks
         if (skeletonBlocks != null && !skeletonBlocks.isEmpty()) {
@@ -164,6 +170,8 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         maxY = nbt.getInt("MaxY", 0);
         currentY = nbt.getInt("CurrentY", 0);
         layerLoaded = nbt.getBoolean("LayerLoaded", false);
+        lowestLoadedY = nbt.getInt("LowestLoadedY", 0);
+        highestLoadedY = nbt.getInt("HighestLoadedY", -1);
 
         // Load skeleton blocks
         int skelCount = nbt.getInt("SkeletonCount", 0);
@@ -264,6 +272,8 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     public void clearState() {
         currentY = 0;
         layerLoaded = false;
+        lowestLoadedY = 0;
+        highestLoadedY = -1;
         layerBlockStates.clear();
         if (planner != null) {
             planner.clear();
@@ -444,50 +454,101 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             return;
         }
 
-        // STATE: BUILDING - place shell blocks layer by layer
-        List<BlockPos> currentLayer = shellByLayer.get(currentY);
+        // STATE: BUILDING - place shell blocks using multi-layer window
 
-        // If no shell at this Y level, move to next level
-        if (currentLayer == null || currentLayer.isEmpty()) {
-            currentY++;
-            layerLoaded = false;
-
-            // Check if all layers are complete
-            if (currentY > maxY) {
-                golem.setBuildingPaths(false);
-            }
-            return;
-        }
-
-        // Load layer into planner if not done
+        // Load layers into planner if not done
         if (!layerLoaded) {
-            // Pre-compute block states for this layer
             layerBlockStates.clear();
             minePositions.clear();
-            for (BlockPos pos : currentLayer) {
-                if (isTerraformingGradientMineAction(golem, pos)) {
-                    minePositions.add(pos);
-                } else {
-                    BlockState toPlace = sampleTerraformingGradient(golem, pos);
-                    if (toPlace != null) {
-                        layerBlockStates.put(pos, toPlace);
-                    }
-                }
+
+            // Find first non-empty layer
+            int startY = currentY;
+            while (startY <= maxY) {
+                List<BlockPos> layer = shellByLayer.get(startY);
+                if (layer != null && !layer.isEmpty()) break;
+                startY++;
+            }
+            if (startY > maxY) {
+                golem.setBuildingPaths(false);
+                return;
             }
 
-            // Combine placement and mine positions
+            // Collect blocks for up to LAYER_WINDOW_SIZE layers
+            lowestLoadedY = startY;
+            highestLoadedY = startY - 1;
+            for (int i = 0; i < LAYER_WINDOW_SIZE; i++) {
+                int y = startY + i;
+                if (y > maxY) break;
+                List<BlockPos> layer = shellByLayer.get(y);
+                if (layer == null || layer.isEmpty()) {
+                    highestLoadedY = y;
+                    continue;
+                }
+
+                // Pre-compute block states for this layer
+                for (BlockPos pos : layer) {
+                    if (isTerraformingGradientMineAction(golem, pos)) {
+                        minePositions.add(pos);
+                    } else {
+                        BlockState toPlace = sampleTerraformingGradient(golem, pos);
+                        if (toPlace != null) {
+                            layerBlockStates.put(pos, toPlace);
+                        }
+                    }
+                }
+
+                List<BlockPos> allPositions = new ArrayList<>(layerBlockStates.keySet());
+                allPositions.addAll(minePositions);
+
+                highestLoadedY = y;
+            }
+
+            // Now load all collected positions into the planner at once
             List<BlockPos> allPositions = new ArrayList<>(layerBlockStates.keySet());
             allPositions.addAll(minePositions);
-            // Use block checker to skip already-correct blocks
+
+            if (allPositions.isEmpty()) {
+                currentY = highestLoadedY + 1;
+                if (currentY > maxY) {
+                    golem.setBuildingPaths(false);
+                }
+                return;
+            }
+
             planner.setBlocks(allPositions, pos -> {
                 if (minePositions.contains(pos)) {
                     return golem.getEntityWorld().getBlockState(pos).isAir();
                 }
                 BlockState expected = layerBlockStates.get(pos);
-                if (expected == null) return true; // Skip if no expected state
+                if (expected == null) return true;
                 BlockState current = golem.getEntityWorld().getBlockState(pos);
                 return current.getBlock() == expected.getBlock();
             });
+
+            // Set up exclusion zone filter
+            planner.setBlockFilter(pos -> {
+                BlockPos golemFeet = golem.getBlockPos();
+                int dy = pos.getY() - golemFeet.getY();
+                if (dy <= 0) return false;
+                int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
+                int dzAbs = Math.abs(pos.getZ() - golemFeet.getZ());
+                int chebyshev = Math.max(dxAbs, dzAbs);
+                return chebyshev <= dy;
+            });
+
+            // Set up neighbor scorer
+            planner.setBlockScorer(pos -> {
+                var world = golem.getEntityWorld();
+                int neighbors = 0;
+                if (!world.getBlockState(pos.north()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.south()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.east()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.west()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                return neighbors;
+            });
+
+            currentY = lowestLoadedY;
             layerLoaded = true;
         }
 
@@ -516,9 +577,11 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
                 break;
 
             case COMPLETED:
-                // Layer complete, move to next
-                currentY++;
+                // All loaded layers complete — slide window or finish
+                currentY = highestLoadedY + 1;
                 layerLoaded = false;
+                layerBlockStates.clear();
+                minePositions.clear();
 
                 if (currentY > maxY) {
                     golem.setBuildingPaths(false);

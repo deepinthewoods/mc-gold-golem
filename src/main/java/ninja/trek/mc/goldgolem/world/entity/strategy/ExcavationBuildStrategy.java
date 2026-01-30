@@ -867,6 +867,11 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             return false;
         }
 
+        // Don't mine non-solid blocks on the floor (flowers, saplings, grass, etc.)
+        if (pos.getY() == startPos.getY() && state.getCollisionShape(entity.getEntityWorld(), pos).isEmpty()) {
+            return false;
+        }
+
         // In infinite mode (depth == 0), gold blocks act as boundaries
         if (depth == 0 && isGoldBlock(blockId)) {
             return false;
