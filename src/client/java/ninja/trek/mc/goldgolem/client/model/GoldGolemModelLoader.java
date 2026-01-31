@@ -3,10 +3,10 @@ package ninja.trek.mc.goldgolem.client.model;
 import com.mojang.logging.LogUtils;
 import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
-import net.minecraft.resource.Resource;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.resource.ResourceType;
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.resources.Resource;
+import net.minecraft.server.packs.resources.ResourceManager;
 import ninja.trek.mc.goldgolem.GoldGolem;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
@@ -49,7 +49,7 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
     private GoldGolemModelLoader() {}
 
     public static void init() {
-        ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(new GoldGolemModelLoader());
+        ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(new GoldGolemModelLoader());
     }
 
     public static List<MeshPart> getMeshes() {
@@ -62,7 +62,7 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
     }
 
     @Override
-    public void reload(ResourceManager manager) {
+    public void onResourceManagerReload(ResourceManager manager) {
         meshes = loadMeshes(manager);
     }
 
@@ -70,7 +70,7 @@ public final class GoldGolemModelLoader implements SimpleSynchronousResourceRelo
         try {
             Resource resource = manager.getResource(MODEL_ID)
                     .orElseThrow(() -> new FileNotFoundException("Missing model: " + MODEL_ID));
-            try (InputStream stream = resource.getInputStream()) {
+            try (InputStream stream = resource.open()) {
                 byte[] bytes = stream.readAllBytes();
                 ByteBuffer buffer = MemoryUtil.memAlloc(bytes.length);
                 try {

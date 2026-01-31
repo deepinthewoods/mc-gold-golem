@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.util.math.BlockPos;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
 
 /**
  * Captured Tree Mode data from summon-time scan.
@@ -45,7 +44,7 @@ public final class TreeDefinition {
             }
         }
 
-        this.origin = origin.toImmutable();
+        this.origin = origin.immutable();
         this.modules = Collections.unmodifiableList(new ArrayList<>(modules));
         this.uniqueBlockIds = Collections.unmodifiableList(new ArrayList<>(uniqueBlockIds));
     }

@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
 
 /**
  * Build modes for the Gold Golem.
@@ -26,10 +25,10 @@ public enum BuildMode {
      * Packet codec for serializing BuildMode over the network.
      * Uses ordinal for efficiency (values must not be reordered).
      */
-    public static final PacketCodec<RegistryByteBuf, BuildMode> PACKET_CODEC =
-            new PacketCodec<RegistryByteBuf, BuildMode>() {
+    public static final StreamCodec<RegistryFriendlyByteBuf, BuildMode> PACKET_CODEC =
+            new StreamCodec<RegistryFriendlyByteBuf, BuildMode>() {
                 @Override
-                public BuildMode decode(RegistryByteBuf buf) {
+                public BuildMode decode(RegistryFriendlyByteBuf buf) {
                     int ordinal = buf.readVarInt();
                     if (ordinal >= 0 && ordinal < VALUES.length) {
                         return VALUES[ordinal];
@@ -38,7 +37,7 @@ public enum BuildMode {
                 }
 
                 @Override
-                public void encode(RegistryByteBuf buf, BuildMode value) {
+                public void encode(RegistryFriendlyByteBuf buf, BuildMode value) {
                     buf.writeVarInt(value.ordinal());
                 }
             };

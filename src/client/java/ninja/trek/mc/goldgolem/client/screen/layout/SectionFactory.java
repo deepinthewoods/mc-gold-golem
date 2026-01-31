@@ -60,7 +60,7 @@ public class SectionFactory {
         // All modes have an inventories section at the end
         InventoriesSection inventories = new InventoriesSection(
                 golemRows,
-                screen.getTextRenderer(),
+                screen.getFont(),
                 screen.getPlayerInventoryTitle());
 
         switch (mode) {
@@ -70,7 +70,7 @@ public class SectionFactory {
                 gradientsSection = new GradientsSection(
                         GradientsSection.GradientMode.PATH,
                         screen,
-                        screen.getTextRenderer());
+                        screen.getFont());
                 sections.add(gradientsSection);
 
                 // SettingsSection for width slider (will be populated during init)
@@ -85,7 +85,7 @@ public class SectionFactory {
                 gradientsSection = new GradientsSection(
                         GradientsSection.GradientMode.TERRAFORMING,
                         screen,
-                        screen.getTextRenderer());
+                        screen.getFont());
                 sections.add(gradientsSection);
 
                 // SettingsSection for radius slider (will be populated during init)
@@ -125,7 +125,7 @@ public class SectionFactory {
                 // GroupModeSection (paginable)
                 GroupModeStrategy strategy = screen.getGroupModeStrategy();
                 if (strategy != null) {
-                    groupModeSection = new GroupModeSection(strategy, screen.getTextRenderer());
+                    groupModeSection = new GroupModeSection(strategy, screen.getFont());
                     sections.add(groupModeSection);
                 }
 

@@ -1,11 +1,5 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
@@ -16,6 +10,12 @@ import ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry;
 import ninja.trek.mc.goldgolem.world.entity.strategy.wall.ModulePlacement;
 
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Strategy for Wall building mode.
@@ -71,7 +71,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         tickWallMode(golem, owner);
     }
 
@@ -88,7 +88,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         // Save origin
         if (wallOrigin != null) {
             nbt.putInt("OriginX", wallOrigin.getX());
@@ -133,7 +133,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
         // Save planner state
         if (planner != null) {
-            NbtCompound plannerNbt = new NbtCompound();
+            CompoundTag plannerNbt = new CompoundTag();
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
@@ -143,27 +143,27 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
+    public void readNbt(CompoundTag nbt) {
         // Load origin
         if (nbt.contains("OriginX")) {
             wallOrigin = new BlockPos(
-                nbt.getInt("OriginX", 0),
-                nbt.getInt("OriginY", 0),
-                nbt.getInt("OriginZ", 0)
+                nbt.getIntOr("OriginX", 0),
+                nbt.getIntOr("OriginY", 0),
+                nbt.getIntOr("OriginZ", 0)
             );
         } else {
             wallOrigin = null;
         }
 
         // Load JSON file
-        wallJsonFile = nbt.contains("JsonFile") ? nbt.getString("JsonFile", null) : null;
+        wallJsonFile = nbt.contains("JsonFile") ? nbt.getStringOr("JsonFile", null) : null;
 
         // Load unique block IDs
-        int uniqCount = nbt.getInt("UniqCount", 0);
+        int uniqCount = nbt.getIntOr("UniqCount", 0);
         if (uniqCount > 0) {
             List<String> ids = new ArrayList<>(uniqCount);
             for (int i = 0; i < uniqCount; i++) {
-                ids.add(nbt.getString("Uniq" + i, ""));
+                ids.add(nbt.getStringOr("Uniq" + i, ""));
             }
             wallUniqueBlockIds = ids;
         } else {
@@ -171,8 +171,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Load join info
-        wallJoinSignature = nbt.contains("JoinSig") ? nbt.getString("JoinSig", null) : null;
-        String axisStr = nbt.contains("JoinAxis") ? nbt.getString("JoinAxis", null) : null;
+        wallJoinSignature = nbt.contains("JoinSig") ? nbt.getStringOr("JoinSig", null) : null;
+        String axisStr = nbt.contains("JoinAxis") ? nbt.getStringOr("JoinAxis", null) : null;
         if (axisStr != null) {
             try {
                 wallJoinAxis = WallJoinSlice.Axis.valueOf(axisStr);
@@ -182,18 +182,18 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         } else {
             wallJoinAxis = null;
         }
-        wallJoinUSize = Math.max(1, nbt.getInt("JoinUSize", 1));
-        wallModuleCount = nbt.getInt("ModCount", 0);
-        wallLongestModule = nbt.getInt("ModLongest", 0);
+        wallJoinUSize = Math.max(1, nbt.getIntOr("JoinUSize", 1));
+        wallModuleCount = nbt.getIntOr("ModCount", 0);
+        wallLongestModule = nbt.getIntOr("ModLongest", 0);
 
         // Load join template
-        int joinTplCount = nbt.getInt("JoinTplCount", 0);
+        int joinTplCount = nbt.getIntOr("JoinTplCount", 0);
         if (joinTplCount > 0) {
             List<JoinEntry> list = new ArrayList<>(joinTplCount);
             for (int i = 0; i < joinTplCount; i++) {
-                int dy = nbt.getInt("JT_dy" + i, 0);
-                int du = nbt.getInt("JT_du" + i, 0);
-                String id = nbt.getString("JT_id" + i, "");
+                int dy = nbt.getIntOr("JT_dy" + i, 0);
+                int du = nbt.getIntOr("JT_du" + i, 0);
+                String id = nbt.getStringOr("JT_id" + i, "");
                 list.add(new JoinEntry(dy, du, id));
             }
             wallJoinTemplate = list;
@@ -202,8 +202,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Load direction
-        wallLastDirX = nbt.getInt("LastDirX", 1);
-        wallLastDirZ = nbt.getInt("LastDirZ", 0);
+        wallLastDirX = nbt.getIntOr("LastDirX", 1);
+        wallLastDirZ = nbt.getIntOr("LastDirZ", 0);
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
         }
@@ -213,21 +213,21 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeLegacyNbt(net.minecraft.storage.WriteView view) {
+    public void writeLegacyNbt(net.minecraft.world.level.storage.ValueOutput view) {
         view.putBoolean("WallModuleBlocksLoaded", moduleBlocksLoaded);
         if (planner != null) {
-            planner.writeView(view.get("WallPlanner"));
+            planner.writeView(view.child("WallPlanner"));
         }
     }
 
     @Override
-    public void readLegacyNbt(net.minecraft.storage.ReadView view) {
-        moduleBlocksLoaded = view.getBoolean("WallModuleBlocksLoaded", false);
+    public void readLegacyNbt(net.minecraft.world.level.storage.ValueInput view) {
+        moduleBlocksLoaded = view.getBooleanOr("WallModuleBlocksLoaded", false);
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
-            view.getOptionalReadView("WallPlanner").ifPresent(planner::readView);
+            view.child("WallPlanner").ifPresent(planner::readView);
         }
     }
 
@@ -332,7 +332,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     // ========== Polymorphic Dispatch Methods ==========
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
@@ -349,8 +349,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
     // ========== Main tick logic ==========
 
-    private void tickWallMode(GoldGolemEntity golem, PlayerEntity owner) {
-        Vec3d trackStart = golem.getTrackStart();
+    private void tickWallMode(GoldGolemEntity golem, Player owner) {
+        Vec3 trackStart = golem.getTrackStart();
 
         // Ensure planner exists
         if (planner == null) {
@@ -358,8 +358,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Track anchors and enqueue modules based on movement
-        if (owner != null && owner.isOnGround()) {
-            Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
+        if (owner != null && owner.onGround()) {
+            Vec3 p = new Vec3(owner.getX(), owner.getY() + 0.05, owner.getZ());
             if (trackStart == null) {
                 golem.setTrackStart(p);
                 trackStart = p;
@@ -374,13 +374,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         golem.setTrackStart(cand.end());
                         trackStart = cand.end();
                         // Preview
-                        if (golem.getEntityWorld() instanceof ServerWorld) {
+                        if (golem.level() instanceof ServerLevel) {
                             var owner2 = golem.getOwnerPlayer();
-                            if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
-                                List<Vec3d> list = new ArrayList<>();
+                            if (owner2 instanceof net.minecraft.server.level.ServerPlayer sp2) {
+                                List<Vec3> list = new ArrayList<>();
                                 list.add(cand.anchor());
                                 list.add(cand.end());
-                                Optional<Vec3d> anchor = Optional.ofNullable(golem.getTrackStart());
+                                Optional<Vec3> anchor = Optional.ofNullable(golem.getTrackStart());
                                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, golem.getId(), list, anchor);
                             }
                         }
@@ -409,7 +409,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
                     // Set up exclusion zone filter (inverted pyramid above golem)
                     planner.setBlockFilter(pos -> {
-                        BlockPos golemFeet = golem.getBlockPos();
+                        BlockPos golemFeet = golem.blockPosition();
                         int dy = pos.getY() - golemFeet.getY();
                         if (dy <= 0) return false;
                         int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
@@ -420,13 +420,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
                     // Set up neighbor scorer
                     planner.setBlockScorer(pos -> {
-                        var world = golem.getEntityWorld();
+                        var world = golem.level();
                         int neighbors = 0;
                         if (!world.getBlockState(pos.north()).isAir()) neighbors++;
                         if (!world.getBlockState(pos.south()).isAir()) neighbors++;
                         if (!world.getBlockState(pos.east()).isAir()) neighbors++;
                         if (!world.getBlockState(pos.west()).isAir()) neighbors++;
-                        if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                        if (!world.getBlockState(pos.below()).isAir()) neighbors++;
                         return neighbors;
                     });
                 }
@@ -490,7 +490,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return longest;
     }
 
-    private ModulePlacement chooseNextModule(Vec3d anchor, Vec3d playerPos) {
+    private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
         if (wallTemplates == null || wallTemplates.isEmpty()) return null;
 
         double bestScore = Double.POSITIVE_INFINITY;
@@ -505,7 +505,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             for (int rot = 0; rot < 4; rot++) {
                 for (int mir = 0; mir < 2; mir++) {
                     int[] d = ModulePlacement.rotateAndMirror(dxModule, dyModule, dzModule, rot, mir == 1);
-                    Vec3d end = new Vec3d(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
+                    Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
                     // Y rule: toward player Y and no overshoot
                     double dyNeed = playerPos.y - anchor.y;
                     double dyStep = d[1];
@@ -529,7 +529,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         for (int[] pv : perps) {
             int dxGap = pv[0] * t;
             int dzGap = pv[1] * t;
-            Vec3d end = new Vec3d(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
+            Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
             double dyNeed = playerPos.y - anchor.y;
             double yScore = Math.abs(dyNeed);
             double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
@@ -564,11 +564,11 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     public boolean placeBlockStateAt(GoldGolemEntity golem, int wx, int wy, int wz, BlockState baseState, int rot, boolean mirror, BlockPos nextPos) {
-        var world = golem.getEntityWorld();
+        var world = golem.level();
         BlockPos pos = new BlockPos(wx, wy, wz);
-        net.minecraft.block.Block block = baseState.getBlock();
+        net.minecraft.world.level.block.Block block = baseState.getBlock();
         var current = world.getBlockState(pos);
-        if (!current.isAir() && current.isOf(block)) return true;
+        if (!current.isAir() && current.is(block)) return true;
 
         long key = pos.asLong();
         if (!golem.recordPlaced(key)) return false;
@@ -580,23 +580,23 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             return false;
         }
 
-        net.minecraft.util.BlockRotation rotation = switch (rot & 3) {
-            case 1 -> net.minecraft.util.BlockRotation.CLOCKWISE_90;
-            case 2 -> net.minecraft.util.BlockRotation.CLOCKWISE_180;
-            case 3 -> net.minecraft.util.BlockRotation.COUNTERCLOCKWISE_90;
-            default -> net.minecraft.util.BlockRotation.NONE;
+        net.minecraft.world.level.block.Rotation rotation = switch (rot & 3) {
+            case 1 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_90;
+            case 2 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_180;
+            case 3 -> net.minecraft.world.level.block.Rotation.COUNTERCLOCKWISE_90;
+            default -> net.minecraft.world.level.block.Rotation.NONE;
         };
-        net.minecraft.util.BlockMirror mir = mirror ? net.minecraft.util.BlockMirror.LEFT_RIGHT : net.minecraft.util.BlockMirror.NONE;
+        net.minecraft.world.level.block.Mirror mir = mirror ? net.minecraft.world.level.block.Mirror.LEFT_RIGHT : net.minecraft.world.level.block.Mirror.NONE;
         BlockState place = baseState;
         try { place = place.rotate(rotation); } catch (Throwable ignored) {}
         try { place = place.mirror(mir); } catch (Throwable ignored) {}
         try {
-            if (place.contains(net.minecraft.state.property.Properties.WATERLOGGED)) {
-                place = place.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE);
+            if (place.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
+                place = place.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE);
             }
         } catch (Throwable ignored) {}
 
-        world.setBlockState(pos, place, 3);
+        world.setBlock(pos, place, 3);
         golem.decrementInventorySlot(invSlot);
         golem.beginHandAnimation(isLeftHandActive(), pos, nextPos);
         return true;

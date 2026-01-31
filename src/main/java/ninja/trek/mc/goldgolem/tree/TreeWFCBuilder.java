@@ -1,15 +1,14 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Implements Wave Function Collapse as a flood-fill algorithm for Tree Mode.
@@ -19,7 +18,7 @@ public final class TreeWFCBuilder {
     private static final Logger LOGGER = LoggerFactory.getLogger(TreeWFCBuilder.class);
 
     private final TreeTileCache tileCache;
-    private final World world;
+    private final Level world;
     private final Set<Block> stopBlocks; // blocks that act as boundaries
     private final Random random;
 
@@ -37,7 +36,7 @@ public final class TreeWFCBuilder {
     // Queue of positions to process for building
     private final ArrayDeque<BlockPos> buildQueue;
 
-    public TreeWFCBuilder(TreeTileCache tileCache, World world, BlockPos startPos, Set<Block> stopBlocks, Random random) {
+    public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks, Random random) {
         this.tileCache = tileCache;
         this.world = world;
         this.stopBlocks = new HashSet<>(stopBlocks);
@@ -212,7 +211,7 @@ public final class TreeWFCBuilder {
 
             // Check each neighbor
             for (Direction dir : Direction.values()) {
-                BlockPos neighborPos = current.offset(dir);
+                BlockPos neighborPos = current.relative(dir);
 
                 // Skip if already collapsed
                 if (collapsed.containsKey(neighborPos)) continue;
@@ -271,7 +270,7 @@ public final class TreeWFCBuilder {
      */
     private void expandFrontier(BlockPos pos) {
         for (Direction dir : Direction.values()) {
-            BlockPos neighborPos = pos.offset(dir);
+            BlockPos neighborPos = pos.relative(dir);
 
             // Skip if already collapsed or in frontier
             if (collapsed.containsKey(neighborPos) || frontierSet.contains(neighborPos)) {

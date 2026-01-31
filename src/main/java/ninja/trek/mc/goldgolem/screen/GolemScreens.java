@@ -1,13 +1,12 @@
 package ninja.trek.mc.goldgolem.screen;
 
 import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.network.PacketByteBuf;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Container;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.net.*;
 
@@ -15,10 +14,10 @@ import ninja.trek.mc.goldgolem.net.*;
 public final class GolemScreens {
     private GolemScreens() {}
 
-    public static void open(ServerPlayerEntity player, int entityId, Inventory golemInventory) {
+    public static void open(ServerPlayer player, int entityId, Container golemInventory) {
         // Inspect entity to decide UI flags
-        var world0 = player.getEntityWorld();
-        var ent0 = world0.getEntityById(entityId);
+        var world0 = player.level();
+        var ent0 = world0.getEntity(entityId);
         boolean sliderEnabled = true;
         boolean excavationMode = false;
         boolean miningMode = false;
@@ -51,7 +50,7 @@ public final class GolemScreens {
 
         // Build dynamic UI spec
         int gradientRows = (terraformingMode || sliderEnabled) ? 3 : 2; // 3 rows for terraforming and path mode
-        int golemSlots = golemInventory.size();
+        int golemSlots = golemInventory.getContainerSize();
         int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : 0))))));
         String jsonName = "";
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
@@ -59,26 +58,26 @@ public final class GolemScreens {
         }
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider, jsonName);
 
-        player.openHandledScreen(new ExtendedScreenHandlerFactory<GolemOpenData>() {
+        player.openMenu(new ExtendedScreenHandlerFactory<GolemOpenData>() {
             @Override
-            public GolemOpenData getScreenOpeningData(ServerPlayerEntity player) {
+            public GolemOpenData getScreenOpeningData(ServerPlayer player) {
                 return openData;
             }
 
             @Override
-            public Text getDisplayName() {
-                return Text.translatable("screen.gold_golem.inventory");
+            public Component getDisplayName() {
+                return Component.translatable("screen.gold_golem.inventory");
             }
 
             @Override
-            public ScreenHandler createMenu(int syncId, PlayerInventory playerInventory, PlayerEntity ignored) {
+            public AbstractContainerMenu createMenu(int syncId, Inventory playerInventory, Player ignored) {
                 return new GolemInventoryScreenHandler(syncId, playerInventory, golemInventory, openData);
             }
         });
 
         // Send initial sync to the opener
-        var world = player.getEntityWorld();
-        var e = world.getEntityById(entityId);
+        var world = player.level();
+        var e = world.getEntity(entityId);
         if (e instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
             BuildMode mode = golem.getBuildMode();
 
@@ -152,7 +151,7 @@ public final class GolemScreens {
     /**
      * Send group mode state using the generic payload.
      */
-    private static void sendGroupModeSync(ServerPlayerEntity player, ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem, BuildMode mode) {
+    private static void sendGroupModeSync(ServerPlayer player, ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem, BuildMode mode) {
         int entityId = golem.getId();
 
         // Initialize groups on first open if empty

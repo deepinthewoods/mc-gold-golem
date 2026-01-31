@@ -1,8 +1,8 @@
 package ninja.trek.mc.goldgolem.world.entity;
 
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Encapsulates arm animation state and logic for GoldGolemEntity.
@@ -25,8 +25,8 @@ public class ArmAnimationState {
     private boolean rightHandJustActivated = false;
 
     // Target block positions for arm pointing
-    private Vec3d leftArmTargetBlock = null;
-    private Vec3d rightArmTargetBlock = null;
+    private Vec3 leftArmTargetBlock = null;
+    private Vec3 rightArmTargetBlock = null;
 
     // Next block positions for smooth transitions
     private BlockPos nextLeftBlock = null;
@@ -63,7 +63,7 @@ public class ArmAnimationState {
      * @param isLeft true for left hand, false for right hand
      * @param target Block position the arm should point at
      */
-    public void beginAnimation(boolean isLeft, Vec3d target) {
+    public void beginAnimation(boolean isLeft, Vec3 target) {
         if (isLeft) {
             leftHandAnimationTick = 0;
             leftArmTargetBlock = target;
@@ -104,7 +104,7 @@ public class ArmAnimationState {
         if (leftArmTargetBlock != null) {
             updateArmToTarget(entity, true, leftArmTargetBlock,
                     leftHandAnimationTick >= 6 && nextLeftBlock != null
-                            ? new Vec3d(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5)
+                            ? new Vec3(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5)
                             : null);
         } else if (leftHandAnimationTick >= 0) {
             // Animation active but no block position - use default "placing" pose
@@ -123,7 +123,7 @@ public class ArmAnimationState {
         if (rightArmTargetBlock != null) {
             updateArmToTarget(entity, false, rightArmTargetBlock,
                     rightHandAnimationTick >= 6 && nextRightBlock != null
-                            ? new Vec3d(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5)
+                            ? new Vec3(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5)
                             : null);
         } else if (rightHandAnimationTick >= 0) {
             // Animation active but no block position - use default "placing" pose
@@ -139,10 +139,10 @@ public class ArmAnimationState {
         }
     }
 
-    private void updateArmToTarget(GoldGolemEntity entity, boolean isLeft, Vec3d targetBlock, Vec3d transitionTarget) {
+    private void updateArmToTarget(GoldGolemEntity entity, boolean isLeft, Vec3 targetBlock, Vec3 transitionTarget) {
         double armOffsetX = isLeft ? -0.3 : 0.3;
-        Vec3d armPos = new Vec3d(entity.getX() + armOffsetX, entity.getY() + 1.0, entity.getZ());
-        Vec3d targetPos = transitionTarget != null ? transitionTarget : targetBlock;
+        Vec3 armPos = new Vec3(entity.getX() + armOffsetX, entity.getY() + 1.0, entity.getZ());
+        Vec3 targetPos = transitionTarget != null ? transitionTarget : targetBlock;
 
         // Calculate direction to target in world space
         double dx = targetPos.x - armPos.x;
@@ -155,7 +155,7 @@ public class ArmAnimationState {
         // Add 180° because arm default is down, pitch rotates to horizontal pointing backward (-Z),
         // so yaw=0 is backward and yaw=180 is forward
         float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-        float armYaw = worldYaw - entity.getBodyYaw() + 180.0f;
+        float armYaw = worldYaw - entity.getVisualRotationYInDegrees() + 180.0f;
         // Normalize to -180 to 180
         while (armYaw > 180) armYaw -= 360;
         while (armYaw < -180) armYaw += 360;
@@ -206,11 +206,11 @@ public class ArmAnimationState {
         float progress = 1.0f - (armSwingTimer / (float) ARM_SWING_DURATION_TICKS);
         float prevLeftTarget = -leftArmTarget;
         float prevRightTarget = -rightArmTarget;
-        leftArmPitch = MathHelper.lerp(progress, prevLeftTarget, leftArmTarget);
-        rightArmPitch = MathHelper.lerp(progress, prevRightTarget, rightArmTarget);
+        leftArmPitch = Mth.lerp(progress, prevLeftTarget, leftArmTarget);
+        rightArmPitch = Mth.lerp(progress, prevRightTarget, rightArmTarget);
         // Reset yaw to forward during walking
-        leftArmYaw = MathHelper.lerp(0.2f, leftArmYaw, 0.0f);
-        rightArmYaw = MathHelper.lerp(0.2f, rightArmYaw, 0.0f);
+        leftArmYaw = Mth.lerp(0.2f, leftArmYaw, 0.0f);
+        rightArmYaw = Mth.lerp(0.2f, rightArmYaw, 0.0f);
         armSwingTimer--;
     }
 
@@ -218,10 +218,10 @@ public class ArmAnimationState {
      * Return arms to idle/neutral position.
      */
     public void updateIdleAnimation() {
-        leftArmPitch = MathHelper.lerp(0.1f, leftArmPitch, 0.0f);
-        rightArmPitch = MathHelper.lerp(0.1f, rightArmPitch, 0.0f);
-        leftArmYaw = MathHelper.lerp(0.1f, leftArmYaw, 0.0f);
-        rightArmYaw = MathHelper.lerp(0.1f, rightArmYaw, 0.0f);
+        leftArmPitch = Mth.lerp(0.1f, leftArmPitch, 0.0f);
+        rightArmPitch = Mth.lerp(0.1f, rightArmPitch, 0.0f);
+        leftArmYaw = Mth.lerp(0.1f, leftArmYaw, 0.0f);
+        rightArmYaw = Mth.lerp(0.1f, rightArmYaw, 0.0f);
         armSwingTimer = 0;
     }
 
@@ -279,8 +279,8 @@ public class ArmAnimationState {
     public int getRightHandAnimationTick() { return rightHandAnimationTick; }
     public boolean isLeftHandJustActivated() { return leftHandJustActivated; }
     public boolean isRightHandJustActivated() { return rightHandJustActivated; }
-    public Vec3d getLeftArmTargetBlock() { return leftArmTargetBlock; }
-    public Vec3d getRightArmTargetBlock() { return rightArmTargetBlock; }
+    public Vec3 getLeftArmTargetBlock() { return leftArmTargetBlock; }
+    public Vec3 getRightArmTargetBlock() { return rightArmTargetBlock; }
     public BlockPos getNextLeftBlock() { return nextLeftBlock; }
     public BlockPos getNextRightBlock() { return nextRightBlock; }
     public float getLeftArmYaw() { return leftArmYaw; }
@@ -299,8 +299,8 @@ public class ArmAnimationState {
     public void setRightHandAnimationTick(int tick) { this.rightHandAnimationTick = tick; }
     public void setLeftHandJustActivated(boolean activated) { this.leftHandJustActivated = activated; }
     public void setRightHandJustActivated(boolean activated) { this.rightHandJustActivated = activated; }
-    public void setLeftArmTargetBlock(Vec3d target) { this.leftArmTargetBlock = target; }
-    public void setRightArmTargetBlock(Vec3d target) { this.rightArmTargetBlock = target; }
+    public void setLeftArmTargetBlock(Vec3 target) { this.leftArmTargetBlock = target; }
+    public void setRightArmTargetBlock(Vec3 target) { this.rightArmTargetBlock = target; }
     public void setNextLeftBlock(BlockPos pos) { this.nextLeftBlock = pos; }
     public void setNextRightBlock(BlockPos pos) { this.nextRightBlock = pos; }
     public void setLeftArmYaw(float yaw) { this.leftArmYaw = yaw; }

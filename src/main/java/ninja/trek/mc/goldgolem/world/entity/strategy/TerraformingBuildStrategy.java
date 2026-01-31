@@ -1,19 +1,17 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 /**
  * Strategy for Terraforming mode.
@@ -67,7 +65,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         tickTerraformingMode(golem);
     }
 
@@ -84,7 +82,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         // Save origin
         if (origin != null) {
             nbt.putInt("OriginX", origin.getX());
@@ -125,7 +123,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             nbt.putInt("SkelTypesCount", skeletonTypes.size());
             int idx = 0;
             for (Block block : skeletonTypes) {
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
+                String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString();
                 nbt.putString("SkelType" + idx, blockId);
                 idx++;
             }
@@ -135,20 +133,20 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
 
         // Save planner state
         if (planner != null) {
-            NbtCompound plannerNbt = new NbtCompound();
+            CompoundTag plannerNbt = new CompoundTag();
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
+    public void readNbt(CompoundTag nbt) {
         // Load origin
         if (nbt.contains("OriginX")) {
             origin = new BlockPos(
-                nbt.getInt("OriginX", 0),
-                nbt.getInt("OriginY", 0),
-                nbt.getInt("OriginZ", 0)
+                nbt.getIntOr("OriginX", 0),
+                nbt.getIntOr("OriginY", 0),
+                nbt.getIntOr("OriginZ", 0)
             );
         } else {
             origin = null;
@@ -157,30 +155,30 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         // Load start position
         if (nbt.contains("StartX")) {
             startPos = new BlockPos(
-                nbt.getInt("StartX", 0),
-                nbt.getInt("StartY", 0),
-                nbt.getInt("StartZ", 0)
+                nbt.getIntOr("StartX", 0),
+                nbt.getIntOr("StartY", 0),
+                nbt.getIntOr("StartZ", 0)
             );
         } else {
             startPos = null;
         }
 
         // Load bounds and progress
-        minY = nbt.getInt("MinY", 0);
-        maxY = nbt.getInt("MaxY", 0);
-        currentY = nbt.getInt("CurrentY", 0);
-        layerLoaded = nbt.getBoolean("LayerLoaded", false);
-        lowestLoadedY = nbt.getInt("LowestLoadedY", 0);
-        highestLoadedY = nbt.getInt("HighestLoadedY", -1);
+        minY = nbt.getIntOr("MinY", 0);
+        maxY = nbt.getIntOr("MaxY", 0);
+        currentY = nbt.getIntOr("CurrentY", 0);
+        layerLoaded = nbt.getBooleanOr("LayerLoaded", false);
+        lowestLoadedY = nbt.getIntOr("LowestLoadedY", 0);
+        highestLoadedY = nbt.getIntOr("HighestLoadedY", -1);
 
         // Load skeleton blocks
-        int skelCount = nbt.getInt("SkeletonCount", 0);
+        int skelCount = nbt.getIntOr("SkeletonCount", 0);
         if (skelCount > 0) {
             skeletonBlocks = new ArrayList<>();
             for (int i = 0; i < skelCount; i++) {
-                int x = nbt.getInt("Skel" + i + "X", 0);
-                int y = nbt.getInt("Skel" + i + "Y", 0);
-                int z = nbt.getInt("Skel" + i + "Z", 0);
+                int x = nbt.getIntOr("Skel" + i + "X", 0);
+                int y = nbt.getIntOr("Skel" + i + "Y", 0);
+                int z = nbt.getIntOr("Skel" + i + "Z", 0);
                 skeletonBlocks.add(new BlockPos(x, y, z));
             }
         } else {
@@ -188,15 +186,15 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Load skeleton types
-        int skelTypesCount = nbt.getInt("SkelTypesCount", 0);
+        int skelTypesCount = nbt.getIntOr("SkelTypesCount", 0);
         if (skelTypesCount > 0) {
             skeletonTypes = new HashSet<>();
             for (int i = 0; i < skelTypesCount; i++) {
-                String blockId = nbt.getString("SkelType" + i, "");
+                String blockId = nbt.getStringOr("SkelType" + i, "");
                 if (!blockId.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(blockId);
+                    var ident = net.minecraft.resources.Identifier.tryParse(blockId);
                     if (ident != null) {
-                        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
                         if (block != null) {
                             skeletonTypes.add(block);
                         }
@@ -294,7 +292,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     // ========== Polymorphic Dispatch Methods ==========
 
     @Override
-    public void writeLegacyNbt(WriteView view) {
+    public void writeLegacyNbt(ValueOutput view) {
         if (origin != null) {
             view.putInt("TFormOriginX", origin.getX());
             view.putInt("TFormOriginY", origin.getY());
@@ -327,7 +325,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             view.putInt("TFormSkelTypesCount", skeletonTypes.size());
             int idx = 0;
             for (Block block : skeletonTypes) {
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(block).toString();
+                String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString();
                 view.putString("TFormSkelType" + idx, blockId);
                 idx++;
             }
@@ -335,18 +333,18 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             view.putInt("TFormSkelTypesCount", 0);
         }
         if (planner != null) {
-            planner.writeView(view.get("TFormPlanner"));
+            planner.writeView(view.child("TFormPlanner"));
         }
     }
 
     @Override
-    public void readLegacyNbt(ReadView view) {
+    public void readLegacyNbt(ValueInput view) {
         // Load origin
         if (view.contains("TFormOriginX")) {
             origin = new BlockPos(
-                view.getInt("TFormOriginX", 0),
-                view.getInt("TFormOriginY", 0),
-                view.getInt("TFormOriginZ", 0)
+                view.getIntOr("TFormOriginX", 0),
+                view.getIntOr("TFormOriginY", 0),
+                view.getIntOr("TFormOriginZ", 0)
             );
         } else {
             origin = null;
@@ -355,27 +353,27 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         // Load start position
         if (view.contains("TFormStartX")) {
             startPos = new BlockPos(
-                view.getInt("TFormStartX", 0),
-                view.getInt("TFormStartY", 0),
-                view.getInt("TFormStartZ", 0)
+                view.getIntOr("TFormStartX", 0),
+                view.getIntOr("TFormStartY", 0),
+                view.getIntOr("TFormStartZ", 0)
             );
         } else {
             startPos = null;
         }
 
         // Load bounds and progress
-        minY = view.getInt("TFormMinY", 0);
-        maxY = view.getInt("TFormMaxY", 0);
-        currentY = view.getInt("TFormCurrentY", 0);
+        minY = view.getIntOr("TFormMinY", 0);
+        maxY = view.getIntOr("TFormMaxY", 0);
+        currentY = view.getIntOr("TFormCurrentY", 0);
 
         // Load skeleton blocks
-        int skelCount = view.getInt("TFormSkeletonCount", 0);
+        int skelCount = view.getIntOr("TFormSkeletonCount", 0);
         if (skelCount > 0) {
             skeletonBlocks = new ArrayList<>();
             for (int i = 0; i < skelCount; i++) {
-                int x = view.getInt("TFormSkel" + i + "X", 0);
-                int y = view.getInt("TFormSkel" + i + "Y", 0);
-                int z = view.getInt("TFormSkel" + i + "Z", 0);
+                int x = view.getIntOr("TFormSkel" + i + "X", 0);
+                int y = view.getIntOr("TFormSkel" + i + "Y", 0);
+                int z = view.getIntOr("TFormSkel" + i + "Z", 0);
                 skeletonBlocks.add(new BlockPos(x, y, z));
             }
         } else {
@@ -383,15 +381,15 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Load skeleton types
-        int skelTypesCount = view.getInt("TFormSkelTypesCount", 0);
+        int skelTypesCount = view.getIntOr("TFormSkelTypesCount", 0);
         if (skelTypesCount > 0) {
             skeletonTypes = new HashSet<>();
             for (int i = 0; i < skelTypesCount; i++) {
-                String blockId = view.getString("TFormSkelType" + i, "");
+                String blockId = view.getStringOr("TFormSkelType" + i, "");
                 if (!blockId.isEmpty()) {
-                    var ident = net.minecraft.util.Identifier.tryParse(blockId);
+                    var ident = net.minecraft.resources.Identifier.tryParse(blockId);
                     if (ident != null) {
-                        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
                         if (block != null) {
                             skeletonTypes.add(block);
                         }
@@ -405,7 +403,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
-            view.getOptionalReadView("TFormPlanner").ifPresent(planner::readView);
+            view.child("TFormPlanner").ifPresent(planner::readView);
         }
 
         // Rebuild shell from skeleton if we have skeleton blocks
@@ -415,7 +413,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
@@ -445,7 +443,7 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
                 double dz = golem.getZ() - (startPos.getZ() + 0.5);
                 double distSq = dx * dx + dz * dz;
                 if (distSq > 4.0) {
-                    golem.getNavigation().startMovingTo(startPos.getX() + 0.5,
+                    golem.getNavigation().moveTo(startPos.getX() + 0.5,
                         startPos.getY(), startPos.getZ() + 0.5, 1.0);
                 } else {
                     golem.getNavigation().stop();
@@ -517,17 +515,17 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
 
             planner.setBlocks(allPositions, pos -> {
                 if (minePositions.contains(pos)) {
-                    return golem.getEntityWorld().getBlockState(pos).isAir();
+                    return golem.level().getBlockState(pos).isAir();
                 }
                 BlockState expected = layerBlockStates.get(pos);
                 if (expected == null) return true;
-                BlockState current = golem.getEntityWorld().getBlockState(pos);
+                BlockState current = golem.level().getBlockState(pos);
                 return current.getBlock() == expected.getBlock();
             });
 
             // Set up exclusion zone filter
             planner.setBlockFilter(pos -> {
-                BlockPos golemFeet = golem.getBlockPos();
+                BlockPos golemFeet = golem.blockPosition();
                 int dy = pos.getY() - golemFeet.getY();
                 if (dy <= 0) return false;
                 int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
@@ -538,13 +536,13 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
 
             // Set up neighbor scorer
             planner.setBlockScorer(pos -> {
-                var world = golem.getEntityWorld();
+                var world = golem.level();
                 int neighbors = 0;
                 if (!world.getBlockState(pos.north()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.south()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.east()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.west()).isAir()) neighbors++;
-                if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.below()).isAir()) neighbors++;
                 return neighbors;
             });
 
@@ -614,9 +612,9 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         if (toPlace == null) return false;
 
         // Remove skeleton block if present
-        BlockState currentState = golem.getEntityWorld().getBlockState(pos);
+        BlockState currentState = golem.level().getBlockState(pos);
         if (skeletonTypes != null && skeletonTypes.contains(currentState.getBlock())) {
-            golem.getEntityWorld().breakBlock(pos, false);
+            golem.level().destroyBlock(pos, false);
         }
 
         boolean placed = golem.placeBlockFromInventory(pos, toPlace, nextPos, isLeftHandActive());
@@ -637,9 +635,9 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         int vertical = 0;
         int horizontal = 0;
 
-        for (BlockPos nearPos : BlockPos.iterate(
-                pos.add(-scanRadius, -scanRadius, -scanRadius),
-                pos.add(scanRadius, scanRadius, scanRadius))) {
+        for (BlockPos nearPos : BlockPos.betweenClosed(
+                pos.offset(-scanRadius, -scanRadius, -scanRadius),
+                pos.offset(scanRadius, scanRadius, scanRadius))) {
 
             if (nearPos.equals(pos)) continue;
 
@@ -731,13 +729,13 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
         // Mine actions handled separately
         if (GradientSlotUtil.isMineAction(blockId)) return null;
 
-        var ident = net.minecraft.util.Identifier.tryParse(blockId);
+        var ident = net.minecraft.resources.Identifier.tryParse(blockId);
         if (ident == null) return null;
 
-        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
         if (block == null) return null;
 
-        return block.getDefaultState();
+        return block.defaultBlockState();
     }
 
     /**
@@ -766,9 +764,9 @@ public class TerraformingBuildStrategy extends AbstractBuildStrategy {
     private boolean isTerraformingGradientMineAction(GoldGolemEntity golem, BlockPos pos) {
         int scanRadius = golem.getTerraformingScanRadius();
         int vertical = 0, horizontal = 0;
-        for (BlockPos nearPos : BlockPos.iterate(
-                pos.add(-scanRadius, -scanRadius, -scanRadius),
-                pos.add(scanRadius, scanRadius, scanRadius))) {
+        for (BlockPos nearPos : BlockPos.betweenClosed(
+                pos.offset(-scanRadius, -scanRadius, -scanRadius),
+                pos.offset(scanRadius, scanRadius, scanRadius))) {
             if (nearPos.equals(pos)) continue;
             boolean isShellOrSkeleton = false;
             if (skeletonBlocks != null && skeletonBlocks.contains(nearPos)) {

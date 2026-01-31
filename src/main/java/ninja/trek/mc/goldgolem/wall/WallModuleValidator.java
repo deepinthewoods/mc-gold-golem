@@ -1,9 +1,8 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
 
 /**
  * Validates wall modules by ensuring all gold markers yield an equivalent join slice (under rotation/mirror/±1 offset).
@@ -15,7 +14,7 @@ public final class WallModuleValidator {
         public boolean ok() { return signature != null && (error == null || error.isEmpty()); }
     }
 
-    public static Validation validate(World world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
+    public static Validation validate(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
         if (goldMarkersRel == null || goldMarkersRel.size() < 2) return new Validation(null, null, 0, "Need at least two gold markers");
         // Heuristic preferred axis: choose slice plane perpendicular to the dominant horizontal extent of the combined module
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
@@ -30,9 +29,9 @@ public final class WallModuleValidator {
         // removed console logging
         for (int i = 0; i < goldMarkersRel.size(); i++) {
             BlockPos g = goldMarkersRel.get(i);
-            BlockPos markerAbs = originAbs.add(g);
+            BlockPos markerAbs = originAbs.offset(g);
             // Ignore the pumpkin slot only for the summoning marker; compare others exactly
-            BlockPos ignoreAbsMarker = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.up() : null;
+            BlockPos ignoreAbsMarker = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.above() : null;
             var sx = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, ignoreAbsMarker);
             var sz = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, ignoreAbsMarker);
             if (sx.isEmpty() && sz.isEmpty()) {

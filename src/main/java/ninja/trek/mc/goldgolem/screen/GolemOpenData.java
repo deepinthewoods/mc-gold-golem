@@ -1,18 +1,18 @@
 package ninja.trek.mc.goldgolem.screen;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
 
 public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int slider, String jsonName) {
     public boolean sliderEnabled() { return slider == 1; }
 
-    public static final PacketCodec<RegistryByteBuf, GolemOpenData> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, GolemOpenData::entityId,
-            PacketCodecs.VAR_INT, GolemOpenData::gradientRows,
-            PacketCodecs.VAR_INT, GolemOpenData::golemSlots,
-            PacketCodecs.VAR_INT, GolemOpenData::slider,
-            PacketCodecs.STRING, GolemOpenData::jsonName,
+    public static final StreamCodec<RegistryFriendlyByteBuf, GolemOpenData> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, GolemOpenData::entityId,
+            ByteBufCodecs.VAR_INT, GolemOpenData::gradientRows,
+            ByteBufCodecs.VAR_INT, GolemOpenData::golemSlots,
+            ByteBufCodecs.VAR_INT, GolemOpenData::slider,
+            ByteBufCodecs.STRING_UTF8, GolemOpenData::jsonName,
             GolemOpenData::new
     );
 

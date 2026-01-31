@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.util.math.Direction;
-
 import java.util.*;
+import net.minecraft.core.Direction;
 
 /**
  * Cache of extracted tiles and their adjacency constraints for WFC algorithm.

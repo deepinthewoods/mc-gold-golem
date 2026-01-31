@@ -1,12 +1,10 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.block.Blocks;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
 
 /**
  * Represents a 1-wide vertical join slice lying in a plane of thickness 1 along X or Z.
@@ -30,22 +28,22 @@ public final class WallJoinSlice {
     }
 
     /** Build a slice from the plane through goldRel (relative to originAbs) along the given axis. */
-    public static Optional<WallJoinSlice> from(World world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis) {
+    public static Optional<WallJoinSlice> from(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis) {
         return fromIgnoring(world, originAbs, voxelsRel, goldRel, axis, null);
     }
 
-    public static Optional<WallJoinSlice> fromIgnoring(World world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis, BlockPos ignoreAbs) {
+    public static Optional<WallJoinSlice> fromIgnoring(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis, BlockPos ignoreAbs) {
         int planeCoord = (axis == Axis.X_THICK) ? goldRel.getX() : goldRel.getZ();
 
         // Collect all rel voxels lying in the plane
         List<BlockPos> plane = new ArrayList<>();
         for (BlockPos r : voxelsRel) {
             if ((axis == Axis.X_THICK && r.getX() == planeCoord) || (axis == Axis.Z_THICK && r.getZ() == planeCoord)) {
-                BlockPos abs = originAbs.add(r);
+                BlockPos abs = originAbs.offset(r);
                 if (ignoreAbs != null && abs.equals(ignoreAbs)) continue;
                 var st = world.getBlockState(abs);
                 // exclude snow layers and gold blocks from slice
-                if (st.isOf(Blocks.SNOW) || st.isOf(Blocks.GOLD_BLOCK)) continue;
+                if (st.is(Blocks.SNOW) || st.is(Blocks.GOLD_BLOCK)) continue;
                 if (st.isAir()) continue;
                 plane.add(r);
             }
@@ -107,8 +105,8 @@ public final class WallJoinSlice {
             int du = ((axis == Axis.X_THICK) ? r.getZ() : r.getX()) - minU;
             Point p = new Point(dy, du);
             pts.add(p);
-            var st = world.getBlockState(originAbs.add(r));
-            ids.put(p, Registries.BLOCK.getId(st.getBlock()).toString());
+            var st = world.getBlockState(originAbs.offset(r));
+            ids.put(p, BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString());
         }
         return Optional.of(new WallJoinSlice(axis, pts, ids));
     }

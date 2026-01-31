@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
 
 /**
  * Controls how the golem handles ore blocks during mining/excavation.
@@ -44,15 +43,15 @@ public enum OreMiningMode {
     /**
      * Packet codec for serializing over the network.
      */
-    public static final PacketCodec<RegistryByteBuf, OreMiningMode> PACKET_CODEC =
-            new PacketCodec<RegistryByteBuf, OreMiningMode>() {
+    public static final StreamCodec<RegistryFriendlyByteBuf, OreMiningMode> PACKET_CODEC =
+            new StreamCodec<RegistryFriendlyByteBuf, OreMiningMode>() {
                 @Override
-                public OreMiningMode decode(RegistryByteBuf buf) {
+                public OreMiningMode decode(RegistryFriendlyByteBuf buf) {
                     return fromOrdinal(buf.readVarInt());
                 }
 
                 @Override
-                public void encode(RegistryByteBuf buf, OreMiningMode value) {
+                public void encode(RegistryFriendlyByteBuf buf, OreMiningMode value) {
                     buf.writeVarInt(value.ordinal());
                 }
             };

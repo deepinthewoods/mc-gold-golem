@@ -1,11 +1,5 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
@@ -16,6 +10,12 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 /**
  * Strategy for Tower building mode.
@@ -60,7 +60,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         tickTowerMode(golem, owner);
     }
 
@@ -77,7 +77,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         nbt.putInt("CurrentLayerY", currentLayerY);
         nbt.putBoolean("LayerInitialized", layerInitialized);
         nbt.putInt("TotalHeight", totalHeight);
@@ -86,7 +86,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
         // Save planner state
         if (planner != null) {
-            NbtCompound plannerNbt = new NbtCompound();
+            CompoundTag plannerNbt = new CompoundTag();
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
@@ -96,12 +96,12 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
-        currentLayerY = nbt.getInt("CurrentLayerY", 0);
-        layerInitialized = nbt.getBoolean("LayerInitialized", false);
-        totalHeight = nbt.getInt("TotalHeight", 0);
-        lowestLoadedY = nbt.getInt("LowestLoadedY", 0);
-        highestLoadedY = nbt.getInt("HighestLoadedY", -1);
+    public void readNbt(CompoundTag nbt) {
+        currentLayerY = nbt.getIntOr("CurrentLayerY", 0);
+        layerInitialized = nbt.getBooleanOr("LayerInitialized", false);
+        totalHeight = nbt.getIntOr("TotalHeight", 0);
+        lowestLoadedY = nbt.getIntOr("LowestLoadedY", 0);
+        highestLoadedY = nbt.getIntOr("HighestLoadedY", -1);
 
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
@@ -156,7 +156,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     // ========== Polymorphic Dispatch Methods ==========
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
@@ -179,29 +179,29 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeLegacyNbt(WriteView view) {
+    public void writeLegacyNbt(ValueOutput view) {
         view.putInt("TowerCurrentY", currentLayerY);
         view.putBoolean("TowerLayerInitialized", layerInitialized);
         if (planner != null) {
-            planner.writeView(view.get("TowerPlanner"));
+            planner.writeView(view.child("TowerPlanner"));
         }
     }
 
     @Override
-    public void readLegacyNbt(ReadView view) {
-        currentLayerY = view.getInt("TowerCurrentY", 0);
-        layerInitialized = view.getBoolean("TowerLayerInitialized", false);
+    public void readLegacyNbt(ValueInput view) {
+        currentLayerY = view.getIntOr("TowerCurrentY", 0);
+        layerInitialized = view.getBooleanOr("TowerLayerInitialized", false);
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
-            view.getOptionalReadView("TowerPlanner").ifPresent(planner::readView);
+            view.child("TowerPlanner").ifPresent(planner::readView);
         }
     }
 
     // ========== Main tick logic ==========
 
-    private void tickTowerMode(GoldGolemEntity golem, PlayerEntity owner) {
+    private void tickTowerMode(GoldGolemEntity golem, Player owner) {
         if (!golem.isBuildingPaths()) return;
 
         TowerModuleTemplate template = golem.getTowerTemplate();
@@ -265,7 +265,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
             // Set up exclusion zone filter (inverted pyramid above golem)
             planner.setBlockFilter(pos -> {
-                BlockPos golemFeet = golem.getBlockPos();
+                BlockPos golemFeet = golem.blockPosition();
                 int dy = pos.getY() - golemFeet.getY();
                 if (dy <= 0) return false; // Only exclude above
                 int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
@@ -276,13 +276,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
             // Set up neighbor scorer
             planner.setBlockScorer(pos -> {
-                var world = golem.getEntityWorld();
+                var world = golem.level();
                 int neighbors = 0;
                 if (!world.getBlockState(pos.north()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.south()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.east()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.west()).isAir()) neighbors++;
-                if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.below()).isAir()) neighbors++;
                 return neighbors;
             });
 
@@ -405,7 +405,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
      * @return true if the block was placed
      */
     private boolean placeTowerBlock(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos, BlockPos nextPos) {
-        if (golem.getEntityWorld().isClient()) return false;
+        if (golem.level().isClientSide()) return false;
 
         // Get the original block state from the template
         BlockState templateState = getTowerBlockStateAt(template, origin, pos);
@@ -415,7 +415,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Use gradient sampling to potentially replace with a different block
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(templateState.getBlock()).toString();
+        String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(templateState.getBlock()).toString();
         Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
         if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
             // No group mapping, place original block
@@ -485,7 +485,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             return true;
         }
 
-        BlockState currentState = golem.getEntityWorld().getBlockState(pos);
+        BlockState currentState = golem.level().getBlockState(pos);
         return currentState.getBlock() == expectedState.getBlock();
     }
 
@@ -501,7 +501,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Check if gradient sampling applies
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
+        String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(targetState.getBlock()).toString();
         Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
         if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
             // No group mapping, use original block

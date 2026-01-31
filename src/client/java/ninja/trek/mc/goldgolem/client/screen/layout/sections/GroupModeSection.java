@@ -1,17 +1,17 @@
 package ninja.trek.mc.goldgolem.client.screen.layout.sections;
 
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.client.screen.GroupModeStrategy;
 import ninja.trek.mc.goldgolem.client.screen.layout.AbstractGuiSection;
 import ninja.trek.mc.goldgolem.client.screen.layout.LayoutContext;
 import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 
 import java.util.*;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * Section for group-based build modes (WALL, TOWER, TREE).
@@ -26,7 +26,7 @@ public class GroupModeSection extends AbstractGuiSection {
     private static final int SCROLL_BUTTON_HEIGHT = 12;
 
     private final GroupModeStrategy strategy;
-    private final TextRenderer textRenderer;
+    private final Font textRenderer;
     private int maxVisibleRows = 6; // Default, will be calculated dynamically
 
     /**
@@ -35,7 +35,7 @@ public class GroupModeSection extends AbstractGuiSection {
      * @param strategy Group mode strategy (Wall, Tower, or Tree)
      * @param textRenderer Text renderer for block counts
      */
-    public GroupModeSection(GroupModeStrategy strategy, TextRenderer textRenderer) {
+    public GroupModeSection(GroupModeStrategy strategy, Font textRenderer) {
         this.strategy = strategy;
         this.textRenderer = textRenderer;
     }
@@ -65,7 +65,7 @@ public class GroupModeSection extends AbstractGuiSection {
     }
 
     @Override
-    public void renderBackground(DrawContext context, int guiX, int guiY) {
+    public void renderBackground(GuiGraphics context, int guiX, int guiY) {
         int baseX = guiX + 8;
         int baseY = guiY + y;
 
@@ -94,7 +94,7 @@ public class GroupModeSection extends AbstractGuiSection {
     /**
      * Render a single group row.
      */
-    private void renderGroupRow(DrawContext context, int guiX, int guiY,
+    private void renderGroupRow(GuiGraphics context, int guiX, int guiY,
                                   int baseX, int rowY, int groupIdx, int visualRow) {
         // Render icons on the left
         renderGroupIcons(context, guiX, rowY, groupIdx);
@@ -111,7 +111,7 @@ public class GroupModeSection extends AbstractGuiSection {
     /**
      * Render group icons (blocks assigned to this group).
      */
-    private void renderGroupIcons(DrawContext context, int guiX, int rowY, int groupIdx) {
+    private void renderGroupIcons(GuiGraphics context, int guiX, int rowY, int groupIdx) {
         int iconX = guiX + strategy.getIconXOffset();
 
         // Build map of blocks to groups
@@ -130,11 +130,11 @@ public class GroupModeSection extends AbstractGuiSection {
             String blockId = blocks.get(i);
             Identifier ident = Identifier.tryParse(blockId);
             if (ident != null) {
-                var block = Registries.BLOCK.get(ident);
+                var block = BuiltInRegistries.BLOCK.getValue(ident);
                 if (block != null) {
                     ItemStack icon = new ItemStack(block.asItem());
                     int ix = iconX - i * 18; // Stack leftward
-                    context.drawItem(icon, ix, rowY);
+                    context.renderItem(icon, ix, rowY);
                 }
             }
         }
@@ -143,7 +143,7 @@ public class GroupModeSection extends AbstractGuiSection {
     /**
      * Render block slots for a group.
      */
-    private void renderBlockSlots(DrawContext context, int baseX, int rowY, int groupIdx) {
+    private void renderBlockSlots(GuiGraphics context, int baseX, int rowY, int groupIdx) {
         List<String> flatSlots = strategy.getGroupFlatSlots();
         int borderColor = 0xFF555555;
         int innerColor = 0xFF1C1C1C;
@@ -164,15 +164,15 @@ public class GroupModeSection extends AbstractGuiSection {
                     if (GradientSlotUtil.isMineAction(blockId)) {
                         var toolItem = GradientSlotUtil.getToolItem(blockId);
                         if (toolItem != null) {
-                            context.drawItem(new ItemStack(toolItem), slotX, rowY);
+                            context.renderItem(new ItemStack(toolItem), slotX, rowY);
                         }
                     } else {
                         Identifier ident = Identifier.tryParse(blockId);
                         if (ident != null) {
-                            var block = Registries.BLOCK.get(ident);
+                            var block = BuiltInRegistries.BLOCK.getValue(ident);
                             if (block != null) {
                                 ItemStack stack = new ItemStack(block.asItem());
-                                context.drawItem(stack, slotX, rowY);
+                                context.renderItem(stack, slotX, rowY);
                             }
                         }
                     }
@@ -184,7 +184,7 @@ public class GroupModeSection extends AbstractGuiSection {
     /**
      * Render block counts next to icons (Tower mode).
      */
-    private void renderBlockCounts(DrawContext context, int guiX, int rowY, int groupIdx) {
+    private void renderBlockCounts(GuiGraphics context, int guiX, int rowY, int groupIdx) {
         int iconX = guiX + strategy.getIconXOffset();
         Map<String, Integer> blockCounts = strategy.getBlockCounts();
 
@@ -208,20 +208,20 @@ public class GroupModeSection extends AbstractGuiSection {
             int textX = ix + 24; // Shifted right to avoid overlap
             int textY = rowY + 4;
 
-            context.drawText(textRenderer, Text.literal(countText), textX, textY, 0xFFFFFFFF, true);
+            context.drawString(textRenderer, Component.literal(countText), textX, textY, 0xFFFFFFFF, true);
         }
     }
 
     /**
      * Render scroll buttons.
      */
-    private void renderScrollButtons(DrawContext context, int guiX, int guiY) {
+    private void renderScrollButtons(GuiGraphics context, int guiX, int guiY) {
         // Scroll buttons would be rendered here
         // For now, placeholder - will be implemented with actual button widgets
     }
 
     @Override
-    public void renderForeground(DrawContext context, int guiX, int guiY, int mouseX, int mouseY) {
+    public void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY) {
         // No foreground rendering needed currently
     }
 

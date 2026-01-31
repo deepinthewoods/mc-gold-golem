@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.util.math.BlockPos;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
 
 /**
  * Captured wall-mode data from summon-time scan.

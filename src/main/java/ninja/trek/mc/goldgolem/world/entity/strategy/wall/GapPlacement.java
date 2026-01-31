@@ -1,12 +1,12 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy.wall;
 
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy;
 
 import java.util.Collections;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Represents a gap/corner turn placement (no actual blocks, just direction change).
@@ -17,7 +17,7 @@ public final class GapPlacement extends ModulePlacement {
     private final int dirx;
     private final int dirz;
 
-    public GapPlacement(int dx, int dz, Vec3d anchor, Vec3d end, int dirx, int dirz) {
+    public GapPlacement(int dx, int dz, Vec3 anchor, Vec3 end, int dirx, int dirz) {
         super(-1, 0, false, anchor, end);
         this.dx = dx;
         this.dz = dz;

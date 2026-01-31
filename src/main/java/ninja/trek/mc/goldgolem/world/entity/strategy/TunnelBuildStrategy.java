@@ -1,26 +1,26 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.BlockItem;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.RegistryKeys;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.enchantment.EnchantmentHelper;
-import net.minecraft.enchantment.Enchantments;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.OreMiningMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.Container;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 /**
  * Strategy for Tunnel mode.
@@ -73,7 +73,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         if (entity == null) return;
         tickTunnelMode();
     }
@@ -105,7 +105,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
         if (stack.isEmpty()) return false;
         var item = stack.getItem();
         if (item == Items.TORCH || item == Items.SOUL_TORCH) return true;
-        String itemId = Registries.ITEM.getId(item).toString();
+        String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
         return itemId.contains("_pickaxe") || itemId.contains("_shovel") ||
                itemId.contains("_axe") || itemId.contains("_hoe") || itemId.contains("_sword");
     }
@@ -204,7 +204,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     // ==================== NBT Serialization ====================
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         if (chestPos1 != null) {
             nbt.putInt("Chest1X", chestPos1.getX());
             nbt.putInt("Chest1Y", chestPos1.getY());
@@ -237,30 +237,30 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
+    public void readNbt(CompoundTag nbt) {
         if (nbt.contains("Chest1X")) {
-            chestPos1 = new BlockPos(nbt.getInt("Chest1X", 0), nbt.getInt("Chest1Y", 0), nbt.getInt("Chest1Z", 0));
+            chestPos1 = new BlockPos(nbt.getIntOr("Chest1X", 0), nbt.getIntOr("Chest1Y", 0), nbt.getIntOr("Chest1Z", 0));
         } else { chestPos1 = null; }
         if (nbt.contains("Chest2X")) {
-            chestPos2 = new BlockPos(nbt.getInt("Chest2X", 0), nbt.getInt("Chest2Y", 0), nbt.getInt("Chest2Z", 0));
+            chestPos2 = new BlockPos(nbt.getIntOr("Chest2X", 0), nbt.getIntOr("Chest2Y", 0), nbt.getIntOr("Chest2Z", 0));
         } else { chestPos2 = null; }
         if (nbt.contains("Chest3X")) {
-            chestPos3 = new BlockPos(nbt.getInt("Chest3X", 0), nbt.getInt("Chest3Y", 0), nbt.getInt("Chest3Z", 0));
+            chestPos3 = new BlockPos(nbt.getIntOr("Chest3X", 0), nbt.getIntOr("Chest3Y", 0), nbt.getIntOr("Chest3Z", 0));
         } else { chestPos3 = null; }
         if (nbt.contains("TunnelDir")) {
-            try { tunnelDir = Direction.valueOf(nbt.getString("TunnelDir", "NORTH")); }
+            try { tunnelDir = Direction.valueOf(nbt.getStringOr("TunnelDir", "NORTH")); }
             catch (IllegalArgumentException ignored) { tunnelDir = null; }
         }
         if (nbt.contains("StartX")) {
-            startPos = new BlockPos(nbt.getInt("StartX", 0), nbt.getInt("StartY", 0), nbt.getInt("StartZ", 0));
+            startPos = new BlockPos(nbt.getIntOr("StartX", 0), nbt.getIntOr("StartY", 0), nbt.getIntOr("StartZ", 0));
         } else { startPos = null; }
-        width = nbt.getInt("Width", 3);
-        height = nbt.getInt("Height", 3);
-        oreMiningMode = OreMiningMode.fromOrdinal(nbt.getInt("OreMiningMode", 0));
-        sliceProgress = nbt.getInt("SliceProgress", 0);
-        currentChestIndex = nbt.getInt("CurrentChestIndex", 0);
-        returningToChest = nbt.getBoolean("ReturningToChest", false);
-        idleAtStart = nbt.getBoolean("IdleAtStart", false);
+        width = nbt.getIntOr("Width", 3);
+        height = nbt.getIntOr("Height", 3);
+        oreMiningMode = OreMiningMode.fromOrdinal(nbt.getIntOr("OreMiningMode", 0));
+        sliceProgress = nbt.getIntOr("SliceProgress", 0);
+        currentChestIndex = nbt.getIntOr("CurrentChestIndex", 0);
+        returningToChest = nbt.getBooleanOr("ReturningToChest", false);
+        idleAtStart = nbt.getBooleanOr("IdleAtStart", false);
         readBaseMiningNbt(nbt);
     }
 
@@ -285,7 +285,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void writeLegacyNbt(WriteView view) {
+    public void writeLegacyNbt(ValueOutput view) {
         if (chestPos1 != null) {
             view.putInt("TunnelChest1X", chestPos1.getX());
             view.putInt("TunnelChest1Y", chestPos1.getY());
@@ -320,32 +320,32 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void readLegacyNbt(ReadView view) {
+    public void readLegacyNbt(ValueInput view) {
         if (view.contains("TunnelChest1X")) {
-            chestPos1 = new BlockPos(view.getInt("TunnelChest1X", 0), view.getInt("TunnelChest1Y", 0), view.getInt("TunnelChest1Z", 0));
+            chestPos1 = new BlockPos(view.getIntOr("TunnelChest1X", 0), view.getIntOr("TunnelChest1Y", 0), view.getIntOr("TunnelChest1Z", 0));
         } else { chestPos1 = null; }
         if (view.contains("TunnelChest2X")) {
-            chestPos2 = new BlockPos(view.getInt("TunnelChest2X", 0), view.getInt("TunnelChest2Y", 0), view.getInt("TunnelChest2Z", 0));
+            chestPos2 = new BlockPos(view.getIntOr("TunnelChest2X", 0), view.getIntOr("TunnelChest2Y", 0), view.getIntOr("TunnelChest2Z", 0));
         } else { chestPos2 = null; }
         if (view.contains("TunnelChest3X")) {
-            chestPos3 = new BlockPos(view.getInt("TunnelChest3X", 0), view.getInt("TunnelChest3Y", 0), view.getInt("TunnelChest3Z", 0));
+            chestPos3 = new BlockPos(view.getIntOr("TunnelChest3X", 0), view.getIntOr("TunnelChest3Y", 0), view.getIntOr("TunnelChest3Z", 0));
         } else { chestPos3 = null; }
-        String dir = view.getString("TunnelDir", null);
+        String dir = view.getStringOr("TunnelDir", null);
         if (dir != null) {
             try { tunnelDir = Direction.valueOf(dir); }
             catch (IllegalArgumentException ignored) { tunnelDir = null; }
         }
         if (view.contains("TunnelStartX")) {
-            startPos = new BlockPos(view.getInt("TunnelStartX", 0), view.getInt("TunnelStartY", 0), view.getInt("TunnelStartZ", 0));
+            startPos = new BlockPos(view.getIntOr("TunnelStartX", 0), view.getIntOr("TunnelStartY", 0), view.getIntOr("TunnelStartZ", 0));
         } else { startPos = null; }
-        width = view.getInt("TunnelWidth", 3);
-        height = view.getInt("TunnelHeight", 3);
-        oreMiningMode = OreMiningMode.fromOrdinal(view.getInt("TunnelOreMiningMode", 0));
-        sliceProgress = view.getInt("TunnelSliceProgress", 0);
-        currentChestIndex = view.getInt("TunnelCurrentChestIndex", 0);
-        returningToChest = view.getBoolean("TunnelReturningToChest", false);
-        idleAtStart = view.getBoolean("TunnelIdleAtStart", false);
-        String block = view.getString("TunnelBuildingBlock", null);
+        width = view.getIntOr("TunnelWidth", 3);
+        height = view.getIntOr("TunnelHeight", 3);
+        oreMiningMode = OreMiningMode.fromOrdinal(view.getIntOr("TunnelOreMiningMode", 0));
+        sliceProgress = view.getIntOr("TunnelSliceProgress", 0);
+        currentChestIndex = view.getIntOr("TunnelCurrentChestIndex", 0);
+        returningToChest = view.getBooleanOr("TunnelReturningToChest", false);
+        idleAtStart = view.getBooleanOr("TunnelIdleAtStart", false);
+        String block = view.getStringOr("TunnelBuildingBlock", null);
         buildingBlockType = (block != null && !block.isEmpty()) ? block : null;
     }
 
@@ -355,7 +355,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
@@ -387,7 +387,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
             double dz = entity.getZ() - (startPos.getZ() + 0.5);
             double distSq = dx * dx + dz * dz;
             if (distSq > 4.0) {
-                entity.getNavigation().startMovingTo(startPos.getX() + 0.5,
+                entity.getNavigation().moveTo(startPos.getX() + 0.5,
                     startPos.getY(), startPos.getZ() + 0.5, 1.0);
             } else {
                 entity.getNavigation().stop();
@@ -422,7 +422,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
         double distSq = dx * dx + dz * dz;
 
         if (distSq > 4.0) {
-            entity.getNavigation().startMovingTo(targetChest.getX() + 0.5,
+            entity.getNavigation().moveTo(targetChest.getX() + 0.5,
                 targetChest.getY(), targetChest.getZ() + 0.5, 1.1);
 
             double movedX = entity.getX() - lastX;
@@ -461,10 +461,10 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     private boolean isInventoryFullAfterDeposit() {
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
         int emptySlots = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            if (inventory.getStack(i).isEmpty()) emptySlots++;
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (inventory.getItem(i).isEmpty()) emptySlots++;
         }
         return emptySlots < 2;
     }
@@ -498,13 +498,13 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
         }
 
         // Assign targets to each hand
-        if (leftTarget == null || entity.getEntityWorld().getBlockState(leftTarget).isAir()) {
+        if (leftTarget == null || entity.level().getBlockState(leftTarget).isAir()) {
             leftTarget = getNextBlock(sliceBlocks, null);
             leftBreakProgress = 0;
             leftSwingTick = 0;
             leftTool = ItemStack.EMPTY;
         }
-        if (rightTarget == null || entity.getEntityWorld().getBlockState(rightTarget).isAir()) {
+        if (rightTarget == null || entity.level().getBlockState(rightTarget).isAir()) {
             rightTarget = getNextBlock(sliceBlocks, leftTarget);
             rightBreakProgress = 0;
             rightSwingTick = 0;
@@ -519,9 +519,9 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
             double midX = (leftTarget.getX() + rightTarget.getX()) / 2.0 + 0.5;
             double midY = Math.min(leftTarget.getY(), rightTarget.getY());
             double midZ = (leftTarget.getZ() + rightTarget.getZ()) / 2.0 + 0.5;
-            entity.getNavigation().startMovingTo(midX, midY, midZ, 1.1);
+            entity.getNavigation().moveTo(midX, midY, midZ, 1.1);
         } else {
-            entity.getNavigation().startMovingTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
+            entity.getNavigation().moveTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
         }
 
         // Mine with left hand
@@ -548,7 +548,7 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     private BlockPos getNextBlock(List<BlockPos> blocks, BlockPos exclude) {
         for (BlockPos pos : blocks) {
             if (pos.equals(exclude)) continue;
-            BlockState state = entity.getEntityWorld().getBlockState(pos);
+            BlockState state = entity.level().getBlockState(pos);
             if (!state.isAir() && shouldMineBlock(pos)) return pos;
         }
         return null;
@@ -568,12 +568,12 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
         // Center offset for width (e.g., width=3 -> offsets -1,0,1; width=1 -> offset 0)
         int halfWidth = (width - 1) / 2;
 
-        BlockPos sliceCenter = startPos.offset(tunnelDir, slice);
+        BlockPos sliceCenter = startPos.relative(tunnelDir, slice);
 
         for (int w = -halfWidth; w <= halfWidth; w++) {
-            BlockPos columnBase = sliceCenter.offset(perpDir, w);
+            BlockPos columnBase = sliceCenter.relative(perpDir, w);
             for (int dy = 0; dy < height; dy++) {
-                blocks.add(columnBase.up(dy));
+                blocks.add(columnBase.above(dy));
             }
         }
         return blocks;
@@ -608,48 +608,48 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     private boolean needsFloorSupport() {
-        if (entity.isOnGround()) {
+        if (entity.onGround()) {
             ticksInAir = 0;
             return false;
         }
         ticksInAir++;
         if (ticksInAir < TICKS_IN_AIR_THRESHOLD) return false;
-        BlockPos below = entity.getBlockPos().down();
-        BlockPos twoBelow = below.down();
-        return entity.getEntityWorld().getBlockState(below).isAir()
-            && entity.getEntityWorld().getBlockState(twoBelow).isAir();
+        BlockPos below = entity.blockPosition().below();
+        BlockPos twoBelow = below.below();
+        return entity.level().getBlockState(below).isAir()
+            && entity.level().getBlockState(twoBelow).isAir();
     }
 
     private boolean isInventoryFull() {
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
         int emptySlots = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            if (inventory.getStack(i).isEmpty()) emptySlots++;
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (inventory.getItem(i).isEmpty()) emptySlots++;
         }
         return emptySlots < 2;
     }
 
     private boolean isInventoryEmpty() {
-        Inventory inventory = entity.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        Container inventory = entity.getInventory();
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (!stack.isEmpty() && !isToolOrTorch(stack)) return false;
         }
         return true;
     }
 
     private void placeFloorBlocks() {
-        if (entity.getEntityWorld().isClient()) return;
-        BlockPos below = entity.getBlockPos().down();
-        if (!entity.getEntityWorld().getBlockState(below).isAir()) return;
+        if (entity.level().isClientSide()) return;
+        BlockPos below = entity.blockPosition().below();
+        if (!entity.level().getBlockState(below).isAir()) return;
 
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
         if (buildingBlockType == null) {
-            for (int i = 0; i < inventory.size(); i++) {
-                ItemStack stack = inventory.getStack(i);
+            for (int i = 0; i < inventory.getContainerSize(); i++) {
+                ItemStack stack = inventory.getItem(i);
                 if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
                 if (!isGravityBlock(blockItem.getBlock())) {
-                    buildingBlockType = Registries.BLOCK.getId(blockItem.getBlock()).toString();
+                    buildingBlockType = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
                     break;
                 }
             }
@@ -659,16 +659,16 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
             }
         }
 
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-            String blockId = Registries.BLOCK.getId(blockItem.getBlock()).toString();
+            String blockId = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
             if (blockId.equals(buildingBlockType)) {
-                BlockState state = blockItem.getBlock().getDefaultState();
-                entity.getEntityWorld().setBlockState(below, state);
+                BlockState state = blockItem.getBlock().defaultBlockState();
+                entity.level().setBlockAndUpdate(below, state);
                 entity.beginHandAnimation(isLeftHandActive(), below, null);
                 alternateHand();
-                stack.decrement(1);
+                stack.shrink(1);
                 return;
             }
         }
@@ -676,15 +676,15 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     private boolean shouldMineBlock(BlockPos pos) {
-        BlockState state = entity.getEntityWorld().getBlockState(pos);
-        if (state.isAir() || state.getHardness(entity.getEntityWorld(), pos) < 0) return false;
+        BlockState state = entity.level().getBlockState(pos);
+        if (state.isAir() || state.getDestroySpeed(entity.level(), pos) < 0) return false;
 
-        String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+        String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
         if (isChestBlock(blockId)) return false;
         if (isTorchBlock(blockId)) return false;
 
         // Don't mine non-solid blocks on the floor
-        if (pos.getY() == startPos.getY() && state.getCollisionShape(entity.getEntityWorld(), pos).isEmpty()) {
+        if (pos.getY() == startPos.getY() && state.getCollisionShape(entity.level(), pos).isEmpty()) {
             return false;
         }
 
@@ -703,20 +703,20 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
     }
 
     private boolean hasValidEnchantedTool() {
-        Inventory inventory = entity.getInventory();
-        var world = entity.getEntityWorld();
+        Container inventory = entity.getInventory();
+        var world = entity.level();
         if (world == null) return false;
 
-        var registryManager = world.getRegistryManager();
-        var enchantmentRegistry = registryManager.getOrThrow(RegistryKeys.ENCHANTMENT);
-        var silkTouchEntry = enchantmentRegistry.getEntry(Enchantments.SILK_TOUCH.getValue());
-        var fortuneEntry = enchantmentRegistry.getEntry(Enchantments.FORTUNE.getValue());
+        var registryManager = world.registryAccess();
+        var enchantmentRegistry = registryManager.lookupOrThrow(Registries.ENCHANTMENT);
+        var silkTouchEntry = enchantmentRegistry.get(Enchantments.SILK_TOUCH.identifier());
+        var fortuneEntry = enchantmentRegistry.get(Enchantments.FORTUNE.identifier());
 
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
-            if (silkTouchEntry.isPresent() && EnchantmentHelper.getLevel(silkTouchEntry.get(), stack) > 0) return true;
-            if (fortuneEntry.isPresent() && EnchantmentHelper.getLevel(fortuneEntry.get(), stack) >= 3) return true;
+            if (silkTouchEntry.isPresent() && EnchantmentHelper.getItemEnchantmentLevel(silkTouchEntry.get(), stack) > 0) return true;
+            if (fortuneEntry.isPresent() && EnchantmentHelper.getItemEnchantmentLevel(fortuneEntry.get(), stack) >= 3) return true;
         }
         return false;
     }

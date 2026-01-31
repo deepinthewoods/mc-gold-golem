@@ -1,13 +1,11 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Extracts NxNxN tiles from input modules using a sliding window approach.
@@ -19,14 +17,14 @@ public final class TreeTileExtractor {
      * Extracts tiles from the given definition using the specified tiling preset.
      * Returns a TreeTileCache containing all tiles and adjacency rules.
      */
-    public static TreeTileCache extract(World world, TreeDefinition def, TilingPreset preset, BlockPos origin) {
+    public static TreeTileCache extract(Level world, TreeDefinition def, TilingPreset preset, BlockPos origin) {
         return extract(world, def, preset, origin, null);
     }
 
     /**
      * Extracts tiles using stored block states when available (for resurrection snapshots).
      */
-    public static TreeTileCache extract(World world, TreeDefinition def, TilingPreset preset, BlockPos origin,
+    public static TreeTileCache extract(Level world, TreeDefinition def, TilingPreset preset, BlockPos origin,
                                         List<Map<BlockPos, BlockState>> storedModuleBlocks) {
         int tileSize = preset.getSize();
         List<TreeTile> allTiles = new ArrayList<>();
@@ -49,7 +47,7 @@ public final class TreeTileExtractor {
             }
             if (moduleBlocks.isEmpty()) {
                 for (BlockPos relPos : module.voxels) {
-                    BlockPos absPos = origin.add(relPos);
+                    BlockPos absPos = origin.offset(relPos);
                     BlockState state = world.getBlockState(absPos);
                     moduleBlocks.put(relPos, state);
                 }
@@ -82,8 +80,8 @@ public final class TreeTileExtractor {
                         for (int dx = 0; dx < tileSize; dx++) {
                             for (int dy = 0; dy < tileSize; dy++) {
                                 for (int dz = 0; dz < tileSize; dz++) {
-                                    BlockPos pos = tileOrigin.add(dx, dy, dz);
-                                    BlockState state = moduleBlocks.getOrDefault(pos, Blocks.AIR.getDefaultState());
+                                    BlockPos pos = tileOrigin.offset(dx, dy, dz);
+                                    BlockState state = moduleBlocks.getOrDefault(pos, Blocks.AIR.defaultBlockState());
                                     blocks[dx][dy][dz] = state;
                                     if (!state.isAir()) hasNonAir = true;
                                 }
@@ -154,7 +152,7 @@ public final class TreeTileExtractor {
 
             for (Direction dir : Direction.values()) {
                 // Calculate neighbor position (tiles overlap, so offset is 1, not tileSize)
-                BlockPos neighborPos = pos.offset(dir, 1);
+                BlockPos neighborPos = pos.relative(dir, 1);
                 String neighborTileId = positionToTileId.get(neighborPos);
 
                 if (neighborTileId != null) {

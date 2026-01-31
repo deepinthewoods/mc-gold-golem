@@ -1,30 +1,30 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.BuildMode;
 
 import java.util.List;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
-public record UniqueBlocksS2CPayload(int entityId, BuildMode mode, List<String> blockIds) implements CustomPayload {
+public record UniqueBlocksS2CPayload(int entityId, BuildMode mode, List<String> blockIds) implements CustomPacketPayload {
 
     public UniqueBlocksS2CPayload {
         blockIds = PayloadValidator.validateList(blockIds, 0, "blockIds");
     }
 
-    public static final Id<UniqueBlocksS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "unique_blocks"));
+    public static final Type<UniqueBlocksS2CPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "unique_blocks"));
 
-    public static final PacketCodec<RegistryByteBuf, UniqueBlocksS2CPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, UniqueBlocksS2CPayload::entityId,
+    public static final StreamCodec<RegistryFriendlyByteBuf, UniqueBlocksS2CPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, UniqueBlocksS2CPayload::entityId,
             BuildMode.PACKET_CODEC, UniqueBlocksS2CPayload::mode,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), UniqueBlocksS2CPayload::blockIds,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), UniqueBlocksS2CPayload::blockIds,
             UniqueBlocksS2CPayload::new
     );
 
     @Override
-    public Id<UniqueBlocksS2CPayload> getId() { return ID; }
+    public Type<UniqueBlocksS2CPayload> type() { return ID; }
 }
 

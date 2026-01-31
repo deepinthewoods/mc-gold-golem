@@ -1,10 +1,9 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
 
 /**
  * Extracts module pairings and volumes between validated join slices.
@@ -26,7 +25,7 @@ public final class WallModuleExtractor {
             Direction.UP, Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST
     };
 
-    public static ExtractResult extract(World world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
+    public static ExtractResult extract(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
         // Compute slice for each marker; if both orientations exist, choose a preferred plane
         int n = goldMarkersRel.size();
         if (n % 2 != 0) return new ExtractResult(null, "Odd number of gold markers; cannot pair");
@@ -42,8 +41,8 @@ public final class WallModuleExtractor {
         Set<BlockPos> allSlices = new HashSet<>();
         for (int i = 0; i < n; i++) {
             BlockPos g = goldMarkersRel.get(i);
-            BlockPos markerAbs = originAbs.add(g);
-            BlockPos ignoreAbsMarker = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.up() : null;
+            BlockPos markerAbs = originAbs.offset(g);
+            BlockPos ignoreAbsMarker = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.above() : null;
             var sx = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, ignoreAbsMarker);
             var sz = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, ignoreAbsMarker);
             WallJoinSlice s;
@@ -90,7 +89,7 @@ public final class WallModuleExtractor {
             Set<BlockPos> fringe = new HashSet<>();
             for (BlockPos s : sliceSets.get(i)) {
                 for (Direction d : DIRS) {
-                    BlockPos nb = s.offset(d);
+                    BlockPos nb = s.relative(d);
                     if (passable.contains(nb)) fringe.add(nb);
                 }
             }
@@ -114,11 +113,11 @@ public final class WallModuleExtractor {
         for (int i = 0; i < rev.size(); i++) {
             BlockPos p = rev.get(i);
             int deg = 0;
-            for (Direction d : DIRS) if (idMap.containsKey(p.offset(d))) deg++;
+            for (Direction d : DIRS) if (idMap.containsKey(p.relative(d))) deg++;
             int[] list = new int[deg];
             int k = 0;
             for (Direction d : DIRS) {
-                Integer j = idMap.get(p.offset(d));
+                Integer j = idMap.get(p.relative(d));
                 if (j != null) list[k++] = j;
             }
             adj.set(i, list);
@@ -194,14 +193,14 @@ public final class WallModuleExtractor {
         return new ExtractResult(modules, null);
     }
 
-    private static Set<BlockPos> sliceComponentPositions(World world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, WallJoinSlice.Axis axis) {
+    private static Set<BlockPos> sliceComponentPositions(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, WallJoinSlice.Axis axis) {
         // Recompute in-plane component positions similar to WallJoinSlice.from, but return rel positions
         int planeCoord = (axis == WallJoinSlice.Axis.X_THICK) ? goldRel.getX() : goldRel.getZ();
         Map<Long, BlockPos> index = new HashMap<>();
         for (BlockPos r : voxelsRel) {
             if ((axis == WallJoinSlice.Axis.X_THICK && r.getX() == planeCoord) || (axis == WallJoinSlice.Axis.Z_THICK && r.getZ() == planeCoord)) {
-                var st = world.getBlockState(originAbs.add(r));
-                if (st.isAir() || st.isOf(net.minecraft.block.Blocks.SNOW) || st.isOf(net.minecraft.block.Blocks.GOLD_BLOCK)) continue;
+                var st = world.getBlockState(originAbs.offset(r));
+                if (st.isAir() || st.is(net.minecraft.world.level.block.Blocks.SNOW) || st.is(net.minecraft.world.level.block.Blocks.GOLD_BLOCK)) continue;
                 int y = r.getY();
                 int u = (axis == WallJoinSlice.Axis.X_THICK) ? r.getZ() : r.getX();
                 long key = (((long) y) << 32) ^ (u & 0xffffffffL);

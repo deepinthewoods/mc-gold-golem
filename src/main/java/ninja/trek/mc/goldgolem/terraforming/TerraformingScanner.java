@@ -1,18 +1,17 @@
 package ninja.trek.mc.goldgolem.terraforming;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Terraforming mode scanner.
@@ -38,13 +37,13 @@ public final class TerraformingScanner {
      * @param summoner The player who summoned the golem
      * @return Result containing skeleton data or error
      */
-    public static Result scan(World world, BlockPos centerGoldPos, PlayerEntity summoner) {
+    public static Result scan(Level world, BlockPos centerGoldPos, Player summoner) {
         // First, verify the 3x3 gold platform exists
         List<BlockPos> platformPositions = new ArrayList<>();
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                BlockPos pos = centerGoldPos.add(dx, 0, dz);
-                if (!world.getBlockState(pos).isOf(Blocks.GOLD_BLOCK)) {
+                BlockPos pos = centerGoldPos.offset(dx, 0, dz);
+                if (!world.getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
                     return new Result(null, "Invalid 3x3 gold platform - missing gold at offset " + dx + "," + dz);
                 }
                 platformPositions.add(pos);
@@ -52,7 +51,7 @@ public final class TerraformingScanner {
         }
 
         // Determine the block the player is standing on (to exclude it)
-        BlockPos playerGround = summoner == null ? null : summoner.getBlockPos().down();
+        BlockPos playerGround = summoner == null ? null : summoner.blockPosition().below();
         Block groundType = null;
         if (playerGround != null) {
             BlockState gs = world.getBlockState(playerGround);
@@ -65,7 +64,7 @@ public final class TerraformingScanner {
 
         for (BlockPos platPos : platformPositions) {
             for (Direction d : NEIGHBORS) {
-                BlockPos adj = platPos.offset(d);
+                BlockPos adj = platPos.relative(d);
 
                 // Skip if already part of platform
                 if (platformPositions.contains(adj)) continue;
@@ -73,7 +72,7 @@ public final class TerraformingScanner {
                 BlockState st = world.getBlockState(adj);
 
                 // Skip air and snow layers
-                if (st.isAir() || st.isOf(Blocks.SNOW)) continue;
+                if (st.isAir() || st.is(Blocks.SNOW)) continue;
 
                 Block b = st.getBlock();
 
@@ -110,14 +109,14 @@ public final class TerraformingScanner {
             BlockPos cur = queue.removeFirst();
 
             for (Direction d : NEIGHBORS) {
-                BlockPos n = cur.offset(d);
+                BlockPos n = cur.relative(d);
 
                 if (visited.contains(n)) continue;
 
                 BlockState st = world.getBlockState(n);
 
                 // Skip air and snow
-                if (st.isAir() || st.isOf(Blocks.SNOW)) continue;
+                if (st.isAir() || st.is(Blocks.SNOW)) continue;
 
                 Block b = st.getBlock();
 
@@ -154,11 +153,11 @@ public final class TerraformingScanner {
         }
 
         TerraformingDefinition def = new TerraformingDefinition(
-                centerGoldPos.toImmutable(),
+                centerGoldPos.immutable(),
                 skeletonBlocks,
                 skeletonTypes,
-                min.toImmutable(),
-                max.toImmutable()
+                min.immutable(),
+                max.immutable()
         );
 
         return new Result(def, null);
@@ -185,7 +184,7 @@ public final class TerraformingScanner {
         int idx = 0;
         for (Block b : def.skeletonTypes()) {
             if (idx++ > 0) sb.append(',');
-            sb.append('\"').append(Registries.BLOCK.getId(b).toString()).append('\"');
+            sb.append('\"').append(BuiltInRegistries.BLOCK.getKey(b).toString()).append('\"');
         }
         sb.append("],\n");
 

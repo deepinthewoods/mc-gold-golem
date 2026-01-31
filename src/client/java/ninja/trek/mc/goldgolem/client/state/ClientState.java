@@ -1,16 +1,15 @@
 package ninja.trek.mc.goldgolem.client.state;
 
-import net.minecraft.util.math.Vec3d;
-
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.world.phys.Vec3;
 
 public final class ClientState {
     public static final class LineData {
-        public final List<Vec3d> points;
-        public final java.util.Optional<Vec3d> anchor;
-        public LineData(List<Vec3d> pts, java.util.Optional<Vec3d> anc) {
+        public final List<Vec3> points;
+        public final java.util.Optional<Vec3> anchor;
+        public LineData(List<Vec3> pts, java.util.Optional<Vec3> anc) {
             this.points = pts;
             this.anchor = anc == null ? java.util.Optional.empty() : anc;
         }
@@ -20,7 +19,7 @@ public final class ClientState {
 
     private ClientState() {}
 
-    public static void setLines(int entityId, List<Vec3d> points, java.util.Optional<Vec3d> anchor) {
+    public static void setLines(int entityId, List<Vec3> points, java.util.Optional<Vec3> anchor) {
         if (points == null) {
             LINES.remove(entityId);
             return;

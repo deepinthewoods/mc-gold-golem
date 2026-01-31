@@ -1,18 +1,17 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Summon-time Tree Mode scanner.
@@ -31,9 +30,9 @@ public final class TreeScanner {
         public boolean ok() { return def != null && (error == null || error.isEmpty()); }
     }
 
-    public static Result scan(World world, BlockPos secondGoldPos, PlayerEntity summoner) {
+    public static Result scan(Level world, BlockPos secondGoldPos, Player summoner) {
         // Determine the block the player is standing on (one below feet)
-        BlockPos playerGround = summoner == null ? null : summoner.getBlockPos().down();
+        BlockPos playerGround = summoner == null ? null : summoner.blockPosition().below();
 
         // Canonicalize ground-equivalence only if the player stands on a ground type
         boolean unifyGround = false;
@@ -58,12 +57,12 @@ public final class TreeScanner {
         while (!queue.isEmpty()) {
             BlockPos cur = queue.removeFirst();
             for (Direction d : NEIGHBORS) {
-                BlockPos n = cur.offset(d);
+                BlockPos n = cur.relative(d);
                 if (visited.contains(n)) continue;
 
                 BlockState st = world.getBlockState(n);
                 // Exclude snow layers
-                if (st.isOf(Blocks.SNOW)) continue;
+                if (st.is(Blocks.SNOW)) continue;
                 // Exclude air
                 if (st.isAir()) continue;
                 // Ignore the type of block the player is standing on
@@ -98,7 +97,7 @@ public final class TreeScanner {
         Set<BlockPos> regularBlocks = new HashSet<>();
         for (BlockPos abs : visited) {
             BlockState st = world.getBlockState(abs);
-            if (st.isOf(Blocks.GOLD_BLOCK)) {
+            if (st.is(Blocks.GOLD_BLOCK)) {
                 goldBlocks.add(abs);
             } else {
                 regularBlocks.add(abs);
@@ -126,10 +125,10 @@ public final class TreeScanner {
                 // Collect unique block IDs
                 BlockState st = world.getBlockState(abs);
                 Block b = st.getBlock();
-                String id = Registries.BLOCK.getId(b).toString();
+                String id = BuiltInRegistries.BLOCK.getKey(b).toString();
                 // Unify ground ids if requested
                 if (unifyGround && (b == Blocks.GRASS_BLOCK || b == Blocks.DIRT || b == Blocks.DIRT_PATH)) {
-                    id = Registries.BLOCK.getId(Blocks.DIRT).toString();
+                    id = BuiltInRegistries.BLOCK.getKey(Blocks.DIRT).toString();
                 }
                 if (uniqSet.add(id)) {
                     uniques.add(id);
@@ -138,7 +137,7 @@ public final class TreeScanner {
             modules.add(new TreeModule(relVoxels));
         }
 
-        TreeDefinition def = new TreeDefinition(secondGoldPos.toImmutable(), modules, uniques);
+        TreeDefinition def = new TreeDefinition(secondGoldPos.immutable(), modules, uniques);
         return new Result(def, null);
     }
 
@@ -162,7 +161,7 @@ public final class TreeScanner {
             while (!queue.isEmpty()) {
                 BlockPos cur = queue.removeFirst();
                 for (Direction d : NEIGHBORS) {
-                    BlockPos n = cur.offset(d);
+                    BlockPos n = cur.relative(d);
                     if (blocks.contains(n) && visited.add(n)) {
                         queue.add(n);
                         component.add(n);

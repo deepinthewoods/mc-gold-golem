@@ -1,61 +1,57 @@
 package ninja.trek.mc.goldgolem.world.entity;
 
-import net.minecraft.block.BlockState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnGroup;
-import net.minecraft.entity.ai.goal.LookAtEntityGoal;
-import net.minecraft.entity.ai.goal.LookAroundGoal;
-import net.minecraft.entity.ai.goal.WanderAroundFarGoal;
-import net.minecraft.entity.ai.goal.Goal;
-import net.minecraft.entity.attribute.DefaultAttributeContainer;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.mob.PathAwareEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventories;
-import net.minecraft.util.collection.DefaultedList;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.inventory.SimpleInventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtHelper;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.util.math.noise.SimplexNoiseSampler;
-import net.minecraft.util.math.random.Random;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import net.minecraft.util.ActionResult;
-import net.minecraft.world.World;
 import ninja.trek.mc.goldgolem.screen.GolemScreens;
-import net.minecraft.entity.data.DataTracker;
-import net.minecraft.entity.data.TrackedData;
-import net.minecraft.entity.data.TrackedDataHandlerRegistry;
-import net.minecraft.block.ShulkerBoxBlock;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.ContainerComponent;
 import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.registry.Registries;
-import net.minecraft.state.property.Property;
-import net.minecraft.state.property.Properties;
-import net.minecraft.item.ItemPlacementContext;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.math.Direction;
-import net.minecraft.storage.NbtReadView;
-import net.minecraft.storage.NbtWriteView;
-import net.minecraft.storage.ReadView;
-import net.minecraft.util.ErrorReporter;
-import net.minecraft.util.Identifier;
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.NonNullList;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtUtils;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Mth;
+import net.minecraft.util.ProblemReporter;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.Container;
+import net.minecraft.world.ContainerHelper;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.PathfinderMob;
+import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
+import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
+import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.ItemContainerContents;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.ShulkerBoxBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.Property;
+import net.minecraft.world.level.levelgen.synth.SimplexNoise;
+import net.minecraft.world.level.storage.TagValueInput;
+import net.minecraft.world.level.storage.TagValueOutput;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -73,7 +69,7 @@ import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategy;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategyRegistry;
 
-public class GoldGolemEntity extends PathAwareEntity {
+public class GoldGolemEntity extends PathfinderMob {
     private static final Logger LOGGER = LoggerFactory.getLogger(GoldGolemEntity.class);
 
     // Animation constants
@@ -106,20 +102,20 @@ public class GoldGolemEntity extends PathAwareEntity {
     private static final Object counterLock = new Object();
 
     // Data trackers for client-server sync
-    private static final TrackedData<Integer> LEFT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
-    private static final TrackedData<Integer> RIGHT_HAND_ANIMATION_TICK = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
-    private static final TrackedData<Boolean> LEFT_ARM_HAS_TARGET = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
-    private static final TrackedData<Boolean> RIGHT_ARM_HAS_TARGET = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
-    private static final TrackedData<Optional<BlockPos>> LEFT_HAND_TARGET_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
-    private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_TARGET_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
-    private static final TrackedData<Optional<BlockPos>> LEFT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
-    private static final TrackedData<Optional<BlockPos>> RIGHT_HAND_NEXT_POS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.OPTIONAL_BLOCK_POS);
-    private static final TrackedData<Boolean> BUILDING_PATHS = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
-    private static final TrackedData<Integer> BUILD_MODE = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.INTEGER);
-    private static final TrackedData<ItemStack> LEFT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
-    private static final TrackedData<ItemStack> RIGHT_MINING_TOOL = DataTracker.registerData(GoldGolemEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
+    private static final EntityDataAccessor<Integer> LEFT_HAND_ANIMATION_TICK = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Integer> RIGHT_HAND_ANIMATION_TICK = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<Boolean> LEFT_ARM_HAS_TARGET = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Boolean> RIGHT_ARM_HAS_TARGET = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Optional<BlockPos>> LEFT_HAND_TARGET_POS = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
+    private static final EntityDataAccessor<Optional<BlockPos>> RIGHT_HAND_TARGET_POS = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
+    private static final EntityDataAccessor<Optional<BlockPos>> LEFT_HAND_NEXT_POS = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
+    private static final EntityDataAccessor<Optional<BlockPos>> RIGHT_HAND_NEXT_POS = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.OPTIONAL_BLOCK_POS);
+    private static final EntityDataAccessor<Boolean> BUILDING_PATHS = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.BOOLEAN);
+    private static final EntityDataAccessor<Integer> BUILD_MODE = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.INT);
+    private static final EntityDataAccessor<ItemStack> LEFT_MINING_TOOL = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.ITEM_STACK);
+    private static final EntityDataAccessor<ItemStack> RIGHT_MINING_TOOL = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.ITEM_STACK);
 
-    private final SimpleInventory inventory = new SimpleInventory(INVENTORY_SIZE);
+    private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
     private final String[] gradient = new String[GRADIENT_SIZE];
     private final String[] stepGradient = new String[GRADIENT_SIZE];
     private final String[] surfaceGradient = new String[GRADIENT_SIZE];
@@ -135,14 +131,14 @@ public class GoldGolemEntity extends PathAwareEntity {
     private int pathWidth = 3;
     private boolean buildingPaths = false;
     private long gradientNoiseSeedCache = Long.MIN_VALUE;
-    private SimplexNoiseSampler gradientNoiseSampler;
+    private SimplexNoise gradientNoiseSampler;
 
     // Strategy pattern for build modes
     private BuildStrategy activeStrategy = null;
 
     // Wall-mode captured data (scaffold)
     private java.util.List<String> wallUniqueBlockIds = java.util.Collections.emptyList();
-    private net.minecraft.util.math.BlockPos wallOrigin = null; // absolute origin of capture
+    private net.minecraft.core.BlockPos wallOrigin = null; // absolute origin of capture
     private String wallJsonFile = null; // saved snapshot path (relative to game dir)
     private String wallJoinSignature = null; // common join-slice signature
     private ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis wallJoinAxis = null;
@@ -169,7 +165,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     // Tower-mode captured data
     private java.util.List<String> towerUniqueBlockIds = java.util.Collections.emptyList();
     private java.util.Map<String, Integer> towerBlockCounts = java.util.Collections.emptyMap();
-    private net.minecraft.util.math.BlockPos towerOrigin = null; // absolute origin (bottom gold block)
+    private net.minecraft.core.BlockPos towerOrigin = null; // absolute origin (bottom gold block)
     private String towerJsonFile = null; // saved snapshot path (relative to game dir)
     private int towerHeight = 0; // total height to build (in blocks)
     private ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate = null;
@@ -204,7 +200,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     // Tree-mode captured data (UI fields stay in entity, state fields moved to TreeBuildStrategy)
     private java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> treeModules = java.util.Collections.emptyList();
     private java.util.List<String> treeUniqueBlockIds = java.util.Collections.emptyList();
-    private net.minecraft.util.math.BlockPos treeOrigin = null; // second gold block position
+    private net.minecraft.core.BlockPos treeOrigin = null; // second gold block position
     private String treeJsonFile = null; // saved snapshot path (relative to game dir)
     private ninja.trek.mc.goldgolem.tree.TilingPreset treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.SMALL_3x3;
     // Tree UI state: dynamic gradient groups (same pattern as wall/tower)
@@ -214,7 +210,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private final java.util.Map<String, Integer> treeBlockGroup = new java.util.HashMap<>();
 
     // Shared tracking fields (used by PATH and WALL modes)
-    private Vec3d trackStart = null;
+    private Vec3 trackStart = null;
     private java.util.ArrayDeque<ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg> pendingLines = new java.util.ArrayDeque<>();
     private ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg currentLine = null;
 
@@ -250,8 +246,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     // Block placement animation (new system)
     private int placementTickCounter = 0;  // 0-1 tick counter (places every 2 ticks)
     private boolean leftHandActive = true; // Which hand places next
-    private Vec3d leftArmTargetBlock = null;  // Block position left arm points at
-    private Vec3d rightArmTargetBlock = null; // Block position right arm points at
+    private Vec3 leftArmTargetBlock = null;  // Block position left arm points at
+    private Vec3 rightArmTargetBlock = null; // Block position right arm points at
     private int leftHandAnimationTick = -1;   // -1 = idle, 0-3 = animation cycle
     private int rightHandAnimationTick = -1;  // -1 = idle, 0-3 = animation cycle
     private BlockPos nextLeftBlock = null;    // Next block for left hand
@@ -270,7 +266,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void setGuiViewer(java.util.UUID uuid) { this.guiViewerUuid = uuid; }
     public void clearGuiViewer() { this.guiViewerUuid = null; }
 
-    public boolean isBuildingPaths() { return this.dataTracker.get(BUILDING_PATHS); }
+    public boolean isBuildingPaths() { return this.entityData.get(BUILDING_PATHS); }
     public float getLeftEyeYaw() { return leftEyeYaw; }
     public float getLeftEyePitch() { return leftEyePitch; }
     public float getRightEyeYaw() { return rightEyeYaw; }
@@ -280,8 +276,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     public float getRightArmRotation() { return rightArmRotation; }
     public float getLeftArmYaw() { return leftArmYaw; }
     public float getRightArmYaw() { return rightArmYaw; }
-    public int getLeftHandAnimationTick() { return this.dataTracker.get(LEFT_HAND_ANIMATION_TICK); }
-    public int getRightHandAnimationTick() { return this.dataTracker.get(RIGHT_HAND_ANIMATION_TICK); }
+    public int getLeftHandAnimationTick() { return this.entityData.get(LEFT_HAND_ANIMATION_TICK); }
+    public int getRightHandAnimationTick() { return this.entityData.get(RIGHT_HAND_ANIMATION_TICK); }
     public boolean shouldShowLeftHandItem() {
         int tick = getLeftHandAnimationTick();
         // Show item for first half of animation (ticks 0-5 of 12)
@@ -304,9 +300,9 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Building modes: show block during placement animation
         if (!shouldShowLeftHandItem()) return ItemStack.EMPTY;
         // Return the first block item from inventory
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.item.BlockItem) {
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BlockItem) {
                 return stack;
             }
         }
@@ -324,37 +320,37 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Building modes: show block during placement animation
         if (!shouldShowRightHandItem()) return ItemStack.EMPTY;
         // Return the first block item from inventory
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.item.BlockItem) {
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BlockItem) {
                 return stack;
             }
         }
         return ItemStack.EMPTY;
     }
     public BuildMode getBuildMode() {
-        int ordinal = this.dataTracker.get(BUILD_MODE);
+        int ordinal = this.entityData.get(BUILD_MODE);
         BuildMode[] values = BuildMode.values();
         return ordinal >= 0 && ordinal < values.length ? values[ordinal] : BuildMode.PATH;
     }
     public void setBuildMode(BuildMode mode) {
-        this.dataTracker.set(BUILD_MODE, (mode == null ? BuildMode.PATH : mode).ordinal());
+        this.entityData.set(BUILD_MODE, (mode == null ? BuildMode.PATH : mode).ordinal());
     }
 
     public ItemStack getLeftMiningTool() {
-        return this.dataTracker.get(LEFT_MINING_TOOL);
+        return this.entityData.get(LEFT_MINING_TOOL);
     }
 
     public ItemStack getRightMiningTool() {
-        return this.dataTracker.get(RIGHT_MINING_TOOL);
+        return this.entityData.get(RIGHT_MINING_TOOL);
     }
 
     public void setLeftMiningTool(ItemStack tool) {
-        this.dataTracker.set(LEFT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
+        this.entityData.set(LEFT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
     }
 
     public void setRightMiningTool(ItemStack tool) {
-        this.dataTracker.set(RIGHT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
+        this.entityData.set(RIGHT_MINING_TOOL, tool == null ? ItemStack.EMPTY : tool);
     }
 
     /** @deprecated Use getLeftMiningTool() or getRightMiningTool() instead */
@@ -410,7 +406,7 @@ public class GoldGolemEntity extends PathAwareEntity {
      */
     public void stopBuilding() {
         this.buildingPaths = false;
-        this.dataTracker.set(BUILDING_PATHS, false);
+        this.entityData.set(BUILDING_PATHS, false);
         if (activeStrategy != null) {
             activeStrategy.stop(this);
         }
@@ -422,7 +418,7 @@ public class GoldGolemEntity extends PathAwareEntity {
      */
     public void startBuilding() {
         this.buildingPaths = true;
-        this.dataTracker.set(BUILDING_PATHS, true);
+        this.entityData.set(BUILDING_PATHS, true);
         initializeStrategyForCurrentMode();
     }
 
@@ -431,10 +427,10 @@ public class GoldGolemEntity extends PathAwareEntity {
      */
     public void setBuildingPaths(boolean building) {
         this.buildingPaths = building;
-        this.dataTracker.set(BUILDING_PATHS, building);
+        this.entityData.set(BUILDING_PATHS, building);
     }
 
-    public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
+    public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.core.BlockPos origin, String jsonPath) {
         this.wallUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
         this.wallOrigin = origin;
         this.wallJsonFile = jsonPath;
@@ -520,7 +516,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Tower mode methods
     public void setTowerCapture(java.util.List<String> uniqueIds, java.util.Map<String, Integer> counts,
-                                net.minecraft.util.math.BlockPos origin, String jsonPath, int height,
+                                net.minecraft.core.BlockPos origin, String jsonPath, int height,
                                 ninja.trek.mc.goldgolem.tower.TowerModuleTemplate template) {
         this.towerUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
         this.towerBlockCounts = counts == null ? java.util.Collections.emptyMap() : new java.util.HashMap<>(counts);
@@ -539,7 +535,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() {
         // Lazy load from JSON file if template is null but file path is set
         if (towerTemplate == null && towerJsonFile != null && !towerJsonFile.isEmpty()) {
-            if (this.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld serverWorld) {
+            if (this.level() instanceof net.minecraft.server.level.ServerLevel serverWorld) {
                 try {
                     java.nio.file.Path path = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve(towerJsonFile);
                     if (java.nio.file.Files.exists(path)) {
@@ -621,7 +617,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Tree mode configuration
     public void setTreeCapture(java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> modules,
-                              java.util.List<String> uniqueIds, net.minecraft.util.math.BlockPos origin, String jsonPath) {
+                              java.util.List<String> uniqueIds, net.minecraft.core.BlockPos origin, String jsonPath) {
         this.treeModules = modules == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(modules);
         this.treeUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
         this.treeOrigin = origin;
@@ -823,14 +819,14 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     private static JsonObject serializeBlockState(BlockState state) {
         JsonObject out = new JsonObject();
-        String id = Registries.BLOCK.getId(state.getBlock()).toString();
+        String id = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
         out.addProperty("id", id);
         JsonObject props = new JsonObject();
         for (Property<?> prop : state.getProperties()) {
-            Comparable<?> value = state.get(prop);
+            Comparable<?> value = state.getValue(prop);
             @SuppressWarnings({"rawtypes", "unchecked"})
             Property raw = (Property) prop;
-            props.addProperty(prop.getName(), raw.name(value));
+            props.addProperty(prop.getName(), raw.getName(value));
         }
         out.add("props", props);
         return out;
@@ -840,20 +836,20 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (obj == null) return null;
         String id = obj.has("id") ? obj.get("id").getAsString() : "";
         if (id.isEmpty()) return null;
-        var block = Registries.BLOCK.get(Identifier.of(id));
-        BlockState state = block.getDefaultState();
+        var block = BuiltInRegistries.BLOCK.getValue(Identifier.parse(id));
+        BlockState state = block.defaultBlockState();
         if (obj.has("props") && obj.get("props").isJsonObject()) {
             JsonObject props = obj.getAsJsonObject("props");
             for (var entry : props.entrySet()) {
                 String propName = entry.getKey();
                 String propValue = entry.getValue().getAsString();
-                Property<?> prop = block.getStateManager().getProperty(propName);
+                Property<?> prop = block.getStateDefinition().getProperty(propName);
                 if (prop == null) continue;
                 @SuppressWarnings({"rawtypes", "unchecked"})
                 Property raw = (Property) prop;
-                Optional parsed = raw.parse(propValue);
+                Optional parsed = raw.getValue(propValue);
                 if (parsed.isPresent()) {
-                    state = state.with(raw, (Comparable) parsed.get());
+                    state = state.setValue(raw, (Comparable) parsed.get());
                 }
             }
         }
@@ -869,26 +865,26 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private static BlockPos deserializeVec(JsonArray arr) {
-        if (arr == null || arr.size() < 3) return BlockPos.ORIGIN;
+        if (arr == null || arr.size() < 3) return BlockPos.ZERO;
         return new BlockPos(arr.get(0).getAsInt(), arr.get(1).getAsInt(), arr.get(2).getAsInt());
     }
 
-    private NbtCompound buildSnapshotNbt(ServerWorld world) {
-        NbtWriteView view = NbtWriteView.create(ErrorReporter.EMPTY, world.getRegistryManager());
-        writeCustomData(view);
-        view.remove("Owner");
-        DefaultedList<ItemStack> empty = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
-        Inventories.writeData(view.get("Inventory"), empty, true);
-        return view.getNbt();
+    private CompoundTag buildSnapshotNbt(ServerLevel world) {
+        TagValueOutput view = TagValueOutput.createWithContext(ProblemReporter.DISCARDING, world.registryAccess());
+        addAdditionalSaveData(view);
+        view.discard("Owner");
+        NonNullList<ItemStack> empty = NonNullList.withSize(INVENTORY_SIZE, ItemStack.EMPTY);
+        ContainerHelper.saveAllItems(view.child("Inventory"), empty, true);
+        return view.buildResult();
     }
 
-    private JsonObject buildSnapshotJson(ServerWorld world, String desiredName, NbtCompound nbt) {
+    private JsonObject buildSnapshotJson(ServerLevel world, String desiredName, CompoundTag nbt) {
         JsonObject root = new JsonObject();
         root.addProperty("version", SNAPSHOT_VERSION);
         root.addProperty("savedAt", System.currentTimeMillis());
         root.addProperty("golemName", desiredName == null ? "" : desiredName);
         root.addProperty("mode", getBuildMode().name());
-        root.addProperty("nbt", NbtHelper.toNbtProviderString(nbt));
+        root.addProperty("nbt", NbtUtils.structureToSnbt(nbt));
 
         JsonArray wallTemplatesJson = new JsonArray();
         for (var tpl : wallTemplates) {
@@ -939,16 +935,16 @@ public class GoldGolemEntity extends PathAwareEntity {
         return root;
     }
 
-    private static SnapshotData readSnapshot(ServerWorld world, Path path) throws IOException {
+    private static SnapshotData readSnapshot(ServerLevel world, Path path) throws IOException {
         String json = Files.readString(path);
         JsonElement parsed = JsonParser.parseString(json);
         if (!parsed.isJsonObject()) return null;
         JsonObject root = parsed.getAsJsonObject();
         String nbtStr = root.has("nbt") ? root.get("nbt").getAsString() : "";
         if (nbtStr.isEmpty()) return null;
-        NbtCompound nbt;
+        CompoundTag nbt;
         try {
-            nbt = NbtHelper.fromNbtProviderString(nbtStr);
+            nbt = NbtUtils.snbtToStructure(nbtStr);
         } catch (Exception e) {
             return null;
         }
@@ -1022,10 +1018,10 @@ public class GoldGolemEntity extends PathAwareEntity {
     private Path writeSnapshotForName(String desiredName) {
         String baseName = sanitizeJsonBaseName(desiredName);
         if (baseName == null) return null;
-        if (!(getEntityWorld() instanceof ServerWorld world)) return null;
+        if (!(level() instanceof ServerLevel world)) return null;
         Path folder = FabricLoader.getInstance().getGameDir().resolve(SNAPSHOT_FOLDER);
         try {
-            NbtCompound nbt = buildSnapshotNbt(world);
+            CompoundTag nbt = buildSnapshotNbt(world);
             JsonObject root = buildSnapshotJson(world, desiredName, nbt);
             Path out = resolveSnapshotPath(folder, baseName);
             Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -1042,7 +1038,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    public boolean applySnapshotFromPath(ServerWorld world, Path path, BlockPos summonOrigin, PlayerEntity owner, String displayName) {
+    public boolean applySnapshotFromPath(ServerLevel world, Path path, BlockPos summonOrigin, Player owner, String displayName) {
         SnapshotData data;
         try {
             data = readSnapshot(world, path);
@@ -1050,11 +1046,11 @@ public class GoldGolemEntity extends PathAwareEntity {
             return false;
         }
         if (data == null) return false;
-        ReadView view = NbtReadView.create(ErrorReporter.EMPTY, world.getRegistryManager(), data.nbt());
-        readCustomData(view);
+        ValueInput view = TagValueInput.create(ProblemReporter.DISCARDING, world.registryAccess(), data.nbt());
+        readAdditionalSaveData(view);
         setOwner(owner);
         if (displayName != null && !displayName.isBlank()) {
-            setCustomNameNoSnapshot(Text.literal(displayName));
+            setCustomNameNoSnapshot(Component.literal(displayName));
         }
         setJsonFileForMode(getBuildMode(), FabricLoader.getInstance().getGameDir().relativize(path).toString());
         if (data.wallTemplates() != null && !data.wallTemplates().isEmpty()) {
@@ -1087,7 +1083,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private record SnapshotData(
-            NbtCompound nbt,
+            CompoundTag nbt,
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates,
             ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate,
             java.util.List<java.util.Map<BlockPos, BlockState>> treeModuleStates
@@ -1208,17 +1204,17 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Animation setters for strategy access
     public void setLeftHandTargetPos(java.util.Optional<BlockPos> pos) {
-        this.dataTracker.set(LEFT_HAND_TARGET_POS, pos);
+        this.entityData.set(LEFT_HAND_TARGET_POS, pos);
     }
     public void setLeftArmHasTarget(boolean hasTarget) {
-        this.dataTracker.set(LEFT_ARM_HAS_TARGET, hasTarget);
+        this.entityData.set(LEFT_ARM_HAS_TARGET, hasTarget);
     }
     public void setLeftHandAnimationTick(int tick) {
-        this.dataTracker.set(LEFT_HAND_ANIMATION_TICK, tick);
+        this.entityData.set(LEFT_HAND_ANIMATION_TICK, tick);
     }
 
     // Mining mode configuration
-    public void setMiningConfig(BlockPos chestPos, net.minecraft.util.math.Direction miningDir, BlockPos startPos) {
+    public void setMiningConfig(BlockPos chestPos, net.minecraft.core.Direction miningDir, BlockPos startPos) {
         // Ensure strategy is initialized for mining mode
         if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.MiningBuildStrategy)) {
             setBuildMode(BuildMode.MINING);
@@ -1244,7 +1240,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     // Excavation mode configuration
-    public void setExcavationConfig(BlockPos chest1, BlockPos chest2, net.minecraft.util.math.Direction dir1, net.minecraft.util.math.Direction dir2, BlockPos startPos) {
+    public void setExcavationConfig(BlockPos chest1, BlockPos chest2, net.minecraft.core.Direction dir1, net.minecraft.core.Direction dir2, BlockPos startPos) {
         // Ensure strategy is initialized for excavation mode
         if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.ExcavationBuildStrategy)) {
             setBuildMode(BuildMode.EXCAVATION);
@@ -1280,7 +1276,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     // Tunnel mode configuration
-    public void setTunnelConfig(BlockPos c1, BlockPos c2, BlockPos c3, net.minecraft.util.math.Direction dir, BlockPos start) {
+    public void setTunnelConfig(BlockPos c1, BlockPos c2, BlockPos c3, net.minecraft.core.Direction dir, BlockPos start) {
         if (activeStrategy == null || !(activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.TunnelBuildStrategy)) {
             setBuildMode(BuildMode.TUNNEL);
             initializeStrategyForCurrentMode();
@@ -1361,25 +1357,25 @@ public class GoldGolemEntity extends PathAwareEntity {
         return terraformingAlpha;
     }
 
-    public GoldGolemEntity(EntityType<? extends PathAwareEntity> type, World world) {
+    public GoldGolemEntity(EntityType<? extends PathfinderMob> type, Level world) {
         super(type, world);
     }
 
     @Override
-    protected void initDataTracker(DataTracker.Builder builder) {
-        super.initDataTracker(builder);
-        builder.add(LEFT_HAND_ANIMATION_TICK, -1);
-        builder.add(RIGHT_HAND_ANIMATION_TICK, -1);
-        builder.add(LEFT_ARM_HAS_TARGET, false);
-        builder.add(RIGHT_ARM_HAS_TARGET, false);
-        builder.add(LEFT_HAND_TARGET_POS, Optional.empty());
-        builder.add(RIGHT_HAND_TARGET_POS, Optional.empty());
-        builder.add(LEFT_HAND_NEXT_POS, Optional.empty());
-        builder.add(RIGHT_HAND_NEXT_POS, Optional.empty());
-        builder.add(BUILDING_PATHS, false);
-        builder.add(BUILD_MODE, BuildMode.PATH.ordinal());
-        builder.add(LEFT_MINING_TOOL, ItemStack.EMPTY);
-        builder.add(RIGHT_MINING_TOOL, ItemStack.EMPTY);
+    protected void defineSynchedData(SynchedEntityData.Builder builder) {
+        super.defineSynchedData(builder);
+        builder.define(LEFT_HAND_ANIMATION_TICK, -1);
+        builder.define(RIGHT_HAND_ANIMATION_TICK, -1);
+        builder.define(LEFT_ARM_HAS_TARGET, false);
+        builder.define(RIGHT_ARM_HAS_TARGET, false);
+        builder.define(LEFT_HAND_TARGET_POS, Optional.empty());
+        builder.define(RIGHT_HAND_TARGET_POS, Optional.empty());
+        builder.define(LEFT_HAND_NEXT_POS, Optional.empty());
+        builder.define(RIGHT_HAND_NEXT_POS, Optional.empty());
+        builder.define(BUILDING_PATHS, false);
+        builder.define(BUILD_MODE, BuildMode.PATH.ordinal());
+        builder.define(LEFT_MINING_TOOL, ItemStack.EMPTY);
+        builder.define(RIGHT_MINING_TOOL, ItemStack.EMPTY);
     }
 
     // UUID conversion helpers for NBT (still used by mining mode)
@@ -1400,45 +1396,45 @@ public class GoldGolemEntity extends PathAwareEntity {
         return new java.util.UUID(most, least);
     }
 
-    public static DefaultAttributeContainer.Builder createAttributes() {
-        return DefaultAttributeContainer.builder()
-                .add(EntityAttributes.MAX_HEALTH, 20.0)
-                .add(EntityAttributes.MAX_ABSORPTION, 0.0)
-                .add(EntityAttributes.MOVEMENT_SPEED, 0.28)
-                .add(EntityAttributes.FOLLOW_RANGE, 32.0)
-                .add(EntityAttributes.ARMOR, 0.0)
-                .add(EntityAttributes.ARMOR_TOUGHNESS, 0.0)
-                .add(EntityAttributes.WAYPOINT_TRANSMIT_RANGE, 0.0)
-                .add(EntityAttributes.STEP_HEIGHT, 0.6)
-                .add(EntityAttributes.WATER_MOVEMENT_EFFICIENCY, 1.0)
-                .add(EntityAttributes.MOVEMENT_EFFICIENCY, 1.0)
-                .add(EntityAttributes.GRAVITY, 0.08)
-                .add(EntityAttributes.SAFE_FALL_DISTANCE, 128.0)
-                .add(EntityAttributes.FALL_DAMAGE_MULTIPLIER, 0.0)
-                .add(EntityAttributes.JUMP_STRENGTH, 0.42)
-                .add(EntityAttributes.KNOCKBACK_RESISTANCE, 0.15)
-                .add(EntityAttributes.EXPLOSION_KNOCKBACK_RESISTANCE, 0.15)
-                .add(EntityAttributes.BURNING_TIME, 10f)
-                .add(EntityAttributes.SCALE, 1.0);
+    public static AttributeSupplier.Builder createAttributes() {
+        return AttributeSupplier.builder()
+                .add(Attributes.MAX_HEALTH, 20.0)
+                .add(Attributes.MAX_ABSORPTION, 0.0)
+                .add(Attributes.MOVEMENT_SPEED, 0.28)
+                .add(Attributes.FOLLOW_RANGE, 32.0)
+                .add(Attributes.ARMOR, 0.0)
+                .add(Attributes.ARMOR_TOUGHNESS, 0.0)
+                .add(Attributes.WAYPOINT_TRANSMIT_RANGE, 0.0)
+                .add(Attributes.STEP_HEIGHT, 0.6)
+                .add(Attributes.WATER_MOVEMENT_EFFICIENCY, 1.0)
+                .add(Attributes.MOVEMENT_EFFICIENCY, 1.0)
+                .add(Attributes.GRAVITY, 0.08)
+                .add(Attributes.SAFE_FALL_DISTANCE, 128.0)
+                .add(Attributes.FALL_DAMAGE_MULTIPLIER, 0.0)
+                .add(Attributes.JUMP_STRENGTH, 0.42)
+                .add(Attributes.KNOCKBACK_RESISTANCE, 0.15)
+                .add(Attributes.EXPLOSION_KNOCKBACK_RESISTANCE, 0.15)
+                .add(Attributes.BURNING_TIME, 10f)
+                .add(Attributes.SCALE, 1.0);
     }
 
     @Override
-    protected void initGoals() {
+    protected void registerGoals() {
         // Follow players holding gold nuggets (approach within 1.5 blocks)
-        this.goalSelector.add(3, new FollowGoldNuggetHolderGoal(this, 1.1, 1.75));
-        this.goalSelector.add(5, new PathingAwareWanderGoal(this, 0.8));
-        this.goalSelector.add(6, new LookAtEntityGoal(this, PlayerEntity.class, 8.0f));
-        this.goalSelector.add(7, new LookAroundGoal(this));
+        this.goalSelector.addGoal(3, new FollowGoldNuggetHolderGoal(this, 1.1, 1.75));
+        this.goalSelector.addGoal(5, new PathingAwareWanderGoal(this, 0.8));
+        this.goalSelector.addGoal(6, new LookAtPlayerGoal(this, Player.class, 8.0f));
+        this.goalSelector.addGoal(7, new RandomLookAroundGoal(this));
     }
 
     @Override
-    public boolean isPersistent() {
+    public boolean isPersistenceRequired() {
         return true;
     }
 
     @Override
-    protected Text getDefaultName() {
-        return Text.translatable("entity.gold_golem.gold_golem");
+    protected Component getTypeName() {
+        return Component.translatable("entity.gold_golem.gold_golem");
     }
 
     @Override
@@ -1465,7 +1461,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         leftHandAnimationTick = getLeftHandAnimationTick();
         rightHandAnimationTick = getRightHandAnimationTick();
 
-        if (this.getEntityWorld().isClient()) {
+        if (this.level().isClientSide()) {
             updateClientHandTargetsFromTracker();
         }
 
@@ -1473,8 +1469,8 @@ public class GoldGolemEntity extends PathAwareEntity {
         buildingPaths = isBuildingPaths();
 
         // Determine which animation system to use
-        boolean leftAnimating = (leftHandAnimationTick >= 0 && (leftArmTargetBlock != null || this.dataTracker.get(LEFT_ARM_HAS_TARGET)));
-        boolean rightAnimating = (rightHandAnimationTick >= 0 && (rightArmTargetBlock != null || this.dataTracker.get(RIGHT_ARM_HAS_TARGET)));
+        boolean leftAnimating = (leftHandAnimationTick >= 0 && (leftArmTargetBlock != null || this.entityData.get(LEFT_ARM_HAS_TARGET)));
+        boolean rightAnimating = (rightHandAnimationTick >= 0 && (rightArmTargetBlock != null || this.entityData.get(RIGHT_ARM_HAS_TARGET)));
         boolean anyAnimating = leftAnimating || rightAnimating;
 
         // When building and actively placing blocks, use block placement animation
@@ -1497,26 +1493,26 @@ public class GoldGolemEntity extends PathAwareEntity {
             float progress = 1.0f - (armSwingTimer / (float) ARM_SWING_DURATION_TICKS);
             float prevLeftTarget = -leftArmTarget;
             float prevRightTarget = -rightArmTarget;
-            leftArmRotation = MathHelper.lerp(progress, prevLeftTarget, leftArmTarget);
-            rightArmRotation = MathHelper.lerp(progress, prevRightTarget, rightArmTarget);
+            leftArmRotation = Mth.lerp(progress, prevLeftTarget, leftArmTarget);
+            rightArmRotation = Mth.lerp(progress, prevRightTarget, rightArmTarget);
             // Reset yaw to forward during walking
-            leftArmYaw = MathHelper.lerp(0.2f, leftArmYaw, 0.0f);
-            rightArmYaw = MathHelper.lerp(0.2f, rightArmYaw, 0.0f);
+            leftArmYaw = Mth.lerp(0.2f, leftArmYaw, 0.0f);
+            rightArmYaw = Mth.lerp(0.2f, rightArmYaw, 0.0f);
             armSwingTimer--;
             // Update eyes randomly when not placing blocks
             updateRandomEyeMovement();
         } else {
             // Idle - return arms to neutral
-            leftArmRotation = MathHelper.lerp(0.1f, leftArmRotation, 0.0f);
-            rightArmRotation = MathHelper.lerp(0.1f, rightArmRotation, 0.0f);
-            leftArmYaw = MathHelper.lerp(0.1f, leftArmYaw, 0.0f);
-            rightArmYaw = MathHelper.lerp(0.1f, rightArmYaw, 0.0f);
+            leftArmRotation = Mth.lerp(0.1f, leftArmRotation, 0.0f);
+            rightArmRotation = Mth.lerp(0.1f, rightArmRotation, 0.0f);
+            leftArmYaw = Mth.lerp(0.1f, leftArmYaw, 0.0f);
+            rightArmYaw = Mth.lerp(0.1f, rightArmYaw, 0.0f);
             armSwingTimer = 0;
             // Update eyes randomly when idle
             updateRandomEyeMovement();
         }
 
-        if (this.getEntityWorld().isClient()) return;
+        if (this.level().isClientSide()) return;
         if (buildingPaths) {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
@@ -1528,11 +1524,11 @@ public class GoldGolemEntity extends PathAwareEntity {
 
             // Use strategy for building logic
             if (activeStrategy != null) {
-                PlayerEntity owner = null;
+                Player owner = null;
                 if (activeStrategy.usesPlayerTracking()) {
                     owner = getOwnerPlayer();
                     if (owner != null) {
-                        this.getLookControl().lookAt(owner, 30.0f, 30.0f);
+                        this.getLookControl().setLookAt(owner, 30.0f, 30.0f);
                     }
                 }
                 activeStrategy.tick(this, owner);
@@ -1566,17 +1562,17 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private void updateArmAndEyePositions() {
-        float bodyYawRad = (float) Math.toRadians(this.getBodyYaw());
+        float bodyYawRad = (float) Math.toRadians(this.getVisualRotationYInDegrees());
 
         // Update left arm and eye
         if (leftArmTargetBlock != null) {
             // SERVER: Has exact block position, calculate precise angle
-            Vec3d armPos = new Vec3d(this.getX() - 0.3, this.getY() + 1.0, this.getZ()); // Left arm position (approx)
-            Vec3d targetPos = leftArmTargetBlock;
+            Vec3 armPos = new Vec3(this.getX() - 0.3, this.getY() + 1.0, this.getZ()); // Left arm position (approx)
+            Vec3 targetPos = leftArmTargetBlock;
 
             // For later ticks, transition to looking at next block
             if (leftHandAnimationTick >= 6 && nextLeftBlock != null) {
-                targetPos = new Vec3d(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5);
+                targetPos = new Vec3(nextLeftBlock.getX() + 0.5, nextLeftBlock.getY() + 0.5, nextLeftBlock.getZ() + 0.5);
             }
 
             // Calculate direction to target in world space
@@ -1589,7 +1585,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Use -dx because Minecraft yaw convention: 0=South, -90=East, 90=West
             // Add 180° because arm default is down, pitch rotates to backward (-Z), so yaw=180 is forward
             float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-            leftArmYaw = worldYaw - this.getBodyYaw() + 180.0f;
+            leftArmYaw = worldYaw - this.getVisualRotationYInDegrees() + 180.0f;
             // Normalize to -180 to 180
             while (leftArmYaw > 180) leftArmYaw -= 360;
             while (leftArmYaw < -180) leftArmYaw += 360;
@@ -1623,12 +1619,12 @@ public class GoldGolemEntity extends PathAwareEntity {
         // Update right arm and eye
         if (rightArmTargetBlock != null) {
             // SERVER: Has exact block position, calculate precise angle
-            Vec3d armPos = new Vec3d(this.getX() + 0.3, this.getY() + 1.0, this.getZ()); // Right arm position (approx)
-            Vec3d targetPos = rightArmTargetBlock;
+            Vec3 armPos = new Vec3(this.getX() + 0.3, this.getY() + 1.0, this.getZ()); // Right arm position (approx)
+            Vec3 targetPos = rightArmTargetBlock;
 
             // For later ticks, transition to looking at next block
             if (rightHandAnimationTick >= 6 && nextRightBlock != null) {
-                targetPos = new Vec3d(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5);
+                targetPos = new Vec3(nextRightBlock.getX() + 0.5, nextRightBlock.getY() + 0.5, nextRightBlock.getZ() + 0.5);
             }
 
             // Calculate direction to target in world space
@@ -1641,7 +1637,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             // Use -dx because Minecraft yaw convention: 0=South, -90=East, 90=West
             // Add 180° because arm default is down, pitch rotates to backward (-Z), so yaw=180 is forward
             float worldYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-            rightArmYaw = worldYaw - this.getBodyYaw() + 180.0f;
+            rightArmYaw = worldYaw - this.getVisualRotationYInDegrees() + 180.0f;
             // Normalize to -180 to 180
             while (rightArmYaw > 180) rightArmYaw -= 360;
             while (rightArmYaw < -180) rightArmYaw += 360;
@@ -1673,26 +1669,26 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    private static Vec3d blockCenter(BlockPos pos) {
-        return pos == null ? null : new Vec3d(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
+    private static Vec3 blockCenter(BlockPos pos) {
+        return pos == null ? null : new Vec3(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
     }
 
     private void updateClientHandTargetsFromTracker() {
-        if (!this.getEntityWorld().isClient()) return;
+        if (!this.level().isClientSide()) return;
 
-        if (this.dataTracker.get(LEFT_ARM_HAS_TARGET)) {
-            Optional<BlockPos> current = this.dataTracker.get(LEFT_HAND_TARGET_POS);
+        if (this.entityData.get(LEFT_ARM_HAS_TARGET)) {
+            Optional<BlockPos> current = this.entityData.get(LEFT_HAND_TARGET_POS);
             leftArmTargetBlock = current.map(GoldGolemEntity::blockCenter).orElse(null);
-            nextLeftBlock = this.dataTracker.get(LEFT_HAND_NEXT_POS).orElse(null);
+            nextLeftBlock = this.entityData.get(LEFT_HAND_NEXT_POS).orElse(null);
         } else {
             leftArmTargetBlock = null;
             nextLeftBlock = null;
         }
 
-        if (this.dataTracker.get(RIGHT_ARM_HAS_TARGET)) {
-            Optional<BlockPos> current = this.dataTracker.get(RIGHT_HAND_TARGET_POS);
+        if (this.entityData.get(RIGHT_ARM_HAS_TARGET)) {
+            Optional<BlockPos> current = this.entityData.get(RIGHT_HAND_TARGET_POS);
             rightArmTargetBlock = current.map(GoldGolemEntity::blockCenter).orElse(null);
-            nextRightBlock = this.dataTracker.get(RIGHT_HAND_NEXT_POS).orElse(null);
+            nextRightBlock = this.entityData.get(RIGHT_HAND_NEXT_POS).orElse(null);
         } else {
             rightArmTargetBlock = null;
             nextRightBlock = null;
@@ -1701,7 +1697,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public void beginHandAnimation(boolean isLeft, BlockPos placedBlock, BlockPos previewBlock) {
         if (placedBlock == null) return;
-        Vec3d center = blockCenter(placedBlock);
+        Vec3 center = blockCenter(placedBlock);
 
         if (isLeft) {
             leftArmTargetBlock = center;
@@ -1715,10 +1711,10 @@ public class GoldGolemEntity extends PathAwareEntity {
             rightHandJustActivated = true;
         }
 
-        this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, 0);
-        this.dataTracker.set(isLeft ? LEFT_ARM_HAS_TARGET : RIGHT_ARM_HAS_TARGET, true);
-        this.dataTracker.set(isLeft ? LEFT_HAND_TARGET_POS : RIGHT_HAND_TARGET_POS, Optional.ofNullable(placedBlock));
-        this.dataTracker.set(isLeft ? LEFT_HAND_NEXT_POS : RIGHT_HAND_NEXT_POS, Optional.ofNullable(previewBlock));
+        this.entityData.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, 0);
+        this.entityData.set(isLeft ? LEFT_ARM_HAS_TARGET : RIGHT_ARM_HAS_TARGET, true);
+        this.entityData.set(isLeft ? LEFT_HAND_TARGET_POS : RIGHT_HAND_TARGET_POS, Optional.ofNullable(placedBlock));
+        this.entityData.set(isLeft ? LEFT_HAND_NEXT_POS : RIGHT_HAND_NEXT_POS, Optional.ofNullable(previewBlock));
     }
 
     private void clearHandAnimation(boolean isLeft) {
@@ -1734,14 +1730,14 @@ public class GoldGolemEntity extends PathAwareEntity {
             rightHandJustActivated = false;
         }
 
-        this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, -1);
-        this.dataTracker.set(isLeft ? LEFT_ARM_HAS_TARGET : RIGHT_ARM_HAS_TARGET, false);
-        this.dataTracker.set(isLeft ? LEFT_HAND_TARGET_POS : RIGHT_HAND_TARGET_POS, Optional.empty());
-        this.dataTracker.set(isLeft ? LEFT_HAND_NEXT_POS : RIGHT_HAND_NEXT_POS, Optional.empty());
+        this.entityData.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, -1);
+        this.entityData.set(isLeft ? LEFT_ARM_HAS_TARGET : RIGHT_ARM_HAS_TARGET, false);
+        this.entityData.set(isLeft ? LEFT_HAND_TARGET_POS : RIGHT_HAND_TARGET_POS, Optional.empty());
+        this.entityData.set(isLeft ? LEFT_HAND_NEXT_POS : RIGHT_HAND_NEXT_POS, Optional.empty());
     }
 
     private void advanceHandAnimationTicks() {
-        if (this.getEntityWorld().isClient()) return;
+        if (this.level().isClientSide()) return;
         advanceHandAnimationTick(true);
         advanceHandAnimationTick(false);
     }
@@ -1765,7 +1761,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (next >= 12) {
             clearHandAnimation(isLeft);
         } else {
-            this.dataTracker.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, next);
+            this.entityData.set(isLeft ? LEFT_HAND_ANIMATION_TICK : RIGHT_HAND_ANIMATION_TICK, next);
             if (isLeft) {
                 leftHandAnimationTick = next;
             } else {
@@ -1774,16 +1770,16 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    public double computeGroundTargetY(Vec3d pos) {
-        int bx = MathHelper.floor(pos.x);
-        int bz = MathHelper.floor(pos.z);
-        int y0 = MathHelper.floor(pos.y);
-        var world = this.getEntityWorld();
+    public double computeGroundTargetY(Vec3 pos) {
+        int bx = Mth.floor(pos.x);
+        int bz = Mth.floor(pos.z);
+        int y0 = Mth.floor(pos.y);
+        var world = this.level();
         Integer groundY = null;
         for (int yy = y0 + 3; yy >= y0 - 8; yy--) {
             BlockPos test = new BlockPos(bx, yy, bz);
             var st = world.getBlockState(test);
-            if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
+            if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) { groundY = yy; break; }
         }
         if (groundY == null) return pos.y;
         // ensure stand space (two blocks of air above ground)
@@ -1804,32 +1800,32 @@ public class GoldGolemEntity extends PathAwareEntity {
      * Adds a small Y offset (0.1) to prevent clipping into ground blocks.
      */
     public void teleportWithParticles(BlockPos target) {
-        if (this.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.PORTAL,
+        if (this.level() instanceof ServerLevel sw) {
+            sw.sendParticles(ParticleTypes.PORTAL,
                     this.getX(), this.getY() + 0.5, this.getZ(),
                     40, 0.5, 0.5, 0.5, 0.2);
-            sw.spawnParticles(ParticleTypes.PORTAL,
+            sw.sendParticles(ParticleTypes.PORTAL,
                     target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
                     40, 0.5, 0.5, 0.5, 0.2);
         }
         // Add small Y offset (0.1) to ensure golem spawns clearly above the floor
         // and doesn't clip into the ground block causing brief suffocation
-        this.refreshPositionAndAngles(
+        this.snapTo(
                 target.getX() + 0.5,
                 target.getY() + 0.1,
                 target.getZ() + 0.5,
-                this.getYaw(),
-                this.getPitch()
+                this.getYRot(),
+                this.getXRot()
         );
-        this.setVelocity(0, 0, 0);  // Clear velocity to prevent unexpected movement
+        this.setDeltaMovement(0, 0, 0);  // Clear velocity to prevent unexpected movement
         this.getNavigation().stop();
     }
 
     // WALL MODE runtime tick handler
-    private void tickWallMode(PlayerEntity owner) {
+    private void tickWallMode(Player owner) {
         // Track anchors and enqueue modules based on movement
-        if (owner != null && owner.isOnGround()) {
-            Vec3d p = new Vec3d(owner.getX(), owner.getY() + 0.05, owner.getZ());
+        if (owner != null && owner.onGround()) {
+            Vec3 p = new Vec3(owner.getX(), owner.getY() + 0.05, owner.getZ());
             if (trackStart == null) {
                 trackStart = p;
             } else {
@@ -1842,12 +1838,12 @@ public class GoldGolemEntity extends PathAwareEntity {
                         // update anchor to end
                         trackStart = cand.end();
                         // preview
-                        if (this.getEntityWorld() instanceof ServerWorld) {
+                        if (this.level() instanceof ServerLevel) {
                             var owner2 = getOwnerPlayer();
-                            if (owner2 instanceof net.minecraft.server.network.ServerPlayerEntity sp2) {
-                                java.util.List<Vec3d> list = new java.util.ArrayList<>();
+                            if (owner2 instanceof net.minecraft.server.level.ServerPlayer sp2) {
+                                java.util.List<Vec3> list = new java.util.ArrayList<>();
                                 list.add(cand.anchor()); list.add(cand.end());
-                                java.util.Optional<Vec3d> anchor = java.util.Optional.ofNullable(this.trackStart);
+                                java.util.Optional<Vec3> anchor = java.util.Optional.ofNullable(this.trackStart);
                                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list, anchor);
                             }
                         }
@@ -1859,9 +1855,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             currentModulePlacement = pendingModules.pollFirst();
             if (currentModulePlacement != null) {
                 currentModulePlacement.begin(this);
-                Vec3d end = currentModulePlacement.end();
+                Vec3 end = currentModulePlacement.end();
                 double ty = computeGroundTargetY(end);
-                this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
+                this.getNavigation().moveTo(end.x, ty, end.z, 1.1);
             }
         }
         if (currentModulePlacement != null) {
@@ -1871,13 +1867,13 @@ public class GoldGolemEntity extends PathAwareEntity {
                 // This maintains the alternating hand animation
                 currentModulePlacement.placeSome(this, 1); // Place only 1 block
             }
-            Vec3d end = currentModulePlacement.end();
+            Vec3 end = currentModulePlacement.end();
             double ty = computeGroundTargetY(end);
-            this.getNavigation().startMovingTo(end.x, ty, end.z, 1.1);
+            this.getNavigation().moveTo(end.x, ty, end.z, 1.1);
             double dx = this.getX() - end.x;
             double dz = this.getZ() - end.z;
             double distSq = dx * dx + dz * dz;
-            if (this.getNavigation().isIdle() && distSq > 1.0) {
+            if (this.getNavigation().isDone() && distSq > 1.0) {
                 stuckTicks++;
                 if (stuckTicks >= 20) {
                     LOGGER.info("Gold Golem stuck in Wall Mode! Teleporting to {}", end);
@@ -1900,29 +1896,29 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Mining methods have been moved to MiningBuildStrategy
 
-    private ItemStack transferToInventory(ItemStack stack, net.minecraft.inventory.Inventory targetInv) {
+    private ItemStack transferToInventory(ItemStack stack, net.minecraft.world.Container targetInv) {
         if (stack.isEmpty()) return ItemStack.EMPTY;
 
         // Try to merge with existing stacks first
-        for (int i = 0; i < targetInv.size(); i++) {
-            ItemStack targetStack = targetInv.getStack(i);
+        for (int i = 0; i < targetInv.getContainerSize(); i++) {
+            ItemStack targetStack = targetInv.getItem(i);
             if (targetStack.isEmpty()) continue;
-            if (ItemStack.areItemsAndComponentsEqual(stack, targetStack)) {
-                int space = targetStack.getMaxCount() - targetStack.getCount();
+            if (ItemStack.isSameItemSameComponents(stack, targetStack)) {
+                int space = targetStack.getMaxStackSize() - targetStack.getCount();
                 if (space > 0) {
                     int toTransfer = Math.min(space, stack.getCount());
                     targetStack.setCount(targetStack.getCount() + toTransfer);
-                    targetInv.setStack(i, targetStack);
-                    stack.decrement(toTransfer);
+                    targetInv.setItem(i, targetStack);
+                    stack.shrink(toTransfer);
                     if (stack.isEmpty()) return ItemStack.EMPTY;
                 }
             }
         }
 
         // Place in empty slots
-        for (int i = 0; i < targetInv.size(); i++) {
-            if (targetInv.getStack(i).isEmpty()) {
-                targetInv.setStack(i, stack.copy());
+        for (int i = 0; i < targetInv.getContainerSize(); i++) {
+            if (targetInv.getItem(i).isEmpty()) {
+                targetInv.setItem(i, stack.copy());
                 return ItemStack.EMPTY;
             }
         }
@@ -1932,8 +1928,8 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     private boolean shouldMineBlock(BlockPos pos) {
-        BlockState state = this.getEntityWorld().getBlockState(pos);
-        return !state.isAir() && state.getHardness(this.getEntityWorld(), pos) >= 0;
+        BlockState state = this.level().getBlockState(pos);
+        return !state.isAir() && state.getDestroySpeed(this.level(), pos) >= 0;
     }
 
     /**
@@ -1943,7 +1939,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private boolean wouldBlockOverlapSelf(BlockPos pos) {
         var golemBox = this.getBoundingBox();
         // Create a box for the block position (1x1x1 cube)
-        var blockBox = new net.minecraft.util.math.Box(
+        var blockBox = new net.minecraft.world.phys.AABB(
             pos.getX(), pos.getY(), pos.getZ(),
             pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0
         );
@@ -1955,26 +1951,26 @@ public class GoldGolemEntity extends PathAwareEntity {
                blockId.equals("minecraft:gilded_blackstone");
     }
 
-    private boolean isGravityBlock(net.minecraft.block.Block block) {
-        return block instanceof net.minecraft.block.FallingBlock;
+    private boolean isGravityBlock(net.minecraft.world.level.block.Block block) {
+        return block instanceof net.minecraft.world.level.block.FallingBlock;
     }
 
     private String getBlockIdFromStack(ItemStack stack) {
-        if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.item.BlockItem blockItem)) {
+        if (stack.isEmpty() || !(stack.getItem() instanceof net.minecraft.world.item.BlockItem blockItem)) {
             return null;
         }
-        return net.minecraft.registry.Registries.BLOCK.getId(blockItem.getBlock()).toString();
+        return net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
     }
 
     private ItemStack findBestTool(BlockState state) {
         ItemStack bestTool = ItemStack.EMPTY;
         float bestSpeed = 1.0f;
 
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (stack.isEmpty() || !stack.isCorrectToolForDrops(state)) continue;
 
-            float speed = stack.getMiningSpeedMultiplier(state);
+            float speed = stack.getDestroySpeed(state);
             if (speed > bestSpeed) {
                 bestSpeed = speed;
                 bestTool = stack;
@@ -1988,33 +1984,33 @@ public class GoldGolemEntity extends PathAwareEntity {
         if (stack.isEmpty()) return;
 
         // Try to merge with existing stacks
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack slot = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack slot = inventory.getItem(i);
             if (slot.isEmpty()) continue;
 
-            if (ItemStack.areItemsAndComponentsEqual(stack, slot)) {
-                int space = slot.getMaxCount() - slot.getCount();
+            if (ItemStack.isSameItemSameComponents(stack, slot)) {
+                int space = slot.getMaxStackSize() - slot.getCount();
                 if (space > 0) {
                     int toAdd = Math.min(space, stack.getCount());
                     slot.setCount(slot.getCount() + toAdd);
-                    inventory.setStack(i, slot);
-                    stack.decrement(toAdd);
+                    inventory.setItem(i, slot);
+                    stack.shrink(toAdd);
                     if (stack.isEmpty()) return;
                 }
             }
         }
 
         // Place in empty slots
-        for (int i = 0; i < inventory.size(); i++) {
-            if (inventory.getStack(i).isEmpty()) {
-                inventory.setStack(i, stack.copy());
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (inventory.getItem(i).isEmpty()) {
+                inventory.setItem(i, stack.copy());
                 return;
             }
         }
 
         // Inventory full, drop on ground
-        if (this.getEntityWorld() instanceof ServerWorld sw) {
-            this.dropStack(sw, stack);
+        if (this.level() instanceof ServerLevel sw) {
+            this.spawnAtLocation(sw, stack);
         }
     }
 
@@ -2035,38 +2031,38 @@ public class GoldGolemEntity extends PathAwareEntity {
         BlockState finalState = getPlacementStateForBlock(pos, gradientState.getBlock(), templateState, 0, false);
 
         // Check if block already exists at position
-        if (this.getEntityWorld().getBlockState(pos).equals(finalState)) return true;
+        if (this.level().getBlockState(pos).equals(finalState)) return true;
 
         // Prevent placing blocks inside self to avoid suffocation damage
         if (wouldBlockOverlapSelf(pos)) return false;
 
         // Try to consume block from inventory
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(finalState.getBlock()).toString();
+        String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(finalState.getBlock()).toString();
         if (!consumeBlockFromInventory(blockId)) {
             LOGGER.warn("GoldGolem placement failed: missing blockId={} at pos={}", blockId, pos);
             handleMissingBuildingBlock();
             return false;
         }
 
-        this.getEntityWorld().setBlockState(pos, finalState);
+        this.level().setBlockAndUpdate(pos, finalState);
 
         // Explicitly update the block state to ensure proper connections (e.g. walls/fences)
         // This fixes issues where simulatePlayerPlacement might miss connections or when replacing blocks
-        BlockState placedState = this.getEntityWorld().getBlockState(pos);
+        BlockState placedState = this.level().getBlockState(pos);
         BlockState correctedState = placedState;
         for (Direction dir : Direction.values()) {
-            correctedState = correctedState.getStateForNeighborUpdate(
-                this.getEntityWorld(),
-                this.getEntityWorld(),
+            correctedState = correctedState.updateShape(
+                this.level(),
+                this.level(),
                 pos,
                 dir,
-                pos.offset(dir),
-                this.getEntityWorld().getBlockState(pos.offset(dir)),
-                this.getEntityWorld().getRandom()
+                pos.relative(dir),
+                this.level().getBlockState(pos.relative(dir)),
+                this.level().getRandom()
             );
         }
         if (correctedState != placedState) {
-            this.getEntityWorld().setBlockState(pos, correctedState);
+            this.level().setBlockAndUpdate(pos, correctedState);
         }
 
         // Set hand animation with current and next block positions
@@ -2081,8 +2077,8 @@ public class GoldGolemEntity extends PathAwareEntity {
      * 2. Same property set → copy all properties
      * 3. Different block family → simulate player placement
      */
-    private BlockState getPlacementStateForBlock(BlockPos pos, net.minecraft.block.Block targetBlock, BlockState templateState, int rotation, boolean mirror) {
-        net.minecraft.block.Block templateBlock = templateState.getBlock();
+    private BlockState getPlacementStateForBlock(BlockPos pos, net.minecraft.world.level.block.Block targetBlock, BlockState templateState, int rotation, boolean mirror) {
+        net.minecraft.world.level.block.Block templateBlock = templateState.getBlock();
 
         // Case A: Exact same block type - copy state directly
         if (templateBlock == targetBlock) {
@@ -2093,14 +2089,14 @@ public class GoldGolemEntity extends PathAwareEntity {
 
         // Case B: Different blocks - check if they have the same property set
         java.util.Collection<Property<?>> templatePropsCollection = templateState.getProperties();
-        java.util.Collection<Property<?>> targetPropsCollection = targetBlock.getDefaultState().getProperties();
+        java.util.Collection<Property<?>> targetPropsCollection = targetBlock.defaultBlockState().getProperties();
 
         java.util.Set<Property<?>> templateProps = new java.util.HashSet<>(templatePropsCollection);
         java.util.Set<Property<?>> targetProps = new java.util.HashSet<>(targetPropsCollection);
 
         if (templateProps.equals(targetProps)) {
             // Same property set - copy all properties from template
-            BlockState result = targetBlock.getDefaultState();
+            BlockState result = targetBlock.defaultBlockState();
             for (Property<?> prop : templateProps) {
                 result = copyProperty(templateState, result, prop);
             }
@@ -2120,9 +2116,9 @@ public class GoldGolemEntity extends PathAwareEntity {
     @SuppressWarnings("unchecked")
     private static <T extends Comparable<T>> BlockState copyProperty(BlockState source, BlockState target, Property<T> property) {
         try {
-            if (target.contains(property)) {
-                T value = source.get(property);
-                return target.with(property, value);
+            if (target.hasProperty(property)) {
+                T value = source.getValue(property);
+                return target.setValue(property, value);
             }
         } catch (Exception e) {
             // Property incompatible or other error - skip silently
@@ -2139,18 +2135,18 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         try {
-            net.minecraft.util.BlockRotation blockRotation = switch (rotation & 3) {
-                case 1 -> net.minecraft.util.BlockRotation.CLOCKWISE_90;
-                case 2 -> net.minecraft.util.BlockRotation.CLOCKWISE_180;
-                case 3 -> net.minecraft.util.BlockRotation.COUNTERCLOCKWISE_90;
-                default -> net.minecraft.util.BlockRotation.NONE;
+            net.minecraft.world.level.block.Rotation blockRotation = switch (rotation & 3) {
+                case 1 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_90;
+                case 2 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_180;
+                case 3 -> net.minecraft.world.level.block.Rotation.COUNTERCLOCKWISE_90;
+                default -> net.minecraft.world.level.block.Rotation.NONE;
             };
             state = state.rotate(blockRotation);
         } catch (Throwable ignored) {}
 
         try {
             if (mirror) {
-                net.minecraft.util.BlockMirror blockMirror = net.minecraft.util.BlockMirror.LEFT_RIGHT;
+                net.minecraft.world.level.block.Mirror blockMirror = net.minecraft.world.level.block.Mirror.LEFT_RIGHT;
                 state = state.mirror(blockMirror);
             }
         } catch (Throwable ignored) {}
@@ -2162,11 +2158,11 @@ public class GoldGolemEntity extends PathAwareEntity {
      * Simulates player placement with deterministic randomness.
      * Uses world seed + position for consistent results.
      */
-    private BlockState simulatePlayerPlacement(BlockPos pos, net.minecraft.block.Block block) {
+    private BlockState simulatePlayerPlacement(BlockPos pos, net.minecraft.world.level.block.Block block) {
         // Create deterministic random from world seed + position
         long seed = pos.asLong();
-        World world = this.getEntityWorld();
-        if (world instanceof ServerWorld serverWorld) {
+        Level world = this.level();
+        if (world instanceof ServerLevel serverWorld) {
             seed = serverWorld.getSeed() + pos.asLong();
         }
         java.util.Random random = new java.util.Random(seed);
@@ -2180,19 +2176,19 @@ public class GoldGolemEntity extends PathAwareEntity {
         Direction hitSide = Direction.values()[random.nextInt(6)];
 
         // Create fake placement context
-        ItemPlacementContext context = createFakePlacementContext(pos, horizontalFacing, hitSide);
+        BlockPlaceContext context = createFakePlacementContext(pos, horizontalFacing, hitSide);
 
         // Try to get placement state from block
         BlockState placementState = null;
         try {
-            placementState = block.getPlacementState(context);
+            placementState = block.getStateForPlacement(context);
         } catch (Exception e) {
             // Some blocks might throw exceptions - ignore
         }
 
         // Fall back to default state if placement state is null
         if (placementState == null) {
-            placementState = block.getDefaultState();
+            placementState = block.defaultBlockState();
         }
 
         return placementState;
@@ -2201,24 +2197,24 @@ public class GoldGolemEntity extends PathAwareEntity {
     /**
      * Creates a fake ItemPlacementContext for simulating player placement.
      */
-    private ItemPlacementContext createFakePlacementContext(BlockPos pos, Direction horizontalFacing, Direction hitSide) {
+    private BlockPlaceContext createFakePlacementContext(BlockPos pos, Direction horizontalFacing, Direction hitSide) {
         // Create a fake BlockHitResult
-        Vec3d hitPos = Vec3d.ofCenter(pos);
+        Vec3 hitPos = Vec3.atCenterOf(pos);
         BlockHitResult hitResult = new BlockHitResult(hitPos, hitSide, pos, false);
 
         // Create ItemPlacementContext
         // The context simulates a player placing a block
-        World world = this.getEntityWorld();
+        Level world = this.level();
         ItemStack stack = new ItemStack(Items.STONE); // Dummy item, not used by most blocks
 
-        return new ItemPlacementContext(world, null, Hand.MAIN_HAND, stack, hitResult) {
+        return new BlockPlaceContext(world, null, InteractionHand.MAIN_HAND, stack, hitResult) {
             @Override
-            public Direction getHorizontalPlayerFacing() {
+            public Direction getHorizontalDirection() {
                 return horizontalFacing;
             }
 
             @Override
-            public Direction getPlayerLookDirection() {
+            public Direction getNearestLookingDirection() {
                 return hitSide;
             }
         };
@@ -2226,7 +2222,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     private boolean consumeFromShulkerBox(ItemStack shulkerBox, String blockId) {
         // Get the container component from the shulker box
-        ContainerComponent container = shulkerBox.get(DataComponentTypes.CONTAINER);
+        ItemContainerContents container = shulkerBox.get(DataComponents.CONTAINER);
         if (container == null) return false;
 
         // Convert stream to list for easier manipulation
@@ -2237,15 +2233,15 @@ public class GoldGolemEntity extends PathAwareEntity {
             ItemStack stack = contents.get(i);
             if (stack.isEmpty()) continue;
 
-            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
-                String stackId = net.minecraft.registry.Registries.BLOCK.getId(bi.getBlock()).toString();
+            if (stack.getItem() instanceof net.minecraft.world.item.BlockItem bi) {
+                String stackId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(bi.getBlock()).toString();
                 if (stackId.equals(blockId)) {
                     // Decrement this stack and write back an updated immutable container component.
                     ItemStack modifiedStack = stack.copy();
-                    modifiedStack.decrement(1);
+                    modifiedStack.shrink(1);
                     contents.set(i, modifiedStack);
 
-                    shulkerBox.set(DataComponentTypes.CONTAINER, ContainerComponent.fromStacks(contents));
+                    shulkerBox.set(DataComponents.CONTAINER, ItemContainerContents.fromItems(contents));
                     return true;
                 }
             }
@@ -2255,25 +2251,25 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public boolean consumeBlockFromInventory(String blockId) {
         // Search inventory for matching block
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
-            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
-                String stackId = net.minecraft.registry.Registries.BLOCK.getId(bi.getBlock()).toString();
+            if (stack.getItem() instanceof net.minecraft.world.item.BlockItem bi) {
+                String stackId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(bi.getBlock()).toString();
                 if (stackId.equals(blockId)) {
-                    stack.decrement(1);
+                    stack.shrink(1);
                     return true;
                 }
             }
         }
 
         // If not found in regular inventory, check shulker boxes
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
 
             // Check if this is a shulker box
-            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi && bi.getBlock() instanceof ShulkerBoxBlock) {
+            if (stack.getItem() instanceof net.minecraft.world.item.BlockItem bi && bi.getBlock() instanceof ShulkerBoxBlock) {
                 if (consumeFromShulkerBox(stack, blockId)) {
                     return true;
                 }
@@ -2285,11 +2281,11 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     public BlockState getBlockStateFromId(String blockId) {
         try {
-            net.minecraft.util.Identifier id = net.minecraft.util.Identifier.tryParse(blockId);
+            net.minecraft.resources.Identifier id = net.minecraft.resources.Identifier.tryParse(blockId);
             if (id == null) return null;
-            net.minecraft.block.Block block = net.minecraft.registry.Registries.BLOCK.get(id);
+            net.minecraft.world.level.block.Block block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(id);
             if (block == null) return null;
-            return block.getDefaultState();
+            return block.defaultBlockState();
         } catch (Exception e) {
             return null;
         }
@@ -2300,7 +2296,7 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Persistence: width, gradient, inventory, owner UUID (1.21.10 storage API)
     @Override
-    protected void writeCustomData(WriteView view) {
+    protected void addAdditionalSaveData(ValueOutput view) {
         view.putString("Mode", getBuildMode().name());
         view.putBoolean("BuildingPaths", isBuildingPaths());
         view.putInt("PathWidth", this.pathWidth);
@@ -2324,9 +2320,9 @@ public class GoldGolemEntity extends PathAwareEntity {
             view.putString("F" + i, val);
         }
 
-        DefaultedList<ItemStack> stacks = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
-        for (int i = 0; i < INVENTORY_SIZE; i++) stacks.set(i, inventory.getStack(i));
-        Inventories.writeData(view.get("Inventory"), stacks, true);
+        NonNullList<ItemStack> stacks = NonNullList.withSize(INVENTORY_SIZE, ItemStack.EMPTY);
+        for (int i = 0; i < INVENTORY_SIZE; i++) stacks.set(i, inventory.getItem(i));
+        ContainerHelper.saveAllItems(view.child("Inventory"), stacks, true);
 
         if (ownerUuid != null) view.putString("Owner", ownerUuid.toString());
 
@@ -2478,7 +2474,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             ninja.trek.mc.goldgolem.tree.TreeModule module = this.treeModules.get(m);
             view.putInt("TreeMod" + m + "Size", module.voxels.size());
             int vIdx = 0;
-            for (net.minecraft.util.math.BlockPos pos : module.voxels) {
+            for (net.minecraft.core.BlockPos pos : module.voxels) {
                 view.putInt("TreeMod" + m + "V" + vIdx + "X", pos.getX());
                 view.putInt("TreeMod" + m + "V" + vIdx + "Y", pos.getY());
                 view.putInt("TreeMod" + m + "V" + vIdx + "Z", pos.getZ());
@@ -2506,70 +2502,70 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    protected void readCustomData(ReadView view) {
-        String mode = view.getString("Mode", BuildMode.PATH.name());
+    protected void readAdditionalSaveData(ValueInput view) {
+        String mode = view.getStringOr("Mode", BuildMode.PATH.name());
         try {
             setBuildMode(BuildMode.valueOf(mode));
         } catch (IllegalArgumentException ex) {
             setBuildMode(BuildMode.PATH);
         }
         // Restore building state (after mode is set)
-        boolean wasBuildingPaths = view.getBoolean("BuildingPaths", false);
-        this.pathWidth = Math.max(1, Math.min(9, view.getInt("PathWidth", this.pathWidth)));
-        this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("GradWindow", this.gradientWindow)));
-        this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("StepWindow", this.stepGradientWindow)));
-        this.surfaceGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloat("FWindow", this.surfaceGradientWindow)));
-        int legacyScale = view.getInt("GradNoiseScale", 1);
-        this.gradientNoiseScaleMain = Math.max(1, Math.min(16, view.getInt("GradNoiseMain", legacyScale)));
-        this.gradientNoiseScaleStep = Math.max(1, Math.min(16, view.getInt("GradNoiseStep", legacyScale)));
-        this.gradientNoiseScaleSurface = Math.max(1, Math.min(16, view.getInt("FNoiseScale", 1)));
+        boolean wasBuildingPaths = view.getBooleanOr("BuildingPaths", false);
+        this.pathWidth = Math.max(1, Math.min(9, view.getIntOr("PathWidth", this.pathWidth)));
+        this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("GradWindow", this.gradientWindow)));
+        this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("StepWindow", this.stepGradientWindow)));
+        this.surfaceGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("FWindow", this.surfaceGradientWindow)));
+        int legacyScale = view.getIntOr("GradNoiseScale", 1);
+        this.gradientNoiseScaleMain = Math.max(1, Math.min(16, view.getIntOr("GradNoiseMain", legacyScale)));
+        this.gradientNoiseScaleStep = Math.max(1, Math.min(16, view.getIntOr("GradNoiseStep", legacyScale)));
+        this.gradientNoiseScaleSurface = Math.max(1, Math.min(16, view.getIntOr("FNoiseScale", 1)));
 
         for (int i = 0; i < 9; i++) {
-            gradient[i] = view.getString("G" + i, "");
+            gradient[i] = view.getStringOr("G" + i, "");
         }
         gradientCopyDirty = true; // Invalidate cache after loading from NBT
         for (int i = 0; i < 9; i++) {
-            stepGradient[i] = view.getString("S" + i, "");
+            stepGradient[i] = view.getStringOr("S" + i, "");
         }
         for (int i = 0; i < 9; i++) {
-            surfaceGradient[i] = view.getString("F" + i, "");
+            surfaceGradient[i] = view.getStringOr("F" + i, "");
         }
 
-        DefaultedList<ItemStack> stacks = DefaultedList.ofSize(INVENTORY_SIZE, ItemStack.EMPTY);
-        Inventories.readData(view.getReadView("Inventory"), stacks);
-        for (int i = 0; i < INVENTORY_SIZE; i++) inventory.setStack(i, stacks.get(i));
+        NonNullList<ItemStack> stacks = NonNullList.withSize(INVENTORY_SIZE, ItemStack.EMPTY);
+        ContainerHelper.loadAllItems(view.childOrEmpty("Inventory"), stacks);
+        for (int i = 0; i < INVENTORY_SIZE; i++) inventory.setItem(i, stacks.get(i));
 
-        var ownerOpt = view.getOptionalString("Owner");
+        var ownerOpt = view.getString("Owner");
         this.ownerUuid = ownerOpt.isPresent() && !ownerOpt.get().isEmpty() ? java.util.UUID.fromString(ownerOpt.get()) : null;
 
         // Wall-mode bits
         if (view.contains("WallOX")) {
-            this.wallOrigin = new net.minecraft.util.math.BlockPos(view.getInt("WallOX", 0), view.getInt("WallOY", 0), view.getInt("WallOZ", 0));
+            this.wallOrigin = new net.minecraft.core.BlockPos(view.getIntOr("WallOX", 0), view.getIntOr("WallOY", 0), view.getIntOr("WallOZ", 0));
         } else {
             this.wallOrigin = null;
         }
-        this.wallJsonFile = view.getString("WallJson", null);
-        int c = view.getInt("WallUniqCount", 0);
+        this.wallJsonFile = view.getStringOr("WallJson", null);
+        int c = view.getIntOr("WallUniqCount", 0);
         if (c > 0) {
             java.util.ArrayList<String> ids = new java.util.ArrayList<>(c);
-            for (int i = 0; i < c; i++) ids.add(view.getString("WallU" + i, ""));
+            for (int i = 0; i < c; i++) ids.add(view.getStringOr("WallU" + i, ""));
             this.wallUniqueBlockIds = ids;
         } else {
             this.wallUniqueBlockIds = java.util.Collections.emptyList();
         }
-        this.wallJoinSignature = view.getString("WallJoinSig", null);
-        String a = view.getString("WallJoinAxis", null);
+        this.wallJoinSignature = view.getStringOr("WallJoinSig", null);
+        String a = view.getStringOr("WallJoinAxis", null);
         if (a != null) { try { this.wallJoinAxis = ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.valueOf(a); } catch (IllegalArgumentException ignored) {} }
-        this.wallJoinUSize = Math.max(1, view.getInt("WallJoinU", 1));
-        this.wallModuleCount = view.getInt("WallModCount", 0);
-        this.wallLongestModule = view.getInt("WallModLongest", 0);
-        int jt = view.getInt("WallJoinTplCount", 0);
+        this.wallJoinUSize = Math.max(1, view.getIntOr("WallJoinU", 1));
+        this.wallModuleCount = view.getIntOr("WallModCount", 0);
+        this.wallLongestModule = view.getIntOr("WallModLongest", 0);
+        int jt = view.getIntOr("WallJoinTplCount", 0);
         if (jt > 0) {
             java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>(jt);
             for (int i = 0; i < jt; i++) {
-                int dy = view.getInt("WJT_dy" + i, 0);
-                int du = view.getInt("WJT_du" + i, 0);
-                String id = view.getString("WJT_id" + i, "");
+                int dy = view.getIntOr("WJT_dy" + i, 0);
+                int du = view.getIntOr("WJT_du" + i, 0);
+                String id = view.getStringOr("WJT_id" + i, "");
                 list.add(new JoinEntry(dy, du, id));
             }
             this.wallJoinTemplate = list;
@@ -2578,45 +2574,45 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         // Wall groups
         wallGroupSlots.clear(); wallGroupWindows.clear(); wallGroupNoiseScales.clear(); wallBlockGroup.clear();
-        int gc = view.getInt("WallGroupCount", 0);
+        int gc = view.getIntOr("WallGroupCount", 0);
         for (int g = 0; g < gc; g++) {
-            float w = view.getFloat("WallGW" + g, 1.0f);
+            float w = view.getFloatOr("WallGW" + g, 1.0f);
             wallGroupWindows.add(Math.max(0.0f, Math.min(9.0f, w)));
-            int ns = view.getInt("WallGNS" + g, 1);
+            int ns = view.getIntOr("WallGNS" + g, 1);
             wallGroupNoiseScales.add(Math.max(1, Math.min(16, ns)));
             String[] arr = new String[9];
-            for (int i = 0; i < 9; i++) arr[i] = view.getString("WallGS" + g + "_" + i, "");
+            for (int i = 0; i < 9; i++) arr[i] = view.getStringOr("WallGS" + g + "_" + i, "");
             wallGroupSlots.add(arr);
         }
         for (int i = 0; i < wallUniqueBlockIds.size(); i++) {
-            int grp = view.getInt("WallGM" + i, 0);
+            int grp = view.getIntOr("WallGM" + i, 0);
             String id = wallUniqueBlockIds.get(i);
             wallBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, wallGroupSlots.size() - 1), grp)));
         }
 
         // Tower-mode bits
         if (view.contains("TowerOX")) {
-            this.towerOrigin = new net.minecraft.util.math.BlockPos(view.getInt("TowerOX", 0), view.getInt("TowerOY", 0), view.getInt("TowerOZ", 0));
+            this.towerOrigin = new net.minecraft.core.BlockPos(view.getIntOr("TowerOX", 0), view.getIntOr("TowerOY", 0), view.getIntOr("TowerOZ", 0));
         } else {
             this.towerOrigin = null;
         }
-        this.towerJsonFile = view.getString("TowerJson", null);
-        this.towerHeight = view.getInt("TowerHeight", 0);
-        int tc = view.getInt("TowerUniqCount", 0);
+        this.towerJsonFile = view.getStringOr("TowerJson", null);
+        this.towerHeight = view.getIntOr("TowerHeight", 0);
+        int tc = view.getIntOr("TowerUniqCount", 0);
         if (tc > 0) {
             java.util.ArrayList<String> ids = new java.util.ArrayList<>(tc);
-            for (int i = 0; i < tc; i++) ids.add(view.getString("TowerU" + i, ""));
+            for (int i = 0; i < tc; i++) ids.add(view.getStringOr("TowerU" + i, ""));
             this.towerUniqueBlockIds = ids;
         } else {
             this.towerUniqueBlockIds = java.util.Collections.emptyList();
         }
         // Tower block counts
-        int tcs = view.getInt("TowerCountsSize", 0);
+        int tcs = view.getIntOr("TowerCountsSize", 0);
         if (tcs > 0) {
             java.util.HashMap<String, Integer> counts = new java.util.HashMap<>();
             for (int i = 0; i < tcs; i++) {
-                String id = view.getString("TowerC_id" + i, "");
-                int cnt = view.getInt("TowerC_cnt" + i, 0);
+                String id = view.getStringOr("TowerC_id" + i, "");
+                int cnt = view.getIntOr("TowerC_cnt" + i, 0);
                 if (!id.isEmpty()) counts.put(id, cnt);
             }
             this.towerBlockCounts = counts;
@@ -2625,18 +2621,18 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
         // Tower groups
         towerGroupSlots.clear(); towerGroupWindows.clear(); towerGroupNoiseScales.clear(); towerBlockGroup.clear();
-        int tgc = view.getInt("TowerGroupCount", 0);
+        int tgc = view.getIntOr("TowerGroupCount", 0);
         for (int g = 0; g < tgc; g++) {
-            float w = view.getFloat("TowerGW" + g, 1.0f);
+            float w = view.getFloatOr("TowerGW" + g, 1.0f);
             towerGroupWindows.add(Math.max(0.0f, Math.min(9.0f, w)));
-            int ns = view.getInt("TowerGNS" + g, 1);
+            int ns = view.getIntOr("TowerGNS" + g, 1);
             towerGroupNoiseScales.add(Math.max(1, Math.min(16, ns)));
             String[] arr = new String[9];
-            for (int i = 0; i < 9; i++) arr[i] = view.getString("TowerGS" + g + "_" + i, "");
+            for (int i = 0; i < 9; i++) arr[i] = view.getStringOr("TowerGS" + g + "_" + i, "");
             towerGroupSlots.add(arr);
         }
         for (int i = 0; i < towerUniqueBlockIds.size(); i++) {
-            int grp = view.getInt("TowerGM" + i, 0);
+            int grp = view.getIntOr("TowerGM" + i, 0);
             String id = towerUniqueBlockIds.get(i);
             towerBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, towerGroupSlots.size() - 1), grp)));
         }
@@ -2648,46 +2644,46 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         // Terraforming-mode UI settings (remain in entity)
-        this.terraformingScanRadius = view.getInt("TFormScanRadius", 2);
-        this.terraformingAlpha = view.getInt("TFormAlpha", 3);
+        this.terraformingScanRadius = view.getIntOr("TFormScanRadius", 2);
+        this.terraformingAlpha = view.getIntOr("TFormAlpha", 3);
         // Terraforming gradients
         for (int i = 0; i < 9; i++) {
-            terraformingGradientVertical[i] = view.getString("TFormGV" + i, "");
+            terraformingGradientVertical[i] = view.getStringOr("TFormGV" + i, "");
         }
         for (int i = 0; i < 9; i++) {
-            terraformingGradientHorizontal[i] = view.getString("TFormGH" + i, "");
+            terraformingGradientHorizontal[i] = view.getStringOr("TFormGH" + i, "");
         }
         for (int i = 0; i < 9; i++) {
-            terraformingGradientSloped[i] = view.getString("TFormGS" + i, "");
+            terraformingGradientSloped[i] = view.getStringOr("TFormGS" + i, "");
         }
-        this.terraformingGradientVerticalWindow = view.getInt("TFormGVWindow", 1);
-        this.terraformingGradientHorizontalWindow = view.getInt("TFormGHWindow", 1);
-        this.terraformingGradientSlopedWindow = view.getInt("TFormGSWindow", 1);
-        this.terraformingGradientVerticalScale = Math.max(1, Math.min(16, view.getInt("TFormGVScale", 1)));
-        this.terraformingGradientHorizontalScale = Math.max(1, Math.min(16, view.getInt("TFormGHScale", 1)));
-        this.terraformingGradientSlopedScale = Math.max(1, Math.min(16, view.getInt("TFormGSScale", 1)));
+        this.terraformingGradientVerticalWindow = view.getIntOr("TFormGVWindow", 1);
+        this.terraformingGradientHorizontalWindow = view.getIntOr("TFormGHWindow", 1);
+        this.terraformingGradientSlopedWindow = view.getIntOr("TFormGSWindow", 1);
+        this.terraformingGradientVerticalScale = Math.max(1, Math.min(16, view.getIntOr("TFormGVScale", 1)));
+        this.terraformingGradientHorizontalScale = Math.max(1, Math.min(16, view.getIntOr("TFormGHScale", 1)));
+        this.terraformingGradientSlopedScale = Math.max(1, Math.min(16, view.getIntOr("TFormGSScale", 1)));
 
         // Note: Terraforming state is now read via activeStrategy.readLegacyNbt(view) above
 
         // Tree-mode persisted bits
         if (view.contains("TreeOX")) {
-            int x = view.getInt("TreeOX", 0);
-            int y = view.getInt("TreeOY", 0);
-            int z = view.getInt("TreeOZ", 0);
-            this.treeOrigin = new net.minecraft.util.math.BlockPos(x, y, z);
+            int x = view.getIntOr("TreeOX", 0);
+            int y = view.getIntOr("TreeOY", 0);
+            int z = view.getIntOr("TreeOZ", 0);
+            this.treeOrigin = new net.minecraft.core.BlockPos(x, y, z);
         }
-        this.treeJsonFile = view.getOptionalString("TreeJson").orElse(null);
-        int presetOrdinal = view.getInt("TreeTilingPreset", 0);
+        this.treeJsonFile = view.getString("TreeJson").orElse(null);
+        int presetOrdinal = view.getIntOr("TreeTilingPreset", 0);
         this.treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(presetOrdinal);
         // Tree state is deserialized by strategy (if active)
         // Note: treeWaitingForInventory is transient - strategy will rebuild state when building resumes
 
         // Tree unique block IDs
-        int treeUniqCount = view.getInt("TreeUniqCount", 0);
+        int treeUniqCount = view.getIntOr("TreeUniqCount", 0);
         if (treeUniqCount > 0) {
             this.treeUniqueBlockIds = new java.util.ArrayList<>();
             for (int i = 0; i < treeUniqCount; i++) {
-                String id = view.getString("TreeU" + i, "");
+                String id = view.getStringOr("TreeU" + i, "");
                 if (!id.isEmpty()) {
                     this.treeUniqueBlockIds.add(id);
                 }
@@ -2697,17 +2693,17 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         // Tree modules
-        int treeModCount = view.getInt("TreeModuleCount", 0);
+        int treeModCount = view.getIntOr("TreeModuleCount", 0);
         if (treeModCount > 0) {
             this.treeModules = new java.util.ArrayList<>();
             for (int m = 0; m < treeModCount; m++) {
-                int voxelSize = view.getInt("TreeMod" + m + "Size", 0);
-                java.util.Set<net.minecraft.util.math.BlockPos> voxels = new java.util.HashSet<>();
+                int voxelSize = view.getIntOr("TreeMod" + m + "Size", 0);
+                java.util.Set<net.minecraft.core.BlockPos> voxels = new java.util.HashSet<>();
                 for (int v = 0; v < voxelSize; v++) {
-                    int vx = view.getInt("TreeMod" + m + "V" + v + "X", 0);
-                    int vy = view.getInt("TreeMod" + m + "V" + v + "Y", 0);
-                    int vz = view.getInt("TreeMod" + m + "V" + v + "Z", 0);
-                    voxels.add(new net.minecraft.util.math.BlockPos(vx, vy, vz));
+                    int vx = view.getIntOr("TreeMod" + m + "V" + v + "X", 0);
+                    int vy = view.getIntOr("TreeMod" + m + "V" + v + "Y", 0);
+                    int vz = view.getIntOr("TreeMod" + m + "V" + v + "Z", 0);
+                    voxels.add(new net.minecraft.core.BlockPos(vx, vy, vz));
                 }
                 if (!voxels.isEmpty()) {
                     this.treeModules.add(new ninja.trek.mc.goldgolem.tree.TreeModule(voxels));
@@ -2718,26 +2714,26 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         // Tree groups persistence
-        int treeGroupCount = view.getInt("TreeGroupCount", 0);
+        int treeGroupCount = view.getIntOr("TreeGroupCount", 0);
         this.treeGroupSlots.clear();
         this.treeGroupWindows.clear();
         this.treeGroupNoiseScales.clear();
         this.treeBlockGroup.clear();
         for (int g = 0; g < treeGroupCount; g++) {
-            float window = view.getFloat("TreeGW" + g, 1.0f);
+            float window = view.getFloatOr("TreeGW" + g, 1.0f);
             this.treeGroupWindows.add(window);
-            int ns = view.getInt("TreeGNS" + g, 1);
+            int ns = view.getIntOr("TreeGNS" + g, 1);
             this.treeGroupNoiseScales.add(Math.max(1, Math.min(16, ns)));
             String[] arr = new String[9];
             for (int i = 0; i < 9; i++) {
-                arr[i] = view.getString("TreeGS" + g + "_" + i, "");
+                arr[i] = view.getStringOr("TreeGS" + g + "_" + i, "");
             }
             this.treeGroupSlots.add(arr);
         }
         // Restore group mappings
         for (int i = 0; i < treeUniqueBlockIds.size(); i++) {
             String id = treeUniqueBlockIds.get(i);
-            int grp = view.getInt("TreeGM" + i, 0);
+            int grp = view.getIntOr("TreeGM" + i, 0);
             this.treeBlockGroup.put(id, grp);
         }
 
@@ -2749,7 +2745,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    public Inventory getInventory() { return inventory; }
+    public Container getInventory() { return inventory; }
 
     public int getPathWidth() { return pathWidth; }
     public void setPathWidth(int width) {
@@ -2783,34 +2779,34 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     public double sampleGradientNoise01(int x, int y, int z, int scale) {
-        SimplexNoiseSampler sampler = getGradientNoiseSampler();
+        SimplexNoise sampler = getGradientNoiseSampler();
         double s = (double) Math.max(1, scale);
-        double n = sampler.sample((double) x / s, (double) y / s, (double) z / s);
+        double n = sampler.getValue((double) x / s, (double) y / s, (double) z / s);
         double u01 = (n + 1.0) * 0.5;
         if (u01 < 0.0) return 0.0;
         if (u01 > 1.0) return 1.0;
         return u01;
     }
 
-    private SimplexNoiseSampler getGradientNoiseSampler() {
+    private SimplexNoise getGradientNoiseSampler() {
         long seed = resolveWorldSeed();
         if (gradientNoiseSampler == null || gradientNoiseSeedCache != seed) {
             gradientNoiseSeedCache = seed;
-            gradientNoiseSampler = new SimplexNoiseSampler(Random.create(seed));
+            gradientNoiseSampler = new SimplexNoise(RandomSource.create(seed));
         }
         return gradientNoiseSampler;
     }
 
     private long resolveWorldSeed() {
-        if (this.getEntityWorld() instanceof ServerWorld sw && sw.getServer() != null) {
-            return sw.getServer().getSaveProperties().getGeneratorOptions().getSeed();
+        if (this.level() instanceof ServerLevel sw && sw.getServer() != null) {
+            return sw.getServer().getWorldData().worldGenOptions().seed();
         }
         return 0L;
     }
 
     // ========== Shared tracking field accessors (PATH/WALL modes) ==========
-    public Vec3d getTrackStart() { return trackStart; }
-    public void setTrackStart(Vec3d start) { this.trackStart = start; }
+    public Vec3 getTrackStart() { return trackStart; }
+    public void setTrackStart(Vec3 start) { this.trackStart = start; }
 
     public java.util.ArrayDeque<ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg> getPendingLines() { return pendingLines; }
     public ninja.trek.mc.goldgolem.world.entity.strategy.path.LineSeg getCurrentLine() { return currentLine; }
@@ -2981,26 +2977,26 @@ public class GoldGolemEntity extends PathAwareEntity {
 
     // Ownership (simple UUID-based)
     private java.util.UUID ownerUuid;
-    private java.lang.ref.WeakReference<PlayerEntity> cachedOwner = null;
+    private java.lang.ref.WeakReference<Player> cachedOwner = null;
     private int ownerCacheTicksRemaining = 0;
 
-    public void setOwner(PlayerEntity player) { this.ownerUuid = player.getUuid(); }
-    public boolean isOwner(PlayerEntity player) { return ownerUuid != null && player != null && ownerUuid.equals(player.getUuid()); }
+    public void setOwner(Player player) { this.ownerUuid = player.getUUID(); }
+    public boolean isOwner(Player player) { return ownerUuid != null && player != null && ownerUuid.equals(player.getUUID()); }
 
-    public PlayerEntity getOwnerPlayer() {
+    public Player getOwnerPlayer() {
         if (ownerUuid == null) return null;
 
         // Check cache first
         if (ownerCacheTicksRemaining > 0 && cachedOwner != null) {
-            PlayerEntity cached = cachedOwner.get();
-            if (cached != null && cached.getUuid().equals(ownerUuid)) {
+            Player cached = cachedOwner.get();
+            if (cached != null && cached.getUUID().equals(ownerUuid)) {
                 return cached;
             }
         }
 
         // Cache miss - do lookup
-        for (PlayerEntity p : this.getEntityWorld().getPlayers()) {
-            if (ownerUuid.equals(p.getUuid())) {
+        for (Player p : this.level().players()) {
+            if (ownerUuid.equals(p.getUUID())) {
                 cachedOwner = new java.lang.ref.WeakReference<>(p);
                 ownerCacheTicksRemaining = OWNER_CACHE_DURATION;
                 return p;
@@ -3010,14 +3006,14 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    public void setCustomName(Text name) {
-        Text prev = this.getCustomName();
+    public void setCustomName(Component name) {
+        Component prev = this.getCustomName();
         super.setCustomName(name);
         if (suppressSnapshotWrite) {
             return;
         }
-        World world = this.getEntityWorld();
-        if (world != null && !world.isClient()) {
+        Level world = this.level();
+        if (world != null && !world.isClientSide()) {
             String prevText = prev != null ? prev.getString() : null;
             String nextText = name != null ? name.getString() : null;
             if (!Objects.equals(prevText, nextText)) {
@@ -3026,7 +3022,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
     }
 
-    public void setCustomNameNoSnapshot(Text name) {
+    public void setCustomNameNoSnapshot(Component name) {
         suppressSnapshotWrite = true;
         try {
             super.setCustomName(name);
@@ -3036,26 +3032,26 @@ public class GoldGolemEntity extends PathAwareEntity {
     }
 
     @Override
-    public ActionResult interactMob(PlayerEntity player, net.minecraft.util.Hand hand) {
-        if (!(player instanceof net.minecraft.server.network.ServerPlayerEntity sp)) {
-            return ActionResult.SUCCESS;
+    public InteractionResult mobInteract(Player player, net.minecraft.world.InteractionHand hand) {
+        if (!(player instanceof net.minecraft.server.level.ServerPlayer sp)) {
+            return InteractionResult.SUCCESS;
         }
         // Feeding: start building when owner feeds a gold nugget; consume one and show hearts
-        var stack = player.getStackInHand(hand);
-        if (stack != null && stack.isOf(net.minecraft.item.Items.GOLD_NUGGET)) {
+        var stack = player.getItemInHand(hand);
+        if (stack != null && stack.is(net.minecraft.world.item.Items.GOLD_NUGGET)) {
             if (!isOwner(player)) {
                 // Claim in singleplayer if prior owner offline
-                var server = sp.getEntityWorld().getServer();
-                boolean singleplayer = !server.isDedicated();
-                boolean ownerOnline = (ownerUuid != null) && (server.getPlayerManager().getPlayer(ownerUuid) != null);
+                var server = sp.level().getServer();
+                boolean singleplayer = !server.isDedicatedServer();
+                boolean ownerOnline = (ownerUuid != null) && (server.getPlayerList().getPlayer(ownerUuid) != null);
                 if (singleplayer && !ownerOnline) {
                     setOwner(player);
                 } else {
-                    sp.sendMessage(Text.translatable("message.gold_golem.not_owner"), true);
-                    return ActionResult.FAIL;
+                    sp.displayClientMessage(Component.translatable("message.gold_golem.not_owner"), true);
+                    return InteractionResult.FAIL;
                 }
             }
-            if (!this.getEntityWorld().isClient()) {
+            if (!this.level().isClientSide()) {
                 // Use polymorphic dispatch for feed interaction
                 initializeStrategyForCurrentMode();
                 BuildStrategy.FeedResult result = activeStrategy != null
@@ -3065,72 +3061,72 @@ public class GoldGolemEntity extends PathAwareEntity {
                 switch (result) {
                     case STARTED, RESUMED -> {
                         this.buildingPaths = true;
-                        this.dataTracker.set(BUILDING_PATHS, true);
-                        if (!player.isCreative()) stack.decrement(1);
+                        this.entityData.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.shrink(1);
                         spawnHearts();
                         if (result == BuildStrategy.FeedResult.RESUMED) {
-                            sp.sendMessage(Text.literal("[Gold Golem] Resuming!"), true);
+                            sp.displayClientMessage(Component.literal("[Gold Golem] Resuming!"), true);
                         }
                         // Path/Wall/Tower modes need trackStart initialization
                         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
-                            this.trackStart = new Vec3d(this.getX(), this.getY() + 0.05, this.getZ());
+                            this.trackStart = new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
                             var owner = getOwnerPlayer();
-                            if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+                            if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
                                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
                             }
                             clearPlacementTracking();
                         }
                     }
                     case ALREADY_ACTIVE -> {
-                        sp.sendMessage(Text.literal("[Gold Golem] Already active!"), true);
-                        return ActionResult.FAIL;
+                        sp.displayClientMessage(Component.literal("[Gold Golem] Already active!"), true);
+                        return InteractionResult.FAIL;
                     }
                     case NOT_HANDLED -> {
                         // Default behavior: just start building
                         this.buildingPaths = true;
-                        this.dataTracker.set(BUILDING_PATHS, true);
-                        if (!player.isCreative()) stack.decrement(1);
+                        this.entityData.set(BUILDING_PATHS, true);
+                        if (!player.isCreative()) stack.shrink(1);
                         spawnHearts();
                     }
                 }
             }
-            return ActionResult.CONSUME;
+            return InteractionResult.CONSUME;
         }
         // Otherwise open UI as before (owner only gate)
         if (!isOwner(player)) {
-            var server = sp.getEntityWorld().getServer();
-            boolean singleplayer = !server.isDedicated();
-            boolean ownerOnline = (ownerUuid != null) && (server.getPlayerManager().getPlayer(ownerUuid) != null);
+            var server = sp.level().getServer();
+            boolean singleplayer = !server.isDedicatedServer();
+            boolean ownerOnline = (ownerUuid != null) && (server.getPlayerList().getPlayer(ownerUuid) != null);
             if (singleplayer && !ownerOnline) {
                 setOwner(player);
             } else {
-                sp.sendMessage(Text.translatable("message.gold_golem.not_owner"), true);
-                return ActionResult.FAIL;
+                sp.displayClientMessage(Component.translatable("message.gold_golem.not_owner"), true);
+                return InteractionResult.FAIL;
             }
         }
         // Stop movement and track GUI viewer
-        this.setGuiViewer(player.getUuid());
+        this.setGuiViewer(player.getUUID());
         this.getNavigation().stop();
         GolemScreens.open(sp, this.getId(), this.inventory);
-        return ActionResult.CONSUME;
+        return InteractionResult.CONSUME;
     }
 
     @Override
-    public boolean damage(net.minecraft.server.world.ServerWorld world, net.minecraft.entity.damage.DamageSource source, float amount) {
-        LOGGER.debug("Taking damage - Source: {}, Amount: {}, Type: {}", source.getName(), amount, source.getType());
+    public boolean hurtServer(net.minecraft.server.level.ServerLevel world, net.minecraft.world.damagesource.DamageSource source, float amount) {
+        LOGGER.debug("Taking damage - Source: {}, Amount: {}, Type: {}", source.getMsgId(), amount, source.type());
 
         // Immune to suffocation damage (being inside blocks)
-        if (source.isOf(net.minecraft.entity.damage.DamageTypes.IN_WALL)) {
+        if (source.is(net.minecraft.world.damagesource.DamageTypes.IN_WALL)) {
             LOGGER.debug("Blocked suffocation damage (IN_WALL)");
             return false;
         }
-        var attacker = source.getAttacker();
-        if (attacker instanceof PlayerEntity p && isOwner(p)) {
-            boolean ignoreOwnerDamage = source.isOf(net.minecraft.entity.damage.DamageTypes.PLAYER_ATTACK)
+        var attacker = source.getEntity();
+        if (attacker instanceof Player p && isOwner(p)) {
+            boolean ignoreOwnerDamage = source.is(net.minecraft.world.damagesource.DamageTypes.PLAYER_ATTACK)
                 && amount <= 1.0F;
             // Stop building on owner hit; show angry particles; ignore only low (fist) damage
             this.buildingPaths = false;
-            this.dataTracker.set(BUILDING_PATHS, false);
+            this.entityData.set(BUILDING_PATHS, false);
 
             // Use polymorphic dispatch for owner damage handling
             if (activeStrategy != null) {
@@ -3142,7 +3138,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             this.pendingLines.clear();
             this.currentLine = null;
             // Clear client lines
-            if (attacker instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+            if (attacker instanceof net.minecraft.server.level.ServerPlayer spOwner) {
                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
             }
 
@@ -3153,27 +3149,27 @@ public class GoldGolemEntity extends PathAwareEntity {
                 return false; // cancel low (fist) damage
             }
         }
-        LOGGER.debug("Applying damage - Source: {}, Amount: {}", source.getName(), amount);
-        return super.damage(world, source, amount);
+        LOGGER.debug("Applying damage - Source: {}, Amount: {}", source.getMsgId(), amount);
+        return super.hurtServer(world, source, amount);
     }
 
     @Override
-    public void onDeath(net.minecraft.entity.damage.DamageSource source) {
-        LOGGER.debug("Died - Cause: {}, Type: {}", source.getName(), source.getType());
-        super.onDeath(source);
-        if (!(this.getEntityWorld() instanceof ServerWorld world)) return;
+    public void die(net.minecraft.world.damagesource.DamageSource source) {
+        LOGGER.debug("Died - Cause: {}, Type: {}", source.getMsgId(), source.type());
+        super.die(source);
+        if (!(this.level() instanceof ServerLevel world)) return;
 
         // Drop all items from the inventory
-        for (int i = 0; i < this.inventory.size(); ++i) {
-            ItemStack itemStack = this.inventory.getStack(i);
+        for (int i = 0; i < this.inventory.getContainerSize(); ++i) {
+            ItemStack itemStack = this.inventory.getItem(i);
             if (!itemStack.isEmpty()) {
-                this.dropStack(world, itemStack);
-                this.inventory.setStack(i, ItemStack.EMPTY);
+                this.spawnAtLocation(world, itemStack);
+                this.inventory.setItem(i, ItemStack.EMPTY);
             }
         }
 
         String dropName = "";
-        Text custom = getCustomName();
+        Component custom = getCustomName();
         if (custom != null) {
             dropName = custom.getString();
         }
@@ -3195,30 +3191,30 @@ public class GoldGolemEntity extends PathAwareEntity {
             dropName = fname;
         }
         ItemStack pumpkin = new ItemStack(Items.CARVED_PUMPKIN);
-        pumpkin.set(DataComponentTypes.CUSTOM_NAME, Text.literal(dropName));
-        this.dropStack(world, pumpkin);
+        pumpkin.set(DataComponents.CUSTOM_NAME, Component.literal(dropName));
+        this.spawnAtLocation(world, pumpkin);
     }
 
     private void spawnHearts() {
-        if (this.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.HEART, this.getX(), this.getY() + 1.0, this.getZ(), 6, 0.3, 0.3, 0.3, 0.02);
+        if (this.level() instanceof ServerLevel sw) {
+            sw.sendParticles(ParticleTypes.HEART, this.getX(), this.getY() + 1.0, this.getZ(), 6, 0.3, 0.3, 0.3, 0.02);
         }
     }
     private void spawnAngry() {
-        if (this.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.ANGRY_VILLAGER, this.getX(), this.getY() + 1.0, this.getZ(), 6, 0.3, 0.3, 0.3, 0.02);
+        if (this.level() instanceof ServerLevel sw) {
+            sw.sendParticles(ParticleTypes.ANGRY_VILLAGER, this.getX(), this.getY() + 1.0, this.getZ(), 6, 0.3, 0.3, 0.3, 0.02);
         }
     }
     private void spawnThunderClouds() {
-        if (this.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.CLOUD, this.getX(), this.getY() + 1.0, this.getZ(), 12, 0.4, 0.2, 0.4, 0.02);
+        if (this.level() instanceof ServerLevel sw) {
+            sw.sendParticles(ParticleTypes.CLOUD, this.getX(), this.getY() + 1.0, this.getZ(), 12, 0.4, 0.2, 0.4, 0.02);
         }
     }
 
     public void handleMissingBuildingBlock() {
-        if (this.getEntityWorld().isClient()) return;
+        if (this.level().isClientSide()) return;
         this.buildingPaths = false;
-        this.dataTracker.set(BUILDING_PATHS, false);
+        this.entityData.set(BUILDING_PATHS, false);
         if (activeStrategy != null) {
             activeStrategy.setWaitingForResources(true);
         }
@@ -3228,44 +3224,44 @@ public class GoldGolemEntity extends PathAwareEntity {
             this.trackStart = null;
             this.pendingLines.clear();
             this.currentLine = null;
-            PlayerEntity owner = getOwnerPlayer();
-            if (owner instanceof net.minecraft.server.network.ServerPlayerEntity spOwner) {
+            Player owner = getOwnerPlayer();
+            if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
             }
         }
     }
 
-    private Vec3d withFloorY(Vec3d pos) {
-        var world = this.getEntityWorld();
-        int bx = net.minecraft.util.math.MathHelper.floor(pos.x);
-        int bz = net.minecraft.util.math.MathHelper.floor(pos.z);
-        int y0 = net.minecraft.util.math.MathHelper.floor(pos.y);
+    private Vec3 withFloorY(Vec3 pos) {
+        var world = this.level();
+        int bx = net.minecraft.util.Mth.floor(pos.x);
+        int bz = net.minecraft.util.Mth.floor(pos.z);
+        int y0 = net.minecraft.util.Mth.floor(pos.y);
         // Search down a small window to find the nearest full-cube ground
         for (int yy = y0 + 1; yy >= y0 - 8; yy--) {
             BlockPos test = new BlockPos(bx, yy, bz);
             var st = world.getBlockState(test);
-            if (!st.isAir() && st.isFullCube(world, test)) {
-                return new Vec3d(pos.x, yy + 0.05, pos.z);
+            if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) {
+                return new Vec3(pos.x, yy + 0.05, pos.z);
             }
         }
         // Fallback: just lift slightly
-        return new Vec3d(pos.x, pos.y + 0.05, pos.z);
+        return new Vec3(pos.x, pos.y + 0.05, pos.z);
     }
 
     // Place a single offset column at the given center x/z for strip index j
-    public void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.util.math.Direction travelDir) {
+    public void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.core.Direction travelDir) {
         int w = Math.max(1, Math.min(9, stripWidth));
-        var world = this.getEntityWorld();
+        var world = this.level();
         double ox = x + px * j;
         double oz = z + pz * j;
-        int bx = MathHelper.floor(ox);
-        int bz = MathHelper.floor(oz);
-        int y0 = MathHelper.floor(y);
+        int bx = Mth.floor(ox);
+        int bz = Mth.floor(oz);
+        int y0 = Mth.floor(y);
         Integer groundY = null;
         for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
             BlockPos test = new BlockPos(bx, yy, bz);
             var st = world.getBlockState(test);
-            if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
+            if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) { groundY = yy; break; }
         }
         if (groundY == null) return;
         int gIdx = sampleGradientIndex(w, j, bx, groundY, bz, getGradientNoiseScaleMain());
@@ -3279,29 +3275,29 @@ public class GoldGolemEntity extends PathAwareEntity {
             for (int dy = -1; dy <= 1; dy++) {
                 BlockPos rp = new BlockPos(bx, groundY + dy, bz);
                 var rs = world.getBlockState(rp);
-                if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
-                BlockPos ap = rp.up();
+                if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue;
+                BlockPos ap = rp.above();
                 var as2 = world.getBlockState(ap);
-                if (as2.isFullCube(world, ap)) continue;
+                if (as2.isCollisionShapeFullBlock(world, ap)) continue;
                 enqueuePathMine(rp);
                 break;
             }
             return; // don't process surface/step when main is mine
         }
 
-        var ident = net.minecraft.util.Identifier.tryParse(id);
+        var ident = net.minecraft.resources.Identifier.tryParse(id);
         if (ident == null) return;
-        var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
         if (block == null) return;
         // Replace only exposed surface within a 3-block vertical window
         for (int dy = -1; dy <= 1; dy++) {
             BlockPos rp = new BlockPos(bx, groundY + dy, bz);
             var rs = world.getBlockState(rp);
-            if (rs.isAir() || !rs.isFullCube(world, rp)) continue; // must be solid
-            BlockPos ap = rp.up();
+            if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue; // must be solid
+            BlockPos ap = rp.above();
             var as = world.getBlockState(ap);
-            if (as.isFullCube(world, ap)) continue; // not surface if blocked above
-            if (rs.isOf(block)) break; // already desired block at surface
+            if (as.isCollisionShapeFullBlock(world, ap)) continue; // not surface if blocked above
+            if (rs.is(block)) break; // already desired block at surface
             long key = rp.asLong();
             if (!recordPlaced(key)) break;
             int invSlot = findItem(block.asItem());
@@ -3315,10 +3311,10 @@ public class GoldGolemEntity extends PathAwareEntity {
                 unrecordPlaced(key);
                 break;
             }
-            world.setBlockState(rp, block.getDefaultState(), 3);
-            var stInv = inventory.getStack(invSlot);
-            stInv.decrement(1);
-            inventory.setStack(invSlot, stInv);
+            world.setBlock(rp, block.defaultBlockState(), 3);
+            var stInv = inventory.getItem(invSlot);
+            stInv.shrink(1);
+            inventory.setItem(invSlot, stInv);
 
             break; // only one placement per column
         }
@@ -3332,12 +3328,12 @@ public class GoldGolemEntity extends PathAwareEntity {
             Integer topY = null;
             for (int yy = groundY + 4; yy >= groundY - 4; yy--) {
                 BlockPos tp = new BlockPos(bx, yy, bz);
-                if (world.getBlockState(tp).isFullCube(world, tp)) { topY = yy; break; }
+                if (world.getBlockState(tp).isCollisionShapeFullBlock(world, tp)) { topY = yy; break; }
             }
             if (topY != null) {
                 BlockPos abovePos = new BlockPos(bx, topY + 1, bz);
                 BlockState aboveState = world.getBlockState(abovePos);
-                if (!aboveState.isFullCube(world, abovePos)) {
+                if (!aboveState.isCollisionShapeFullBlock(world, abovePos)) {
                     int sIdx = sampleSurfaceGradientIndex(w, j, bx, topY, bz, gradientNoiseScaleSurface);
                     if (sIdx >= 0) {
                         String sid = surfaceGradient[sIdx] == null ? "" : surfaceGradient[sIdx];
@@ -3346,26 +3342,26 @@ public class GoldGolemEntity extends PathAwareEntity {
                             if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(sid)) {
                                 BlockPos surfaceBlock = new BlockPos(bx, topY, bz);
                                 BlockState surfState = world.getBlockState(surfaceBlock);
-                                if (surfState.isOf(net.minecraft.block.Blocks.GRASS_BLOCK) || surfState.isOf(net.minecraft.block.Blocks.DIRT)) {
-                                    world.setBlockState(surfaceBlock, net.minecraft.block.Blocks.DIRT_PATH.getDefaultState(), 3);
+                                if (surfState.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK) || surfState.is(net.minecraft.world.level.block.Blocks.DIRT)) {
+                                    world.setBlock(surfaceBlock, net.minecraft.world.level.block.Blocks.DIRT_PATH.defaultBlockState(), 3);
                                 } else {
                                     // Not grass/dirt: queue for mining
                                     enqueuePathMine(surfaceBlock);
                                 }
                             } else {
-                                var sIdent = net.minecraft.util.Identifier.tryParse(sid);
+                                var sIdent = net.minecraft.resources.Identifier.tryParse(sid);
                                 if (sIdent != null) {
-                                    var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
+                                    var sBlock = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(sIdent);
                                     if (sBlock != null) {
                                         long surfKey = abovePos.asLong();
                                         if (recordPlaced(surfKey)) {
                                             int invSlot3 = findItem(sBlock.asItem());
                                             if (invSlot3 >= 0) {
                                                 if (!wouldBlockOverlapSelf(abovePos)) {
-                                                    world.setBlockState(abovePos, sBlock.getDefaultState(), 3);
-                                                    var st3 = inventory.getStack(invSlot3);
-                                                    st3.decrement(1);
-                                                    inventory.setStack(invSlot3, st3);
+                                                    world.setBlock(abovePos, sBlock.defaultBlockState(), 3);
+                                                    var st3 = inventory.getItem(invSlot3);
+                                                    st3.shrink(1);
+                                                    inventory.setItem(invSlot3, st3);
                                                 } else {
                                                     unrecordPlaced(surfKey);
                                                 }
@@ -3395,18 +3391,18 @@ public class GoldGolemEntity extends PathAwareEntity {
                 BlockPos n2 = stepPos.east();
                 var s1 = world.getBlockState(n1);
                 var s2 = world.getBlockState(n2);
-                neighborSolid = (!s1.isAir() && s1.isFullCube(world, n1)) || (!s2.isAir() && s2.isFullCube(world, n2));
+                neighborSolid = (!s1.isAir() && s1.isCollisionShapeFullBlock(world, n1)) || (!s2.isAir() && s2.isCollisionShapeFullBlock(world, n2));
             } else {
                 BlockPos n1 = stepPos.north();
                 BlockPos n2 = stepPos.south();
                 var s1 = world.getBlockState(n1);
                 var s2 = world.getBlockState(n2);
-                neighborSolid = (!s1.isAir() && s1.isFullCube(world, n1)) || (!s2.isAir() && s2.isFullCube(world, n2));
+                neighborSolid = (!s1.isAir() && s1.isCollisionShapeFullBlock(world, n1)) || (!s2.isAir() && s2.isCollisionShapeFullBlock(world, n2));
             }
             if (neighborSolid) {
-                BlockPos above = stepPos.up();
+                BlockPos above = stepPos.above();
                 var as = world.getBlockState(above);
-                if (!as.isFullCube(world, above)) {
+                if (!as.isCollisionShapeFullBlock(world, above)) {
                     int gIdxStep = sampleStepGradientIndex(w, j, bx, yStep, bz, getGradientNoiseScaleStep());
                     if (gIdxStep >= 0) {
                         String sid = stepGradient[gIdxStep] == null ? "" : stepGradient[gIdxStep];
@@ -3417,9 +3413,9 @@ public class GoldGolemEntity extends PathAwareEntity {
                                 enqueuePathMine(new BlockPos(bx, groundY, bz));
                                 return;
                             }
-                            var sIdent = net.minecraft.util.Identifier.tryParse(sid);
+                            var sIdent = net.minecraft.resources.Identifier.tryParse(sid);
                             if (sIdent != null) {
-                                var sBlock = net.minecraft.registry.Registries.BLOCK.get(sIdent);
+                                var sBlock = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(sIdent);
                                 if (sBlock != null) {
                                     // Avoid double consumption if step block equals base block
                                     if (sBlock.asItem() == block.asItem()) return;
@@ -3427,25 +3423,25 @@ public class GoldGolemEntity extends PathAwareEntity {
                                     if (recordPlaced(key2)) {
                                         int invSlot2 = findItem(sBlock.asItem());
                                         if (invSlot2 >= 0) {
-                                            var placeState = sBlock.getDefaultState();
-                                            if (sBlock instanceof net.minecraft.block.StairsBlock) {
-                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.HORIZONTAL_FACING, travelDir); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.FACING, travelDir); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.STAIR_SHAPE, net.minecraft.block.enums.StairShape.STRAIGHT); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
-                                            } else if (sBlock instanceof net.minecraft.block.SlabBlock) {
-                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.SLAB_TYPE, net.minecraft.block.enums.SlabType.BOTTOM); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.with(net.minecraft.state.property.Properties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
+                                            var placeState = sBlock.defaultBlockState();
+                                            if (sBlock instanceof net.minecraft.world.level.block.StairBlock) {
+                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, travelDir); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, travelDir); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE, net.minecraft.world.level.block.state.properties.StairsShape.STRAIGHT); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
+                                            } else if (sBlock instanceof net.minecraft.world.level.block.SlabBlock) {
+                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE, net.minecraft.world.level.block.state.properties.SlabType.BOTTOM); } catch (IllegalArgumentException ignored) {}
+                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
                                             }
                                             // Prevent placing blocks inside self to avoid suffocation damage
                                             if (wouldBlockOverlapSelf(stepPos)) {
                                                 unrecordPlaced(key2);
                                                 return;
                                             }
-                                            world.setBlockState(stepPos, placeState, 3);
-                                            var st2 = inventory.getStack(invSlot2);
-                                            st2.decrement(1);
-                                            inventory.setStack(invSlot2, st2);
+                                            world.setBlock(stepPos, placeState, 3);
+                                            var st2 = inventory.getItem(invSlot2);
+                                            st2.shrink(1);
+                                            inventory.setItem(invSlot2, st2);
 
                                         } else {
                                             unrecordPlaced(key2);
@@ -3465,37 +3461,37 @@ public class GoldGolemEntity extends PathAwareEntity {
     public void placeStripAt(double x, double y, double z, double px, double pz) {
         int w = Math.max(1, Math.min(9, this.pathWidth));
         int half = (w - 1) / 2;
-        var world = this.getEntityWorld();
+        var world = this.level();
         for (int j = -half; j <= half; j++) {
             double ox = x + px * j;
             double oz = z + pz * j;
-            int bx = MathHelper.floor(ox);
-            int bz = MathHelper.floor(oz);
-            int y0 = MathHelper.floor(y);
+            int bx = Mth.floor(ox);
+            int bz = Mth.floor(oz);
+            int y0 = Mth.floor(y);
             Integer groundY = null;
             for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
                 BlockPos test = new BlockPos(bx, yy, bz);
                 var st = world.getBlockState(test);
-                if (!st.isAir() && st.isFullCube(world, test)) { groundY = yy; break; }
+                if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) { groundY = yy; break; }
             }
             if (groundY == null) continue;
             int gIdx = sampleGradientIndex(w, j, bx, groundY, bz, getGradientNoiseScaleMain());
             if (gIdx < 0) continue;
             String id = gradient[gIdx] == null ? "" : gradient[gIdx];
             if (id.isEmpty()) continue;
-            var ident = net.minecraft.util.Identifier.tryParse(id);
+            var ident = net.minecraft.resources.Identifier.tryParse(id);
             if (ident == null) continue;
-            var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+            var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
             if (block == null) continue;
             // Replace only exposed surface within a 3-block vertical window
             for (int dy = -1; dy <= 1; dy++) {
                 BlockPos rp2 = new BlockPos(bx, groundY + dy, bz);
                 var rs2 = world.getBlockState(rp2);
-                if (rs2.isAir() || !rs2.isFullCube(world, rp2)) continue; // must be solid
-                BlockPos ap2 = rp2.up();
+                if (rs2.isAir() || !rs2.isCollisionShapeFullBlock(world, rp2)) continue; // must be solid
+                BlockPos ap2 = rp2.above();
                 var as2 = world.getBlockState(ap2);
-                if (as2.isFullCube(world, ap2)) continue; // not surface if blocked above
-                if (rs2.isOf(block)) break; // already desired block at surface
+                if (as2.isCollisionShapeFullBlock(world, ap2)) continue; // not surface if blocked above
+                if (rs2.is(block)) break; // already desired block at surface
                 long key2 = rp2.asLong();
                 if (!recordPlaced(key2)) break;
                 int invSlot = findItem(block.asItem());
@@ -3509,10 +3505,10 @@ public class GoldGolemEntity extends PathAwareEntity {
                     unrecordPlaced(key2);
                     break;
                 }
-                world.setBlockState(rp2, block.getDefaultState(), 3);
-                var stInv = inventory.getStack(invSlot);
-                stInv.decrement(1);
-                inventory.setStack(invSlot, stInv);
+                world.setBlock(rp2, block.defaultBlockState(), 3);
+                var stInv = inventory.getItem(invSlot);
+                stInv.shrink(1);
+                inventory.setItem(invSlot, stInv);
 
                 break; // one placement per column
             }
@@ -3536,7 +3532,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double W = (double) Wcap;
         if (W == 0.0) {
             int idx = (int) Math.round(s);
-            return MathHelper.clamp(idx, 0, G - 1);
+            return Mth.clamp(idx, 0, G - 1);
         }
 
         // Use symmetric jitter per distance from center so both sides match
@@ -3553,7 +3549,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double sref = a + r;
 
         int idx = (int) Math.round(sref);
-        return MathHelper.clamp(idx, 0, G - 1);
+        return Mth.clamp(idx, 0, G - 1);
     }
 
     private int sampleStepGradientIndex(int stripWidth, int j, int bx, int by, int bz, int noiseScale) {
@@ -3572,7 +3568,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double W = (double) Wcap;
         if (W == 0.0) {
             int idx = (int) Math.round(s);
-            return MathHelper.clamp(idx, 0, G - 1);
+            return Mth.clamp(idx, 0, G - 1);
         }
 
         double u01 = sampleGradientNoise01(bx, by, bz, noiseScale);
@@ -3588,7 +3584,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double sref = a + r;
 
         int idx = (int) Math.round(sref);
-        return MathHelper.clamp(idx, 0, G - 1);
+        return Mth.clamp(idx, 0, G - 1);
     }
 
     private int sampleSurfaceGradientIndex(int stripWidth, int j, int bx, int by, int bz, int noiseScale) {
@@ -3607,7 +3603,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double W = (double) Wcap;
         if (W == 0.0) {
             int idx = (int) Math.round(s);
-            return MathHelper.clamp(idx, 0, G - 1);
+            return Mth.clamp(idx, 0, G - 1);
         }
 
         double u01 = sampleGradientNoise01(bx, by, bz, noiseScale);
@@ -3623,7 +3619,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         double sref = a + r;
 
         int idx = (int) Math.round(sref);
-        return MathHelper.clamp(idx, 0, G - 1);
+        return Mth.clamp(idx, 0, G - 1);
     }
 
     public int sampleWallGradient(String[] slots, float window, int noiseScale, int moduleHeight, int relY, BlockPos pos) {
@@ -3671,7 +3667,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         return longest;
     }
 
-    private ModulePlacement chooseNextModule(Vec3d anchor, Vec3d playerPos) {
+    private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
         if (wallTemplates == null || wallTemplates.isEmpty()) return null;
         double bestScore = Double.POSITIVE_INFINITY;
         ModulePlacement best = null;
@@ -3683,7 +3679,7 @@ public class GoldGolemEntity extends PathAwareEntity {
             for (int rot = 0; rot < 4; rot++) {
                 for (int mir = 0; mir < 2; mir++) {
                     int[] d = rotateAndMirror(dxModule, dyModule, dzModule, rot, mir == 1);
-                    Vec3d end = new Vec3d(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
+                    Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
                     // Y rule: toward player Y and no overshoot
                     double dyNeed = playerPos.y - anchor.y;
                     double dyStep = d[1];
@@ -3703,7 +3699,7 @@ public class GoldGolemEntity extends PathAwareEntity {
         for (int[] pv : perps) {
             int dx = pv[0] * t;
             int dz = pv[1] * t;
-            Vec3d end = new Vec3d(anchor.x + dx, anchor.y, anchor.z + dz);
+            Vec3 end = new Vec3(anchor.x + dx, anchor.y, anchor.z + dz);
             double dyNeed = playerPos.y - anchor.y;
             double yScore = Math.abs(dyNeed - 0.0);
             double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
@@ -3727,12 +3723,12 @@ public class GoldGolemEntity extends PathAwareEntity {
         return new int[]{rx, y, rz};
     }
 
-    private void placeBlockStateAt(int wx, int wy, int wz, net.minecraft.block.BlockState baseState, int rot, boolean mirror) {
-        var world = this.getEntityWorld();
+    private void placeBlockStateAt(int wx, int wy, int wz, net.minecraft.world.level.block.state.BlockState baseState, int rot, boolean mirror) {
+        var world = this.level();
         BlockPos pos = new BlockPos(wx, wy, wz);
-        net.minecraft.block.Block block = baseState.getBlock();
+        net.minecraft.world.level.block.Block block = baseState.getBlock();
         var current = world.getBlockState(pos);
-        if (!current.isAir() && current.isOf(block)) return;
+        if (!current.isAir() && current.is(block)) return;
         long key = pos.asLong();
         if (!recordPlaced(key)) return;
         int invSlot = findItem(block.asItem());
@@ -3743,12 +3739,12 @@ public class GoldGolemEntity extends PathAwareEntity {
         }
 
         // Use new placement logic to determine final state
-        net.minecraft.block.BlockState place = getPlacementStateForBlock(pos, block, baseState, rot, mirror);
+        net.minecraft.world.level.block.state.BlockState place = getPlacementStateForBlock(pos, block, baseState, rot, mirror);
 
         // Apply waterlogging fix
         try {
-            if (place.contains(Properties.WATERLOGGED)) {
-                place = place.with(Properties.WATERLOGGED, Boolean.FALSE);
+            if (place.hasProperty(BlockStateProperties.WATERLOGGED)) {
+                place = place.setValue(BlockStateProperties.WATERLOGGED, Boolean.FALSE);
             }
         } catch (Throwable ignored) {}
 
@@ -3757,26 +3753,26 @@ public class GoldGolemEntity extends PathAwareEntity {
             unrecordPlaced(key);
             return;
         }
-        world.setBlockState(pos, place, 3);
-        var st = inventory.getStack(invSlot);
-        st.decrement(1);
-        inventory.setStack(invSlot, st);
+        world.setBlock(pos, place, 3);
+        var st = inventory.getItem(invSlot);
+        st.shrink(1);
+        inventory.setItem(invSlot, st);
     }
 
     private class ModulePlacement {
         final int tplIndex;
         final int rot; // 0..3
         final boolean mirror;
-        final Vec3d anchor;
-        final Vec3d end;
+        final Vec3 anchor;
+        final Vec3 end;
         java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> voxels;
         int cursor = 0;
         boolean joinPlaced = false;
-        ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3d anchor, Vec3d end) {
+        ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3 anchor, Vec3 end) {
             this.tplIndex = tplIndex; this.rot = rot; this.mirror = mirror; this.anchor = anchor; this.end = end;
         }
-        Vec3d anchor() { return anchor; }
-        Vec3d end() { return end; }
+        Vec3 anchor() { return anchor; }
+        Vec3 end() { return end; }
         void begin(GoldGolemEntity golem) {
             var tpl = wallTemplates.get(tplIndex);
             this.voxels = tpl.voxels;
@@ -3802,13 +3798,13 @@ public class GoldGolemEntity extends PathAwareEntity {
                 int ry = v.rel.getY();
                 int rz = v.rel.getZ();
                 int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
-                int wx = MathHelper.floor(anchor.x) + d[0];
-                int wy = MathHelper.floor(anchor.y) + d[1];
-                int wz = MathHelper.floor(anchor.z) + d[2];
+                int wx = Mth.floor(anchor.x) + d[0];
+                int wy = Mth.floor(anchor.y) + d[1];
+                int wz = Mth.floor(anchor.z) + d[2];
 
                 // Apply gradient sampling for wall mode
                 BlockState stateToPlace = v.state;
-                String blockId = net.minecraft.registry.Registries.BLOCK.getId(v.state.getBlock()).toString();
+                String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
                 Integer groupIdx = wallBlockGroup.get(blockId);
                 if (groupIdx != null && groupIdx >= 0 && groupIdx < wallGroupSlots.size()) {
                     String[] slots = wallGroupSlots.get(groupIdx);
@@ -3844,19 +3840,19 @@ public class GoldGolemEntity extends PathAwareEntity {
             int fz = Integer.signum(d[2]);
             int px = -fz;
             int pz = fx;
-            int ax = MathHelper.floor(anchor.x);
-            int ay = MathHelper.floor(anchor.y);
-            int az = MathHelper.floor(anchor.z);
+            int ax = Mth.floor(anchor.x);
+            int ay = Mth.floor(anchor.y);
+            int az = Mth.floor(anchor.z);
             for (JoinEntry e : wallJoinTemplate) {
                 if (e.id == null || e.id.isEmpty()) continue;
                 int wx = ax + px * e.du;
                 int wy = ay + e.dy;
                 int wz = az + pz * e.du;
-                var ident = net.minecraft.util.Identifier.tryParse(e.id);
+                var ident = net.minecraft.resources.Identifier.tryParse(e.id);
                 if (ident == null) continue;
-                var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
                 if (block == null) continue;
-                placeBlockStateAt(wx, wy, wz, block.getDefaultState(), rot, mirror);
+                placeBlockStateAt(wx, wy, wz, block.defaultBlockState(), rot, mirror);
             }
         }
     }
@@ -3864,7 +3860,7 @@ public class GoldGolemEntity extends PathAwareEntity {
     private final class GapPlacement extends ModulePlacement {
         final int dx, dz;
         final int dirx, dirz;
-        GapPlacement(int dx, int dz, Vec3d anchor, Vec3d end, int dirx, int dirz) {
+        GapPlacement(int dx, int dz, Vec3 anchor, Vec3 end, int dirx, int dirz) {
             super(-1, 0, false, anchor, end);
             this.dx = dx; this.dz = dz; this.dirx = dirx; this.dirz = dirz;
         }
@@ -3876,10 +3872,10 @@ public class GoldGolemEntity extends PathAwareEntity {
         @Override boolean done() { return true; }
     }
 
-    public int findItem(net.minecraft.item.Item item) {
-        for (int i = 0; i < inventory.size(); i++) {
-            var st = inventory.getStack(i);
-            if (!st.isEmpty() && st.isOf(item)) return i;
+    public int findItem(net.minecraft.world.item.Item item) {
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            var st = inventory.getItem(i);
+            if (!st.isEmpty() && st.is(item)) return i;
         }
         return -1;
     }
@@ -3888,11 +3884,11 @@ public class GoldGolemEntity extends PathAwareEntity {
      * Decrement one item from an inventory slot.
      */
     public void decrementInventorySlot(int slot) {
-        if (slot < 0 || slot >= inventory.size()) return;
-        var st = inventory.getStack(slot);
+        if (slot < 0 || slot >= inventory.getContainerSize()) return;
+        var st = inventory.getItem(slot);
         if (!st.isEmpty()) {
-            st.decrement(1);
-            inventory.setStack(slot, st);
+            st.shrink(1);
+            inventory.setItem(slot, st);
         }
     }
 
@@ -3904,7 +3900,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
     private final GoldGolemEntity golem;
     private final double speed;
     private final double stopDistance;
-    private PlayerEntity target;
+    private Player target;
 
     public FollowGoldNuggetHolderGoal(GoldGolemEntity golem, double speed, double stopDistance) {
         this.golem = golem;
@@ -3913,24 +3909,24 @@ class FollowGoldNuggetHolderGoal extends Goal {
     }
 
     @Override
-    public boolean canStart() {
+    public boolean canUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
         // Only follow the owner; find the owner player in-world
-        PlayerEntity owner = null;
-        for (PlayerEntity player : golem.getEntityWorld().getPlayers()) {
+        Player owner = null;
+        for (Player player : golem.level().players()) {
             if (golem.isOwner(player)) { owner = player; break; }
         }
         if (owner == null) return false;
         if (!isHoldingNugget(owner)) return false;
-        if (golem.squaredDistanceTo(owner) > (24.0 * 24.0)) return false;
+        if (golem.distanceToSqr(owner) > (24.0 * 24.0)) return false;
         this.target = owner;
         return true;
     }
 
     @Override
-    public boolean shouldContinue() {
+    public boolean canContinueToUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
@@ -3938,7 +3934,7 @@ class FollowGoldNuggetHolderGoal extends Goal {
         // Ensure target remains the owner
         if (!golem.isOwner(target)) return false;
         if (!isHoldingNugget(target)) return false;
-        double distSq = golem.squaredDistanceTo(target);
+        double distSq = golem.distanceToSqr(target);
         return distSq > (stopDistance * stopDistance);
     }
 
@@ -3951,22 +3947,22 @@ class FollowGoldNuggetHolderGoal extends Goal {
     @Override
     public void tick() {
         if (target == null) return;
-        this.golem.getLookControl().lookAt(target, 30.0f, 30.0f);
-        double distSq = golem.squaredDistanceTo(target);
+        this.golem.getLookControl().setLookAt(target, 30.0f, 30.0f);
+        double distSq = golem.distanceToSqr(target);
         if (distSq > (stopDistance * stopDistance)) {
-            this.golem.getNavigation().startMovingTo(target, this.speed);
+            this.golem.getNavigation().moveTo(target, this.speed);
         } else {
             this.golem.getNavigation().stop();
         }
     }
 
-    private static boolean isHoldingNugget(PlayerEntity player) {
-        var nugget = net.minecraft.item.Items.GOLD_NUGGET;
-        return player.getMainHandStack().isOf(nugget) || player.getOffHandStack().isOf(nugget);
+    private static boolean isHoldingNugget(Player player) {
+        var nugget = net.minecraft.world.item.Items.GOLD_NUGGET;
+        return player.getMainHandItem().is(nugget) || player.getOffhandItem().is(nugget);
     }
 }
 
-class PathingAwareWanderGoal extends WanderAroundFarGoal {
+class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
     private final GoldGolemEntity golem;
 
     public PathingAwareWanderGoal(GoldGolemEntity golem, double speed) {
@@ -3975,27 +3971,27 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
     }
 
     @Override
-    public boolean canStart() {
+    public boolean canUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
-        return super.canStart();
+        return super.canUse();
     }
 
     @Override
-    public boolean shouldContinue() {
+    public boolean canContinueToUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
-        return super.shouldContinue();
+        return super.canContinueToUse();
     }
 
     @Override
-    protected Vec3d getWanderTarget() {
-        Vec3d base = super.getWanderTarget();
+    protected Vec3 getPosition() {
+        Vec3 base = super.getPosition();
 
         // Anchor to a player: prefer owner; otherwise nearest player
-        PlayerEntity anchor = getAnchorPlayer();
+        Player anchor = getAnchorPlayer();
         if (anchor == null) return base;
 
         double cx = anchor.getX();
@@ -4009,7 +4005,7 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
             java.util.Random rnd = new java.util.Random(golem.getRandom().nextLong());
             double angle = rnd.nextDouble() * Math.PI * 2.0;
             double r = 6.0 + rnd.nextDouble() * 6.0; // 6..12
-            return new Vec3d(cx + Math.cos(angle) * r, cy, cz + Math.sin(angle) * r);
+            return new Vec3(cx + Math.cos(angle) * r, cy, cz + Math.sin(angle) * r);
         }
 
         double dx = base.x - cx;
@@ -4019,25 +4015,25 @@ class PathingAwareWanderGoal extends WanderAroundFarGoal {
         if (distSq <= maxSq) return base;
 
         double dist = Math.sqrt(distSq);
-        if (dist < 1e-4) return new Vec3d(cx, cy, cz);
+        if (dist < 1e-4) return new Vec3(cx, cy, cz);
         double scale = max / dist;
         // Clamp to the 12-block sphere around the anchor player; keep base Y for smoother nav
-        return new Vec3d(cx + dx * scale, base.y, cz + dz * scale);
+        return new Vec3(cx + dx * scale, base.y, cz + dz * scale);
     }
 
-    private PlayerEntity getAnchorPlayer() {
+    private Player getAnchorPlayer() {
         // Prefer the owner if present
-        PlayerEntity owner = null;
-        for (PlayerEntity p : golem.getEntityWorld().getPlayers()) {
+        Player owner = null;
+        for (Player p : golem.level().players()) {
             if (golem.isOwner(p)) { owner = p; break; }
         }
         if (owner != null) return owner;
 
         // Otherwise, use the nearest player
-        PlayerEntity nearest = null;
+        Player nearest = null;
         double best = Double.MAX_VALUE;
-        for (PlayerEntity p : golem.getEntityWorld().getPlayers()) {
-            double d = golem.squaredDistanceTo(p);
+        for (Player p : golem.level().players()) {
+            double d = golem.distanceToSqr(p);
             if (d < best) { best = d; nearest = p; }
         }
         return nearest;

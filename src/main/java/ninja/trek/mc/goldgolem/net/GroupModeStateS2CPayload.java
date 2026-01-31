@@ -1,16 +1,16 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
 import ninja.trek.mc.goldgolem.BuildMode;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
 /**
  * Generic payload for syncing group-based mode state (Wall, Tower, Tree).
@@ -27,7 +27,7 @@ public record GroupModeStateS2CPayload(
         List<Integer> noiseScales,
         List<String> flatSlots,
         Map<String, Object> extraData
-) implements CustomPayload {
+) implements CustomPacketPayload {
 
     public GroupModeStateS2CPayload {
         windows = PayloadValidator.validateList(windows, 0, "windows");
@@ -38,26 +38,26 @@ public record GroupModeStateS2CPayload(
         }
     }
 
-    public static final Id<GroupModeStateS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "group_mode_state"));
+    public static final Type<GroupModeStateS2CPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "group_mode_state"));
 
     // Codec for extra data - serialize as string keys and primitive values
     // For simplicity in this refactoring, we'll use a string-based map approach
-    private static final PacketCodec<RegistryByteBuf, Map<String, Object>> EXTRA_DATA_CODEC = new PacketCodec<RegistryByteBuf, Map<String, Object>>() {
+    private static final StreamCodec<RegistryFriendlyByteBuf, Map<String, Object>> EXTRA_DATA_CODEC = new StreamCodec<RegistryFriendlyByteBuf, Map<String, Object>>() {
         @Override
-        public Map<String, Object> decode(RegistryByteBuf buf) {
+        public Map<String, Object> decode(RegistryFriendlyByteBuf buf) {
             Map<String, Object> map = new HashMap<>();
             int size = buf.readVarInt();
             for (int i = 0; i < size; i++) {
-                String key = buf.readString();
-                String type = buf.readString();
+                String key = buf.readUtf();
+                String type = buf.readUtf();
                 Object value = switch (type) {
                     case "int" -> buf.readVarInt();
-                    case "string" -> buf.readString();
+                    case "string" -> buf.readUtf();
                     case "block_counts" -> {
                         int count = buf.readVarInt();
                         Map<String, Integer> counts = new HashMap<>();
                         for (int j = 0; j < count; j++) {
-                            String id = buf.readString();
+                            String id = buf.readUtf();
                             int blockCount = buf.readVarInt();
                             counts.put(id, blockCount);
                         }
@@ -73,24 +73,24 @@ public record GroupModeStateS2CPayload(
         }
 
         @Override
-        public void encode(RegistryByteBuf buf, Map<String, Object> value) {
+        public void encode(RegistryFriendlyByteBuf buf, Map<String, Object> value) {
             buf.writeVarInt(value.size());
             for (Map.Entry<String, Object> entry : value.entrySet()) {
-                buf.writeString(entry.getKey());
+                buf.writeUtf(entry.getKey());
                 Object v = entry.getValue();
                 if (v instanceof Integer) {
-                    buf.writeString("int");
+                    buf.writeUtf("int");
                     buf.writeVarInt((Integer) v);
                 } else if (v instanceof String) {
-                    buf.writeString("string");
-                    buf.writeString((String) v);
+                    buf.writeUtf("string");
+                    buf.writeUtf((String) v);
                 } else if (v instanceof Map<?, ?> counts) {
-                    buf.writeString("block_counts");
+                    buf.writeUtf("block_counts");
                     @SuppressWarnings("unchecked")
                     Map<String, Integer> typedCounts = (Map<String, Integer>) counts;
                     buf.writeVarInt(typedCounts.size());
                     for (Map.Entry<String, Integer> countEntry : typedCounts.entrySet()) {
-                        buf.writeString(countEntry.getKey());
+                        buf.writeUtf(countEntry.getKey());
                         buf.writeVarInt(countEntry.getValue());
                     }
                 }
@@ -98,18 +98,18 @@ public record GroupModeStateS2CPayload(
         }
     };
 
-    public static final PacketCodec<RegistryByteBuf, GroupModeStateS2CPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, GroupModeStateS2CPayload::entityId,
+    public static final StreamCodec<RegistryFriendlyByteBuf, GroupModeStateS2CPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, GroupModeStateS2CPayload::entityId,
             BuildMode.PACKET_CODEC, GroupModeStateS2CPayload::mode,
-            PacketCodecs.FLOAT.collect(PacketCodecs.toList()), GroupModeStateS2CPayload::windows,
-            PacketCodecs.VAR_INT.collect(PacketCodecs.toList()), GroupModeStateS2CPayload::noiseScales,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), GroupModeStateS2CPayload::flatSlots,
+            ByteBufCodecs.FLOAT.apply(ByteBufCodecs.list()), GroupModeStateS2CPayload::windows,
+            ByteBufCodecs.VAR_INT.apply(ByteBufCodecs.list()), GroupModeStateS2CPayload::noiseScales,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), GroupModeStateS2CPayload::flatSlots,
             EXTRA_DATA_CODEC, GroupModeStateS2CPayload::extraData,
             GroupModeStateS2CPayload::new
     );
 
     @Override
-    public Id<GroupModeStateS2CPayload> getId() { return ID; }
+    public Type<GroupModeStateS2CPayload> type() { return ID; }
 
     /**
      * Helper to extract block counts from extra data (TOWER mode).

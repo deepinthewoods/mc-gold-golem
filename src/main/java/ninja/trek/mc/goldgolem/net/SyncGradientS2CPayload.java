@@ -1,13 +1,13 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
 import java.util.List;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
-public record SyncGradientS2CPayload(int entityId, int width, int noiseScaleMain, int noiseScaleStep, int noiseScaleSurface, float windowMain, float windowStep, float windowSurface, List<String> blocksMain, List<String> blocksStep, List<String> blocksSurface) implements CustomPayload {
+public record SyncGradientS2CPayload(int entityId, int width, int noiseScaleMain, int noiseScaleStep, int noiseScaleSurface, float windowMain, float windowStep, float windowSurface, List<String> blocksMain, List<String> blocksStep, List<String> blocksSurface) implements CustomPacketPayload {
 
     private static final int GRADIENT_SIZE = 9;
 
@@ -17,23 +17,23 @@ public record SyncGradientS2CPayload(int entityId, int width, int noiseScaleMain
         blocksSurface = PayloadValidator.validateListSize(blocksSurface, GRADIENT_SIZE, "blocksSurface");
     }
 
-    public static final Id<SyncGradientS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "sync_gradient"));
+    public static final Type<SyncGradientS2CPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "sync_gradient"));
 
-    public static final PacketCodec<RegistryByteBuf, SyncGradientS2CPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, SyncGradientS2CPayload::entityId,
-            PacketCodecs.VAR_INT, SyncGradientS2CPayload::width,
-            PacketCodecs.VAR_INT, SyncGradientS2CPayload::noiseScaleMain,
-            PacketCodecs.VAR_INT, SyncGradientS2CPayload::noiseScaleStep,
-            PacketCodecs.VAR_INT, SyncGradientS2CPayload::noiseScaleSurface,
-            PacketCodecs.FLOAT, SyncGradientS2CPayload::windowMain,
-            PacketCodecs.FLOAT, SyncGradientS2CPayload::windowStep,
-            PacketCodecs.FLOAT, SyncGradientS2CPayload::windowSurface,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), SyncGradientS2CPayload::blocksMain,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), SyncGradientS2CPayload::blocksStep,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), SyncGradientS2CPayload::blocksSurface,
+    public static final StreamCodec<RegistryFriendlyByteBuf, SyncGradientS2CPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, SyncGradientS2CPayload::entityId,
+            ByteBufCodecs.VAR_INT, SyncGradientS2CPayload::width,
+            ByteBufCodecs.VAR_INT, SyncGradientS2CPayload::noiseScaleMain,
+            ByteBufCodecs.VAR_INT, SyncGradientS2CPayload::noiseScaleStep,
+            ByteBufCodecs.VAR_INT, SyncGradientS2CPayload::noiseScaleSurface,
+            ByteBufCodecs.FLOAT, SyncGradientS2CPayload::windowMain,
+            ByteBufCodecs.FLOAT, SyncGradientS2CPayload::windowStep,
+            ByteBufCodecs.FLOAT, SyncGradientS2CPayload::windowSurface,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), SyncGradientS2CPayload::blocksMain,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), SyncGradientS2CPayload::blocksStep,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), SyncGradientS2CPayload::blocksSurface,
             SyncGradientS2CPayload::new
     );
 
     @Override
-    public Id<SyncGradientS2CPayload> getId() { return ID; }
+    public Type<SyncGradientS2CPayload> type() { return ID; }
 }

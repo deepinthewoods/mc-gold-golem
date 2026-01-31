@@ -1,11 +1,10 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.state.BlockState;
 
 public final class WallModuleTemplate {
     public static final class Voxel {

@@ -1,11 +1,11 @@
 package ninja.trek.mc.goldgolem.client.screen.layout.sections;
 
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.Registries;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.item.ItemStack;
 import ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen;
 import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.client.screen.layout.AbstractGuiSection;
@@ -39,7 +39,7 @@ public class GradientsSection extends AbstractGuiSection {
 
     private final GradientMode mode;
     private final GolemHandledScreen screen;
-    private final TextRenderer textRenderer;
+    private final Font textRenderer;
     private int scroll = 0; // For future pagination support
 
     // Gradient data (managed by parent screen)
@@ -53,7 +53,7 @@ public class GradientsSection extends AbstractGuiSection {
      * @param screen Parent screen
      * @param textRenderer Text renderer for labels
      */
-    public GradientsSection(GradientMode mode, GolemHandledScreen screen, TextRenderer textRenderer) {
+    public GradientsSection(GradientMode mode, GolemHandledScreen screen, Font textRenderer) {
         this.mode = mode;
         this.screen = screen;
         this.textRenderer = textRenderer;
@@ -87,7 +87,7 @@ public class GradientsSection extends AbstractGuiSection {
     }
 
     @Override
-    public void renderBackground(DrawContext context, int guiX, int guiY) {
+    public void renderBackground(GuiGraphics context, int guiX, int guiY) {
         int slotsX = guiX + 8;
         int baseY = guiY + y;
 
@@ -111,15 +111,15 @@ public class GradientsSection extends AbstractGuiSection {
                     if (GradientSlotUtil.isMineAction(blockId)) {
                         var toolItem = GradientSlotUtil.getToolItem(blockId);
                         if (toolItem != null) {
-                            context.drawItem(new ItemStack(toolItem), slotsX + col * SLOT_SIZE, slotY);
+                            context.renderItem(new ItemStack(toolItem), slotsX + col * SLOT_SIZE, slotY);
                         }
                     } else {
                         Identifier ident = Identifier.tryParse(blockId);
                         if (ident != null) {
-                            var block = Registries.BLOCK.get(ident);
+                            var block = BuiltInRegistries.BLOCK.getValue(ident);
                             if (block != null) {
                                 ItemStack stack = new ItemStack(block.asItem());
-                                context.drawItem(stack, slotsX + col * SLOT_SIZE, slotY);
+                                context.renderItem(stack, slotsX + col * SLOT_SIZE, slotY);
                             }
                         }
                     }
@@ -134,17 +134,17 @@ public class GradientsSection extends AbstractGuiSection {
             int row1Y = baseY + ROW_SPACING;
             int row2Y = baseY + ROW_SPACING * 2;
 
-            ItemStack iconSurface = new ItemStack(net.minecraft.item.Items.SHORT_GRASS);
-            ItemStack iconMain = new ItemStack(net.minecraft.item.Items.OAK_PLANKS);
-            ItemStack iconStep = new ItemStack(net.minecraft.item.Items.OAK_STAIRS);
-            context.drawItem(iconSurface, iconX, row0Y);
-            context.drawItem(iconMain, iconX, row1Y);
-            context.drawItem(iconStep, iconX, row2Y);
+            ItemStack iconSurface = new ItemStack(net.minecraft.world.item.Items.SHORT_GRASS);
+            ItemStack iconMain = new ItemStack(net.minecraft.world.item.Items.OAK_PLANKS);
+            ItemStack iconStep = new ItemStack(net.minecraft.world.item.Items.OAK_STAIRS);
+            context.renderItem(iconSurface, iconX, row0Y);
+            context.renderItem(iconMain, iconX, row1Y);
+            context.renderItem(iconStep, iconX, row2Y);
         }
     }
 
     @Override
-    public void renderForeground(DrawContext context, int guiX, int guiY, int mouseX, int mouseY) {
+    public void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY) {
         // Draw row labels for TERRAFORMING mode
         if (mode == GradientMode.TERRAFORMING && rowLabels != null) {
             int labelX = 8; // Relative to GUI
@@ -152,7 +152,7 @@ public class GradientsSection extends AbstractGuiSection {
 
             for (int row = 0; row < mode.rows && row < rowLabels.length; row++) {
                 int labelY = baseY + row * ROW_SPACING;
-                context.drawText(textRenderer, Text.literal(rowLabels[row]),
+                context.drawString(textRenderer, Component.literal(rowLabels[row]),
                         labelX, labelY, 0xFFFFFFFF, false);
             }
         }

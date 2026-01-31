@@ -2,7 +2,7 @@ package ninja.trek.mc.goldgolem.net;
 
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.OreMiningMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
@@ -59,8 +59,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGroupModeWindowC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     switch (payload.mode()) {
                         case WALL -> {
@@ -85,8 +85,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGroupModeSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     String id = payload.block().map(Identifier::toString).orElse("");
                     switch (payload.mode()) {
@@ -103,8 +103,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGroupModeBlockGroupC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     switch (payload.mode()) {
                         case WALL -> golem.setWallBlockGroup(payload.blockId(), payload.group());
@@ -121,8 +121,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetTowerHeightC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setTowerHeight(payload.height());
                     sendGroupModeState(player, golem, BuildMode.TOWER);
@@ -133,10 +133,10 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(ResetTowerOriginC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    golem.setTowerOrigin(golem.getBlockPos());
+                    golem.setTowerOrigin(golem.blockPosition());
                 }
             });
         });
@@ -146,8 +146,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     String id = payload.block().map(Identifier::toString).orElse("");
                     if (payload.row() == 0) {
@@ -165,8 +165,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetPathWidthC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setPathWidth(payload.width());
                     sendSync(player, golem);
@@ -177,8 +177,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetGradientWindowC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     if (payload.row() == 0) {
                         golem.setSurfaceGradientWindow(payload.window());
@@ -200,8 +200,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetExcavationHeightC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setExcavationSliders(payload.height(), golem.getExcavationDepth());
                 }
@@ -211,8 +211,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetExcavationDepthC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setExcavationSliders(golem.getExcavationHeight(), payload.depth());
                 }
@@ -224,8 +224,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetTunnelWidthC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setTunnelWidth(payload.width());
                 }
@@ -235,8 +235,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetTunnelHeightC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setTunnelHeight(payload.height());
                 }
@@ -247,8 +247,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetOreMiningModeC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     OreMiningMode mode = OreMiningMode.fromOrdinal(payload.oreMiningModeOrdinal());
                     if (payload.targetMode() == 0) {
@@ -270,8 +270,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetTerraformingGradientSlotC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     String id = payload.block().map(Identifier::toString).orElse("");
                     switch (payload.gradientType()) {
@@ -287,8 +287,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetTerraformingScanRadiusC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     golem.setTerraformingScanRadius(payload.radius());
                     sendTerraformingSync(player, golem);
@@ -299,8 +299,8 @@ public class NetworkInit {
         ServerPlayNetworking.registerGlobalReceiver(SetTerraformingGradientWindowC2SPayload.ID, (payload, context) -> {
             var player = context.player();
             context.server().execute(() -> {
-                var world = player.getEntityWorld();
-                var e = world.getEntityById(payload.entityId());
+                var world = player.level();
+                var e = world.getEntity(payload.entityId());
                 if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
                     switch (payload.gradientType()) {
                         case 0 -> {
@@ -325,7 +325,7 @@ public class NetworkInit {
     /**
      * Send group mode state using the generic payload.
      */
-    private static void sendGroupModeState(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem, BuildMode mode) {
+    private static void sendGroupModeState(net.minecraft.server.level.ServerPlayer player, GoldGolemEntity golem, BuildMode mode) {
         ServerPlayNetworking.send(player, new UniqueBlocksS2CPayload(golem.getId(), mode, getUniqueBlocks(golem, mode)));
 
         java.util.List<Integer> groups;
@@ -382,7 +382,7 @@ public class NetworkInit {
         };
     }
 
-    private static void sendSync(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
+    private static void sendSync(net.minecraft.server.level.ServerPlayer player, GoldGolemEntity golem) {
         var payload = new SyncGradientS2CPayload(
                 golem.getId(),
                 golem.getPathWidth(),
@@ -399,7 +399,7 @@ public class NetworkInit {
         ServerPlayNetworking.send(player, payload);
     }
 
-    private static void sendTerraformingSync(net.minecraft.server.network.ServerPlayerEntity player, GoldGolemEntity golem) {
+    private static void sendTerraformingSync(net.minecraft.server.level.ServerPlayer player, GoldGolemEntity golem) {
         var payload = new SyncTerraformingS2CPayload(
                 golem.getId(),
                 golem.getTerraformingScanRadius(),

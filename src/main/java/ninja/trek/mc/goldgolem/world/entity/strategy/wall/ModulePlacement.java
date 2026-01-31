@@ -1,15 +1,15 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy.wall;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
 import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy;
 
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Represents a wall module placement operation.
@@ -19,8 +19,8 @@ public class ModulePlacement {
     protected final int tplIndex;
     protected final int rot; // 0..3
     protected final boolean mirror;
-    protected final Vec3d anchor;
-    protected final Vec3d end;
+    protected final Vec3 anchor;
+    protected final Vec3 end;
     protected List<WallModuleTemplate.Voxel> voxels;
     protected int cursor = 0;
     protected boolean joinPlaced = false;
@@ -32,7 +32,7 @@ public class ModulePlacement {
     protected int moduleMinY = 0;
     protected int moduleHeight = 1;
 
-    public ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3d anchor, Vec3d end) {
+    public ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3 anchor, Vec3 end) {
         this.tplIndex = tplIndex;
         this.rot = rot;
         this.mirror = mirror;
@@ -40,11 +40,11 @@ public class ModulePlacement {
         this.end = end;
     }
 
-    public Vec3d anchor() {
+    public Vec3 anchor() {
         return anchor;
     }
 
-    public Vec3d end() {
+    public Vec3 end() {
         return end;
     }
 
@@ -101,19 +101,19 @@ public class ModulePlacement {
             int fz = Integer.signum(d[2]);
             int px = -fz;
             int pz = fx;
-            int ax = MathHelper.floor(anchor.x);
-            int ay = MathHelper.floor(anchor.y);
-            int az = MathHelper.floor(anchor.z);
+            int ax = Mth.floor(anchor.x);
+            int ay = Mth.floor(anchor.y);
+            int az = Mth.floor(anchor.z);
             for (JoinEntry e : joinTemplate) {
                 if (e.id == null || e.id.isEmpty()) continue;
                 int wx = ax + px * e.du;
                 int wy = ay + e.dy;
                 int wz = az + pz * e.du;
-                var ident = net.minecraft.util.Identifier.tryParse(e.id);
+                var ident = net.minecraft.resources.Identifier.tryParse(e.id);
                 if (ident == null) continue;
-                var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+                var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
                 if (block == null) continue;
-                blockStatesMap.put(new BlockPos(wx, wy, wz), block.getDefaultState());
+                blockStatesMap.put(new BlockPos(wx, wy, wz), block.defaultBlockState());
             }
         }
 
@@ -123,13 +123,13 @@ public class ModulePlacement {
             int ry = v.rel.getY();
             int rz = v.rel.getZ();
             int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
-            int wx = MathHelper.floor(anchor.x) + d[0];
-            int wy = MathHelper.floor(anchor.y) + d[1];
-            int wz = MathHelper.floor(anchor.z) + d[2];
+            int wx = Mth.floor(anchor.x) + d[0];
+            int wy = Mth.floor(anchor.y) + d[1];
+            int wz = Mth.floor(anchor.z) + d[2];
 
             // Apply gradient sampling
             BlockState stateToPlace = v.state;
-            String blockId = net.minecraft.registry.Registries.BLOCK.getId(v.state.getBlock()).toString();
+            String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
             boolean hasGradientGroup = groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size();
             boolean skipBlock = false;
@@ -198,7 +198,7 @@ public class ModulePlacement {
     public boolean isBlockAlreadyCorrect(GoldGolemEntity golem, BlockPos pos) {
         // Mine positions: "correct" if already air
         if (minePositions.contains(pos)) {
-            return golem.getEntityWorld().getBlockState(pos).isAir();
+            return golem.level().getBlockState(pos).isAir();
         }
 
         if (blockStatesMap == null) return true;
@@ -206,7 +206,7 @@ public class ModulePlacement {
         BlockState expected = blockStatesMap.get(pos);
         if (expected == null) return true; // Not in our map, skip it
 
-        BlockState current = golem.getEntityWorld().getBlockState(pos);
+        BlockState current = golem.level().getBlockState(pos);
         return current.getBlock() == expected.getBlock();
     }
 
@@ -256,13 +256,13 @@ public class ModulePlacement {
             int ry = v.rel.getY();
             int rz = v.rel.getZ();
             int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
-            int wx = MathHelper.floor(anchor.x) + d[0];
-            int wy = MathHelper.floor(anchor.y) + d[1];
-            int wz = MathHelper.floor(anchor.z) + d[2];
+            int wx = Mth.floor(anchor.x) + d[0];
+            int wy = Mth.floor(anchor.y) + d[1];
+            int wz = Mth.floor(anchor.z) + d[2];
 
             // Apply gradient sampling for wall mode
             BlockState stateToPlace = v.state;
-            String blockId = net.minecraft.registry.Registries.BLOCK.getId(v.state.getBlock()).toString();
+            String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
             boolean hasGradientGroup = groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size();
             boolean skipBlock = false;
@@ -323,19 +323,19 @@ public class ModulePlacement {
         int fz = Integer.signum(d[2]);
         int px = -fz;
         int pz = fx;
-        int ax = MathHelper.floor(anchor.x);
-        int ay = MathHelper.floor(anchor.y);
-        int az = MathHelper.floor(anchor.z);
+        int ax = Mth.floor(anchor.x);
+        int ay = Mth.floor(anchor.y);
+        int az = Mth.floor(anchor.z);
         for (JoinEntry e : joinTemplate) {
             if (e.id == null || e.id.isEmpty()) continue;
             int wx = ax + px * e.du;
             int wy = ay + e.dy;
             int wz = az + pz * e.du;
-            var ident = net.minecraft.util.Identifier.tryParse(e.id);
+            var ident = net.minecraft.resources.Identifier.tryParse(e.id);
             if (ident == null) continue;
-            var block = net.minecraft.registry.Registries.BLOCK.get(ident);
+            var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
             if (block == null) continue;
-            strategy.placeBlockStateAt(golem, wx, wy, wz, block.getDefaultState(), rot, mirror, null);
+            strategy.placeBlockStateAt(golem, wx, wy, wz, block.defaultBlockState(), rot, mirror, null);
         }
     }
 
