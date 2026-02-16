@@ -36,14 +36,25 @@ public final class WallJoinSlice {
         int planeCoord = (axis == Axis.X_THICK) ? goldRel.getX() : goldRel.getZ();
 
         // Collect all rel voxels lying in the plane
+        // The ignored position (pumpkin slot) is included in the BFS graph for connectivity
+        // but excluded from the final slice points
         List<BlockPos> plane = new ArrayList<>();
+        Set<Long> ignoreKeys = new HashSet<>();
         for (BlockPos r : voxelsRel) {
             if ((axis == Axis.X_THICK && r.getX() == planeCoord) || (axis == Axis.Z_THICK && r.getZ() == planeCoord)) {
                 BlockPos abs = originAbs.offset(r);
-                if (ignoreAbs != null && abs.equals(ignoreAbs)) continue;
                 var st = world.getBlockState(abs);
                 // exclude snow layers and gold blocks from slice
                 if (st.is(Blocks.SNOW) || st.is(Blocks.GOLD_BLOCK)) continue;
+                if (ignoreAbs != null && abs.equals(ignoreAbs)) {
+                    // Still add to plane for BFS traversal, but mark as ignored
+                    plane.add(r);
+                    int y = r.getY();
+                    int u = (axis == Axis.X_THICK) ? r.getZ() : r.getX();
+                    long key = (((long) y) << 32) ^ (u & 0xffffffffL);
+                    ignoreKeys.add(key);
+                    continue;
+                }
                 if (st.isAir()) continue;
                 plane.add(r);
             }
@@ -81,7 +92,8 @@ public final class WallJoinSlice {
             int[] cur = q.removeFirst();
             long ck = (((long) cur[0]) << 32) ^ (cur[1] & 0xffffffffL);
             BlockPos r = index.get(ck);
-            if (r != null) component.add(r);
+            // Include in component only if not an ignored (pumpkin) position
+            if (r != null && !ignoreKeys.contains(ck)) component.add(r);
             for (int[] d : new int[][]{{0,1},{0,-1},{1,0},{-1,0}}) {
                 int ny = cur[0] + d[0];
                 int nu = cur[1] + d[1];

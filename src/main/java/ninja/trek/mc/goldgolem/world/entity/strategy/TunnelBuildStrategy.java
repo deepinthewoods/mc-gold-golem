@@ -511,37 +511,46 @@ public class TunnelBuildStrategy extends BaseMiningStrategy {
             rightTool = ItemStack.EMPTY;
         }
 
-        // Navigate toward targets
+        // Compute distances to targets
         BlockPos navTarget = leftTarget != null ? leftTarget : rightTarget;
         if (navTarget == null) return;
 
-        if (leftTarget != null && rightTarget != null) {
-            double midX = (leftTarget.getX() + rightTarget.getX()) / 2.0 + 0.5;
-            double midY = Math.min(leftTarget.getY(), rightTarget.getY());
-            double midZ = (leftTarget.getZ() + rightTarget.getZ()) / 2.0 + 0.5;
-            entity.getNavigation().moveTo(midX, midY, midZ, 1.1);
-        } else {
-            entity.getNavigation().moveTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
-        }
-
-        // Mine with left hand
+        double leftDistSq = Double.MAX_VALUE;
         if (leftTarget != null) {
             double ldx = entity.getX() - (leftTarget.getX() + 0.5);
             double ldy = entity.getY() - leftTarget.getY();
             double ldz = entity.getZ() - (leftTarget.getZ() + 0.5);
-            if (ldx * ldx + ldy * ldy + ldz * ldz <= 25.0) {
-                mineBlockWithHand(leftTarget, true);
-            }
+            leftDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
         }
-
-        // Mine with right hand
+        double rightDistSq = Double.MAX_VALUE;
         if (rightTarget != null) {
             double rdx = entity.getX() - (rightTarget.getX() + 0.5);
             double rdy = entity.getY() - rightTarget.getY();
             double rdz = entity.getZ() - (rightTarget.getZ() + 0.5);
-            if (rdx * rdx + rdy * rdy + rdz * rdz <= 25.0) {
+            rightDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
+        }
+
+        boolean leftInRange = leftTarget != null && leftDistSq <= 25.0;
+        boolean rightInRange = rightTarget != null && rightDistSq <= 25.0;
+
+        if (leftInRange || rightInRange) {
+            // Already in mining range - stop moving and mine
+            entity.getNavigation().stop();
+
+            if (leftInRange) {
+                mineBlockWithHand(leftTarget, true);
+            }
+            if (rightInRange) {
                 mineBlockWithHand(rightTarget, false);
             }
+        } else {
+            // Not in range - navigate toward a walkable position near the closer target
+            BlockPos closer = navTarget;
+            if (leftTarget != null && rightTarget != null) {
+                closer = leftDistSq <= rightDistSq ? leftTarget : rightTarget;
+            }
+            BlockPos navPos = findNavPositionNear(closer);
+            entity.getNavigation().moveTo(navPos.getX() + 0.5, navPos.getY(), navPos.getZ() + 0.5, 1.1);
         }
     }
 

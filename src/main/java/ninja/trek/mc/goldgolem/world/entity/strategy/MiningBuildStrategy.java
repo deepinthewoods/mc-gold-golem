@@ -415,63 +415,67 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             return;
         }
 
-        // Navigate toward the closest target
+        // Compute distances to targets
         BlockPos navTarget = leftTarget != null ? leftTarget : rightTarget;
-        if (leftTarget != null && rightTarget != null) {
-            // Navigate to midpoint if both targets exist
-            double midX = (leftTarget.getX() + rightTarget.getX()) / 2.0 + 0.5;
-            double midY = Math.min(leftTarget.getY(), rightTarget.getY());
-            double midZ = (leftTarget.getZ() + rightTarget.getZ()) / 2.0 + 0.5;
-            entity.getNavigation().moveTo(midX, midY, midZ, 1.1);
-        } else {
-            entity.getNavigation().moveTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
-        }
-
-        // Mine with left hand if in range
+        double leftDistSq = Double.MAX_VALUE;
         if (leftTarget != null) {
             double ldx = entity.getX() - (leftTarget.getX() + 0.5);
             double ldy = entity.getY() - leftTarget.getY();
             double ldz = entity.getZ() - (leftTarget.getZ() + 0.5);
-            double lDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
-            if (lDistSq <= 25.0) {
-                mineBlockWithHand(leftTarget, true);
-            }
+            leftDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
         }
-
-        // Mine with right hand if in range
+        double rightDistSq = Double.MAX_VALUE;
         if (rightTarget != null) {
             double rdx = entity.getX() - (rightTarget.getX() + 0.5);
             double rdy = entity.getY() - rightTarget.getY();
             double rdz = entity.getZ() - (rightTarget.getZ() + 0.5);
-            double rDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
-            if (rDistSq <= 25.0) {
-                mineBlockWithHand(rightTarget, false);
-            }
+            rightDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
         }
 
-        // Stuck detection
-        BlockPos primaryTarget = leftTarget != null ? leftTarget : rightTarget;
-        if (primaryTarget != null) {
-            double pdx = entity.getX() - (primaryTarget.getX() + 0.5);
-            double pdy = entity.getY() - primaryTarget.getY();
-            double pdz = entity.getZ() - (primaryTarget.getZ() + 0.5);
-            double pDistSq = pdx * pdx + pdy * pdy + pdz * pdz;
-            if (entity.getNavigation().isDone() && pDistSq > 16.0) {
-                stuckTicks++;
-                if (stuckTicks >= 60) {
-                    teleportToStart();
-                    stuckTicks = 0;
-                    leftTarget = null;
-                    rightTarget = null;
-                    leftBreakProgress = 0;
-                    rightBreakProgress = 0;
-                    primaryProgress = 0;
-                    currentBranch = -1;
-                    branchProgress = 0;
-                    pendingOres.clear();
-                }
-            } else {
-                stuckTicks = 0;
+        boolean leftInRange = leftTarget != null && leftDistSq <= 25.0;
+        boolean rightInRange = rightTarget != null && rightDistSq <= 25.0;
+
+        if (leftInRange || rightInRange) {
+            // Already in mining range - stop moving and mine
+            entity.getNavigation().stop();
+            navStuckTicks = 0;
+
+            if (leftInRange) {
+                mineBlockWithHand(leftTarget, true);
+            }
+            if (rightInRange) {
+                mineBlockWithHand(rightTarget, false);
+            }
+        } else {
+            // Not in range - navigate toward a walkable position near the closer target
+            BlockPos closer = navTarget;
+            if (leftTarget != null && rightTarget != null) {
+                closer = leftDistSq <= rightDistSq ? leftTarget : rightTarget;
+            }
+            BlockPos navPos = findNavPositionNear(closer);
+            entity.getNavigation().moveTo(navPos.getX() + 0.5, navPos.getY(), navPos.getZ() + 0.5, 1.1);
+
+            // Check for navigation obstacles (mine through walls, bridge gaps)
+            BlockPos obstacle = checkNavigationObstacle(closer);
+            if (obstacle != null && !obstacle.equals(leftTarget)) {
+                leftTarget = obstacle;
+                leftBreakProgress = 0;
+                leftSwingTick = 0;
+                leftTool = ItemStack.EMPTY;
+            }
+
+            // Fallback teleport if stuck for too long despite obstacle handling
+            // Does NOT reset mining progress - golem retries from start position
+            if (navStuckTicks > 200) {
+                teleportToStart();
+                navStuckTicks = 0;
+                prevNavX = Double.NaN;
+                prevNavZ = Double.NaN;
+                leftTarget = null;
+                rightTarget = null;
+                leftBreakProgress = 0;
+                rightBreakProgress = 0;
+                return;
             }
         }
     }
@@ -612,8 +616,8 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
                 return getNextBranchMiningTarget();
             }
 
-            for (int y = 1; y < tunnelHeight; y++) {
-                BlockPos layerTarget = target.above(y - 1);
+            for (int y = 0; y < tunnelHeight; y++) {
+                BlockPos layerTarget = target.above(y);
                 if (shouldMineBlock(layerTarget)) {
                     return layerTarget;
                 }
@@ -626,8 +630,8 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             BlockPos branchStart = startPos.relative(direction, 1 + currentBranch * branchSpacing);
             BlockPos target = branchStart.relative(branchDir, branchProgress + 1);
 
-            for (int y = 1; y < tunnelHeight; y++) {
-                BlockPos layerTarget = target.above(y - 1);
+            for (int y = 0; y < tunnelHeight; y++) {
+                BlockPos layerTarget = target.above(y);
                 if (shouldMineBlock(layerTarget)) {
                     return layerTarget;
                 }

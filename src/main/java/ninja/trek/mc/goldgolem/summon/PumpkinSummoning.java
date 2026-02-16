@@ -286,7 +286,6 @@ public class PumpkinSummoning {
             golem.snapTo(secondGoldPos.getX() + 0.5, secondGoldPos.getY(), secondGoldPos.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TREE);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TREE)));
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -313,6 +312,8 @@ public class PumpkinSummoning {
 
             // Set tree capture data on golem
             golem.setTreeCapture(def.modules, def.uniqueBlockIds, secondGoldPos, jsonRel);
+            // Set name AFTER all data is set so the snapshot written by setCustomName is complete
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TREE)));
 
             // Remove both gold blocks (pumpkin gold and second gold)
             world.destroyBlock(below, false, player);
@@ -368,7 +369,6 @@ public class PumpkinSummoning {
             golem.snapTo(bottomGold.getX() + 0.5, bottomGold.getY(), bottomGold.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TOWER);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TOWER)));
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -399,6 +399,8 @@ public class PumpkinSummoning {
 
             // Set tower data on golem
             golem.setTowerCapture(def.uniqueBlockIds, def.blockCounts, bottomGold, jsonRel, towerHeight, template);
+            // Set name AFTER all data is set so the snapshot written by setCustomName is complete
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TOWER)));
 
             // Remove all gold blocks in the column
             BlockPos removePos = bottomGold;
@@ -413,10 +415,18 @@ public class PumpkinSummoning {
             return InteractionResult.SUCCESS;
         } else if (wallMode) {
             // Scan combined module per spec
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp0) {
+                sp0.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode detected, scanning..."), false);
+            }
             var res = ninja.trek.mc.goldgolem.wall.WallScanner.scan(world, below, player);
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp0) {
+                if (res.ok()) {
+                    sp0.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Scan OK: " + res.def().voxels.size() + " voxels, " + res.def().goldMarkers.size() + " gold markers"), false);
+                }
+            }
             if (!res.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode summon failed: " + res.error()), true);
+                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode summon failed: " + res.error()), false);
                 }
                 return InteractionResult.FAIL;
             }
@@ -426,7 +436,7 @@ public class PumpkinSummoning {
             var validation = ninja.trek.mc.goldgolem.wall.WallModuleValidator.validate(world, def.origin, def.voxels, def.goldMarkers, below);
             if (!validation.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall validation failed: " + validation.error()), true);
+                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall validation failed: " + validation.error()), false);
                 }
                 return InteractionResult.FAIL;
             }
@@ -437,7 +447,6 @@ public class PumpkinSummoning {
             golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.WALL);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.WALL)));
 
             // Persist JSON file under game dir
             String jsonRel = null;
@@ -454,12 +463,16 @@ public class PumpkinSummoning {
             var extraction = ninja.trek.mc.goldgolem.wall.WallModuleExtractor.extract(world, def.origin, def.voxels, def.goldMarkers, below);
             if (!extraction.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall module extraction failed: " + extraction.error()), true);
+                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall module extraction failed: " + extraction.error()), false);
                 }
                 return InteractionResult.FAIL;
             }
 
+            try {
             // Build module templates with per-voxel block ids relative to each module's A marker
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Extraction OK: " + extraction.modules().size() + " modules"), false);
+            }
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> templates = new java.util.ArrayList<>();
             for (var mod : extraction.modules()) {
                 java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> vox = new java.util.ArrayList<>();
@@ -479,23 +492,24 @@ public class PumpkinSummoning {
             golem.setWallCapture(def.uniqueBlockIds, def.origin, jsonRel);
             golem.setWallJoinSignature(validation.signature());
             golem.setWallJoinMeta(validation.axis(), validation.uSize());
-            // Build join template from the largest slice (no ignoring), so we can fill the pumpkin slot when needed
-            // Choose preferred axis as in validator
-            int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
-            for (var r : def.voxels) { minX = Math.min(minX, r.getX()); maxX = Math.max(maxX, r.getX()); minZ = Math.min(minZ, r.getZ()); maxZ = Math.max(maxZ, r.getZ()); }
-            var preferred = (maxX - minX) >= (maxZ - minZ)
-                    ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                    : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+            // Build join template from a non-summon slice, picking the smallest (cross-section) per gold
+            // Choose the smallest valid slice per marker, then pick the best (a non-summon one)
             ninja.trek.mc.goldgolem.wall.WallJoinSlice best = null;
             for (var g : def.goldMarkers) {
-                var s = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, preferred).orElse(null);
-                if (s == null && preferred == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK) {
-                    s = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK).orElse(null);
-                } else if (s == null) {
-                    s = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK).orElse(null);
+                var sx = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK).orElse(null);
+                var sz = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK).orElse(null);
+                ninja.trek.mc.goldgolem.wall.WallJoinSlice s;
+                if (sx != null && sz != null) {
+                    s = (sx.points.size() <= sz.points.size()) ? sx : sz;
+                } else {
+                    s = (sx != null) ? sx : sz;
                 }
                 if (s != null) {
-                    if (best == null || s.points.size() > best.points.size()) best = s;
+                    // Prefer the slice from a non-summon marker; among those, pick the one with most points
+                    // (all non-summon slices should be the same size, but pick largest for completeness)
+                    BlockPos markerAbs = def.origin.offset(g);
+                    boolean isSummonMarker = markerAbs.equals(below);
+                    if (best == null || (!isSummonMarker && s.points.size() >= best.points.size())) best = s;
                 }
             }
             if (best != null) {
@@ -504,9 +518,9 @@ public class PumpkinSummoning {
                 java.util.ArrayList<int[]> entries = new java.util.ArrayList<>();
                 for (var p : best.points) {
                     String id = best.blockIds.get(p);
-                    int idx = lut.indexOf(id);
-                    if (idx < 0) { idx = lut.size(); lut.add(id); }
-                    entries.add(new int[]{p.dy(), p.du(), idx});
+                    int idx2 = lut.indexOf(id);
+                    if (idx2 < 0) { idx2 = lut.size(); lut.add(id); }
+                    entries.add(new int[]{p.dy(), p.du(), idx2});
                 }
                 golem.setWallJoinTemplate(entries, lut);
             }
@@ -515,12 +529,24 @@ public class PumpkinSummoning {
             for (var m : extraction.modules()) longest = Math.max(longest, m.voxels().size());
             golem.setWallModulesMeta(count, longest);
             golem.setWallTemplates(templates);
+            // Set name AFTER all data is set so the snapshot written by setCustomName is complete
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.WALL)));
             // Remove gold block only after success
             world.destroyBlock(below, false, player);
             ServerLevel sw = (ServerLevel) world;
             sw.addFreshEntity(golem);
             if (!player.isCreative()) stack.shrink(1);
+            if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall golem spawned!"), false);
+            }
             return InteractionResult.SUCCESS;
+            } catch (Exception ex) {
+                if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall spawn exception: " + ex.getMessage()), false);
+                }
+                ex.printStackTrace();
+                return InteractionResult.FAIL;
+            }
         } else {
             // Pathing Mode: spawn as before
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);

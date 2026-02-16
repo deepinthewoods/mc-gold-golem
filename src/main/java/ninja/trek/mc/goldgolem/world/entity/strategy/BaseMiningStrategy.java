@@ -1,6 +1,7 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -36,6 +37,12 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
     protected ItemStack leftTool = ItemStack.EMPTY;
     protected ItemStack rightTool = ItemStack.EMPTY;
     protected static final int MINING_SWING_INTERVAL = 5; // ticks between swings
+
+    // Navigation obstacle detection for mining through walls / bridging gaps
+    protected int navStuckTicks = 0;
+    protected double prevNavX = Double.NaN, prevNavZ = Double.NaN;
+    private static final int OBSTACLE_CHECK_DELAY = 15; // ticks before trying to clear path
+    private static final double NAV_STUCK_MOVEMENT_SQ = 0.01;
 
     // Building block type for floor placement
     protected String buildingBlockType = null;
@@ -79,6 +86,9 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
         rightSwingTick = 0;
         leftTool = ItemStack.EMPTY;
         rightTool = ItemStack.EMPTY;
+        navStuckTicks = 0;
+        prevNavX = Double.NaN;
+        prevNavZ = Double.NaN;
         if (entity != null) {
             entity.setLeftMiningTool(ItemStack.EMPTY);
             entity.setRightMiningTool(ItemStack.EMPTY);
@@ -536,6 +546,219 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
                 }
             }
             entity.handleMissingBuildingBlock();
+        }
+    }
+
+    // ==================== Navigation Helpers ====================
+
+    /**
+     * Find a walkable position adjacent to the target block for navigation.
+     * The golem can't pathfind into a solid block, so this finds the nearest
+     * air position next to the target's XZ column where the golem can stand.
+     *
+     * Checks: target column itself first (in case lower blocks are already mined),
+     * then the 4 cardinal neighbors. Picks the closest to the golem.
+     *
+     * @param target The solid block the golem wants to mine
+     * @return A navigable BlockPos, or the golem's own position as fallback
+     */
+    protected BlockPos findNavPositionNear(BlockPos target) {
+        int floorY = entity.blockPosition().getY();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        // Check the target's own XZ column at floor level first, then neighbors
+        BlockPos[] candidates = new BlockPos[5];
+        candidates[0] = new BlockPos(target.getX(), floorY, target.getZ());
+        int i = 1;
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            candidates[i++] = new BlockPos(
+                target.getX() + dir.getStepX(), floorY, target.getZ() + dir.getStepZ());
+        }
+
+        for (BlockPos candidate : candidates) {
+            // Feet and head must be passable (no collision), ground must be solid
+            BlockState feetState = entity.level().getBlockState(candidate);
+            BlockState headState = entity.level().getBlockState(candidate.above());
+            BlockState groundState = entity.level().getBlockState(candidate.below());
+
+            boolean feetPassable = feetState.getCollisionShape(entity.level(), candidate).isEmpty();
+            boolean headPassable = headState.getCollisionShape(entity.level(), candidate.above()).isEmpty();
+            boolean hasGround = !groundState.getCollisionShape(entity.level(), candidate.below()).isEmpty();
+
+            if (feetPassable && headPassable && hasGround) {
+                double dx = entity.getX() - (candidate.getX() + 0.5);
+                double dz = entity.getZ() - (candidate.getZ() + 0.5);
+                double distSq = dx * dx + dz * dz;
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq;
+                    best = candidate;
+                }
+            }
+        }
+
+        return best != null ? best : entity.blockPosition();
+    }
+
+    // ==================== Navigation Obstacle Handling ====================
+
+    /**
+     * Check if the golem is stuck navigating and find blocking blocks to mine through.
+     * Call each tick during active mining after navigation is set.
+     * @param target The block the golem is trying to reach
+     * @return BlockPos of an obstruction to mine, or null
+     */
+    protected BlockPos checkNavigationObstacle(BlockPos target) {
+        if (target == null || entity == null) return null;
+
+        double gx = entity.getX();
+        double gz = entity.getZ();
+
+        // Close to target = not stuck
+        double dx = gx - (target.getX() + 0.5);
+        double dz = gz - (target.getZ() + 0.5);
+        if (dx * dx + dz * dz <= 4.0) {
+            navStuckTicks = 0;
+            prevNavX = gx;
+            prevNavZ = gz;
+            return null;
+        }
+
+        // Check per-tick movement
+        if (!Double.isNaN(prevNavX)) {
+            double movedSq = (gx - prevNavX) * (gx - prevNavX) + (gz - prevNavZ) * (gz - prevNavZ);
+            if (movedSq < NAV_STUCK_MOVEMENT_SQ) {
+                navStuckTicks++;
+            } else {
+                navStuckTicks = 0;
+            }
+        }
+        prevNavX = gx;
+        prevNavZ = gz;
+
+        if (navStuckTicks < OBSTACLE_CHECK_DELAY) return null;
+
+        // Stuck! Try to find a blocking block to mine
+        BlockPos blocking = findBlockingBlock(target);
+        if (blocking != null) return blocking;
+
+        // No wall found - try building a bridge toward the target
+        tryBuildBridgeToward(target);
+        return null;
+    }
+
+    /**
+     * Find the first solid block between the golem and target at walk height.
+     * Uses Bresenham stepping in XZ, checking feet and head levels.
+     */
+    protected BlockPos findBlockingBlock(BlockPos target) {
+        int gx = entity.blockPosition().getX();
+        int gz = entity.blockPosition().getZ();
+        int gy = entity.blockPosition().getY();
+        int tx = target.getX();
+        int tz = target.getZ();
+
+        int ddx = Math.abs(tx - gx);
+        int ddz = Math.abs(tz - gz);
+        int sx = gx < tx ? 1 : (gx > tx ? -1 : 0);
+        int sz = gz < tz ? 1 : (gz > tz ? -1 : 0);
+
+        if (ddx == 0 && ddz == 0) return null; // Same column
+
+        int err = ddx - ddz;
+        int cx = gx, cz = gz;
+
+        for (int step = 0; step < 8; step++) {
+            int e2 = err * 2;
+            if (e2 > -ddz) { err -= ddz; cx += sx; }
+            if (e2 < ddx) { err += ddx; cz += sz; }
+
+            // Check feet and head level (golem is 2 blocks tall)
+            for (int dy = 0; dy < 2; dy++) {
+                BlockPos checkPos = new BlockPos(cx, gy + dy, cz);
+                BlockState state = entity.level().getBlockState(checkPos);
+                if (!state.isAir() && state.getDestroySpeed(entity.level(), checkPos) >= 0) {
+                    String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+                    if (!isChestBlock(blockId) && !isTorchBlock(blockId)) {
+                        return checkPos;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build a bridge block toward the target when stuck over a gap.
+     * Places a building block at the next step's floor level if it's air.
+     */
+    protected void tryBuildBridgeToward(BlockPos target) {
+        if (entity.level().isClientSide()) return;
+
+        int gx = entity.blockPosition().getX();
+        int gz = entity.blockPosition().getZ();
+        int gy = entity.blockPosition().getY();
+        int tx = target.getX();
+        int tz = target.getZ();
+
+        int dx = tx - gx;
+        int dz = tz - gz;
+        if (dx == 0 && dz == 0) return;
+
+        // Step toward target on dominant axis
+        int sx, sz;
+        if (Math.abs(dx) >= Math.abs(dz)) {
+            sx = dx > 0 ? 1 : -1;
+            sz = 0;
+        } else {
+            sx = 0;
+            sz = dz > 0 ? 1 : -1;
+        }
+
+        // Check if the next step has no floor but is passable at walk level
+        BlockPos nextGround = new BlockPos(gx + sx, gy - 1, gz + sz);
+        BlockPos nextFeet = new BlockPos(gx + sx, gy, gz + sz);
+        if (entity.level().getBlockState(nextGround).isAir()
+                && entity.level().getBlockState(nextFeet).isAir()) {
+            placeBlockAt(nextGround);
+        }
+    }
+
+    /**
+     * Place a building block at a specific position from inventory.
+     */
+    protected void placeBlockAt(BlockPos pos) {
+        if (entity.level().isClientSide()) return;
+        if (!entity.level().getBlockState(pos).isAir()) return;
+
+        Container inventory = entity.getInventory();
+        if (buildingBlockType == null) {
+            for (int i = 0; i < inventory.getContainerSize(); i++) {
+                ItemStack stack = inventory.getItem(i);
+                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
+                var block = blockItem.getBlock();
+                String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
+                if (!isOreBlock(blockId) && !isGravityBlock(block)) {
+                    buildingBlockType = blockId;
+                    break;
+                }
+            }
+            if (buildingBlockType == null) return;
+        }
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
+            String blockId = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
+            if (blockId.equals(buildingBlockType)) {
+                BlockState state = blockItem.getBlock().defaultBlockState();
+                entity.level().setBlockAndUpdate(pos, state);
+                entity.beginHandAnimation(isLeftHandActive(), pos, null);
+                alternateHand();
+                stack.shrink(1);
+                inventory.setItem(i, stack);
+                return;
+            }
         }
     }
 

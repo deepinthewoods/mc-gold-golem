@@ -3913,6 +3913,8 @@ class FollowGoldNuggetHolderGoal extends Goal {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
+        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never follow in excavation mode
+        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never follow in tunnel mode
         // Only follow the owner; find the owner player in-world
         Player owner = null;
         for (Player player : golem.level().players()) {
@@ -3930,6 +3932,8 @@ class FollowGoldNuggetHolderGoal extends Goal {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never follow in mining mode
+        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never follow in excavation mode
+        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never follow in tunnel mode
         if (target == null || !target.isAlive()) return false;
         // Ensure target remains the owner
         if (!golem.isOwner(target)) return false;
@@ -3975,6 +3979,8 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
+        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never wander in excavation mode
+        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never wander in tunnel mode
         return super.canUse();
     }
 
@@ -3983,6 +3989,8 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
         if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
+        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never wander in excavation mode
+        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never wander in tunnel mode
         return super.canContinueToUse();
     }
 

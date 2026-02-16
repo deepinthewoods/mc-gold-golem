@@ -495,14 +495,23 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             return;
         }
 
+        // Recovery: if standing on a chest, teleport to safe deposit point.
+        // Return immediately so the strategy doesn't set new navigation this tick
+        // (which could route right back over the chest).
+        if (isStandingOnChest()) {
+            entity.teleportWithParticles(getDepositWaitPos());
+            return;
+        }
+
         // State 1: Idle at start (waiting for gold nugget)
         if (idleAtStart) {
-            double dx = entity.getX() - (startPos.getX() + 0.5);
-            double dz = entity.getZ() - (startPos.getZ() + 0.5);
+            BlockPos waitPos = getDepositWaitPos();
+            double dx = entity.getX() - (waitPos.getX() + 0.5);
+            double dz = entity.getZ() - (waitPos.getZ() + 0.5);
             double distSq = dx * dx + dz * dz;
             if (distSq > 4.0) {
-                entity.getNavigation().moveTo(startPos.getX() + 0.5,
-                    startPos.getY(), startPos.getZ() + 0.5, 1.0);
+                entity.getNavigation().moveTo(waitPos.getX() + 0.5,
+                    waitPos.getY(), waitPos.getZ() + 0.5, 1.0);
             } else {
                 entity.getNavigation().stop();
             }
@@ -530,14 +539,17 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
     }
 
     private void tickExcavationReturn() {
-        BlockPos nearestChest = getNearestChest();
-        double dx = entity.getX() - (nearestChest.getX() + 0.5);
-        double dz = entity.getZ() - (nearestChest.getZ() + 0.5);
+        // Navigate to a safe deposit point 2 blocks into the excavation area,
+        // away from the chests. This prevents the pathfinder from routing over chests.
+        // depositInventoryToChest() works via block entity access regardless of distance.
+        BlockPos waitPos = getDepositWaitPos();
+        double dx = entity.getX() - (waitPos.getX() + 0.5);
+        double dz = entity.getZ() - (waitPos.getZ() + 0.5);
         double distSq = dx * dx + dz * dz;
 
         if (distSq > 4.0) {
-            entity.getNavigation().moveTo(nearestChest.getX() + 0.5,
-                nearestChest.getY(), nearestChest.getZ() + 0.5, 1.1);
+            entity.getNavigation().moveTo(waitPos.getX() + 0.5,
+                waitPos.getY(), waitPos.getZ() + 0.5, 1.1);
 
             // Track actual movement for stuck detection
             double movedX = entity.getX() - lastX;
@@ -547,7 +559,7 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             if (movedDistSq < MOVEMENT_THRESHOLD * MOVEMENT_THRESHOLD) {
                 noMovementTicks++;
                 if (noMovementTicks >= STUCK_TICKS_BEFORE_TELEPORT && distSq > 9.0) {
-                    teleportToChest(nearestChest);
+                    entity.teleportWithParticles(waitPos);
                     noMovementTicks = 0;
                 }
             } else {
@@ -558,7 +570,9 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             lastZ = entity.getZ();
         } else {
             entity.getNavigation().stop();
-            depositInventoryToChest(nearestChest);
+            // Deposit into both chests to maximize space freed
+            depositInventoryToChest(chestPos1);
+            depositInventoryToChest(chestPos2);
             returningToChest = false;
             noMovementTicks = 0;
             if (isInventoryFull()) {
@@ -585,7 +599,7 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             currentRing++;
             ringProgress = 0;
 
-            // Check if excavation complete
+            // Check if excavation complete (reached max depth)
             int maxRing = depth > 0 ? depth - 1 : 63;
             if (currentRing > maxRing) {
                 if (!isInventoryEmpty()) {
@@ -627,42 +641,71 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             rightTool = ItemStack.EMPTY;
         }
 
-        // Navigate toward the closest target
         BlockPos navTarget = leftTarget != null ? leftTarget : rightTarget;
         if (navTarget == null) {
             // No targets, ring must be complete
             return;
         }
 
-        if (leftTarget != null && rightTarget != null) {
-            // Navigate to midpoint if both targets exist
-            double midX = (leftTarget.getX() + rightTarget.getX()) / 2.0 + 0.5;
-            double midY = Math.min(leftTarget.getY(), rightTarget.getY());
-            double midZ = (leftTarget.getZ() + rightTarget.getZ()) / 2.0 + 0.5;
-            entity.getNavigation().moveTo(midX, midY, midZ, 1.1);
-        } else {
-            entity.getNavigation().moveTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
-        }
-
-        // Mine with left hand if in range
+        // Compute distances to targets
+        double leftDistSq = Double.MAX_VALUE;
         if (leftTarget != null) {
             double ldx = entity.getX() - (leftTarget.getX() + 0.5);
             double ldy = entity.getY() - leftTarget.getY();
             double ldz = entity.getZ() - (leftTarget.getZ() + 0.5);
-            double lDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
-            if (lDistSq <= 25.0) {
-                mineBlockWithHand(leftTarget, true);
-            }
+            leftDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
         }
-
-        // Mine with right hand if in range
+        double rightDistSq = Double.MAX_VALUE;
         if (rightTarget != null) {
             double rdx = entity.getX() - (rightTarget.getX() + 0.5);
             double rdy = entity.getY() - rightTarget.getY();
             double rdz = entity.getZ() - (rightTarget.getZ() + 0.5);
-            double rDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
-            if (rDistSq <= 25.0) {
+            rightDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
+        }
+
+        boolean leftInRange = leftTarget != null && leftDistSq <= 25.0;
+        boolean rightInRange = rightTarget != null && rightDistSq <= 25.0;
+
+        if (leftInRange || rightInRange) {
+            // Already in mining range - stop moving and mine
+            entity.getNavigation().stop();
+            navStuckTicks = 0;
+
+            if (leftInRange) {
+                mineBlockWithHand(leftTarget, true);
+            }
+            if (rightInRange) {
                 mineBlockWithHand(rightTarget, false);
+            }
+        } else {
+            // Not in range - navigate toward a walkable position near the closer target
+            BlockPos closer = navTarget;
+            if (leftTarget != null && rightTarget != null) {
+                closer = leftDistSq <= rightDistSq ? leftTarget : rightTarget;
+            }
+            BlockPos navPos = findNavPositionNear(closer);
+            entity.getNavigation().moveTo(navPos.getX() + 0.5, navPos.getY(), navPos.getZ() + 0.5, 1.1);
+
+            // Check for navigation obstacles (mine through walls, bridge gaps)
+            BlockPos obstacle = checkNavigationObstacle(closer);
+            if (obstacle != null && !obstacle.equals(leftTarget)) {
+                leftTarget = obstacle;
+                leftBreakProgress = 0;
+                leftSwingTick = 0;
+                leftTool = ItemStack.EMPTY;
+            }
+
+            // Fallback teleport if stuck for too long despite obstacle handling
+            if (navStuckTicks > 200 && startPos != null) {
+                entity.teleportWithParticles(getDepositWaitPos());
+                navStuckTicks = 0;
+                prevNavX = Double.NaN;
+                prevNavZ = Double.NaN;
+                leftTarget = null;
+                rightTarget = null;
+                leftBreakProgress = 0;
+                rightBreakProgress = 0;
+                return;
             }
         }
     }
@@ -723,24 +766,6 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             && entity.level().getBlockState(twoBelow).isAir();
     }
 
-    private void teleportToChest(BlockPos chestPos) {
-        entity.teleportWithParticles(chestPos);
-    }
-
-    private BlockPos getNearestChest() {
-        double dx1 = entity.getX() - (chestPos1.getX() + 0.5);
-        double dy1 = entity.getY() - (chestPos1.getY() + 0.5);
-        double dz1 = entity.getZ() - (chestPos1.getZ() + 0.5);
-        double dist1 = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
-
-        double dx2 = entity.getX() - (chestPos2.getX() + 0.5);
-        double dy2 = entity.getY() - (chestPos2.getY() + 0.5);
-        double dz2 = entity.getZ() - (chestPos2.getZ() + 0.5);
-        double dist2 = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
-
-        return dist1 <= dist2 ? chestPos1 : chestPos2;
-    }
-
     private boolean isInventoryFull() {
         Container inventory = entity.getInventory();
         int emptySlots = 0;
@@ -755,19 +780,58 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
     }
 
     /**
-     * Check if inventory has no depositable items (ignoring tools and torches).
-     * Used to skip returning to chest when there's nothing to dump.
+     * Check if inventory has no depositable items.
+     * Ignores tools, torches, and building blocks (which are kept during deposit up to 64).
+     * Used to skip returning to chest when there's nothing to actually dump.
      */
     private boolean isInventoryEmpty() {
         Container inventory = entity.getInventory();
+        int buildingBlockCount = 0;
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
-            if (!stack.isEmpty() && !isToolOrTorch(stack)) {
-                // Found a non-tool/torch item that can be deposited
-                return false;
+            if (stack.isEmpty()) continue;
+            if (isToolOrTorch(stack)) continue;
+
+            // Building blocks up to 64 won't be deposited, so don't count them
+            if (buildingBlockType != null) {
+                String blockId = getBlockIdFromStack(stack);
+                if (blockId != null && blockId.equals(buildingBlockType)) {
+                    buildingBlockCount += stack.getCount();
+                    if (buildingBlockCount <= 64) continue;
+                    // Excess building blocks beyond 64 would be deposited
+                    return false;
+                }
             }
+
+            // Found a depositable item
+            return false;
         }
-        return true; // Only empty slots or tools/torches
+        return true;
+    }
+
+    /**
+     * Check if the golem is standing on a chest block.
+     * Chests are 0.875 blocks tall (not full), so when standing on one the entity's
+     * Y is ~64.875, and blockPosition() returns the chest block itself (Y=64),
+     * not the air above. We check both blockPosition() and below() to handle
+     * both non-full blocks and full-height containers like barrels.
+     */
+    private boolean isStandingOnChest() {
+        BlockPos feetPos = entity.blockPosition();
+        BlockPos belowPos = feetPos.below();
+        String feetBlockId = BuiltInRegistries.BLOCK.getKey(entity.level().getBlockState(feetPos).getBlock()).toString();
+        String belowBlockId = BuiltInRegistries.BLOCK.getKey(entity.level().getBlockState(belowPos).getBlock()).toString();
+        return isChestBlock(feetBlockId) || isChestBlock(belowBlockId);
+    }
+
+    /**
+     * Get a safe position for the golem to wait/deposit, 2 blocks from startPos
+     * in the excavation direction (away from chests). This prevents the pathfinder
+     * from routing over chests when navigating to the deposit area.
+     */
+    private BlockPos getDepositWaitPos() {
+        Direction primary = primaryExcavDir != null ? primaryExcavDir : Direction.SOUTH;
+        return startPos.relative(primary, 2);
     }
 
     private void placeFloorBlocks() {
