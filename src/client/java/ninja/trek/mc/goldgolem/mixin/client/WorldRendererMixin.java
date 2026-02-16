@@ -228,15 +228,14 @@ public abstract class WorldRendererMixin {
                     final float by = (float) p1.y;
                     final float bz = (float) p1.z;
                     batching.submitCustomGeometry(matrices, layer, (entry, vc) -> {
-                        int light = 0x00F000F0;
                         vc.addVertex(entry, ax - cx, ay - cy, az - cz)
                           .setColor(rr, gg, bb, aa)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                         vc.addVertex(entry, bx - cx, by - cy, bz - cz)
                           .setColor(rr, gg, bb, aa)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                     });
                 }
 
@@ -286,34 +285,33 @@ public abstract class WorldRendererMixin {
                         float zw1 = bzw + 1.0f;
                         var bq = queue.order(1000);
                         bq.submitCustomGeometry(matrices, lineLayer, (entry, vc) -> {
-                            int light = 0x00F000F0;
                             // bottom rectangle
-                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
+                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
                             // top rectangle
-                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
+                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
                             // verticals
-                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
-                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLight(light);
+                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw0 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw1 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y0w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
+                            vc.addVertex(entry, xw0 - cx, y1w - cy, zw1 - cz).setColor(cr, cg, cb, ca).setNormal(entry, 0, 1, 0).setLineWidth(1.0f);
                         });
                     };
 
@@ -403,15 +401,14 @@ public abstract class WorldRendererMixin {
                             final int cr0r = c0r, cr0g = c0g, cr0b = c0b;
                             final int cr1r = c1r, cr1g = c1g, cr1b = c1b;
                             batchingPrev.submitCustomGeometry(matrices, lineLayer, (entry, vc) -> {
-                                int light = 0x00F000F0;
                                 vc.addVertex(entry, ax - cx, ay - cy, az - cz)
                                   .setColor(cr0r, cr0g, cr0b, pA)
                                   .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                                  .setLight(light);
+                                  .setLineWidth(1.0f);
                                 vc.addVertex(entry, bx - cx, by - cy, bz - cz)
                                   .setColor(cr1r, cr1g, cr1b, pA)
                                   .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                                  .setLight(light);
+                                  .setLineWidth(1.0f);
                             });
                         }
                     }
@@ -436,15 +433,14 @@ public abstract class WorldRendererMixin {
 
                     var batchingLook = queue.order(1000);
                     batchingLook.submitCustomGeometry(matrices, RenderTypes.secondaryBlockOutline(), (entry, vc) -> {
-                        int light = 0x00F000F0;
                         vc.addVertex(entry, gx - cx, gy - cy, gz - cz)
                           .setColor(lR, lG, lB, lA)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                         vc.addVertex(entry, lookEndX - cx, lookEndY - cy, lookEndZ - cz)
                           .setColor(lR, lG, lB, lA)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                     });
 
                     // Left eye direction (cyan) - offset slightly to the left
@@ -461,15 +457,14 @@ public abstract class WorldRendererMixin {
 
                     var batchingLeftEye = queue.order(1000);
                     batchingLeftEye.submitCustomGeometry(matrices, RenderTypes.secondaryBlockOutline(), (entry, vc) -> {
-                        int light = 0x00F000F0;
                         vc.addVertex(entry, leftEyeX - cx, leftEyeY - cy, leftEyeZ - cz)
                           .setColor(leR, leG, leB, leA)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                         vc.addVertex(entry, leftEyeEndX - cx, leftEyeEndY - cy, leftEyeEndZ - cz)
                           .setColor(leR, leG, leB, leA)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                     });
 
                     // Right eye direction (magenta) - offset slightly to the right
@@ -485,15 +480,14 @@ public abstract class WorldRendererMixin {
 
                     var batchingRightEye = queue.order(1000);
                     batchingRightEye.submitCustomGeometry(matrices, RenderTypes.secondaryBlockOutline(), (entry, vc) -> {
-                        int light = 0x00F000F0;
                         vc.addVertex(entry, rightEyeX - cx, rightEyeY - cy, rightEyeZ - cz)
                           .setColor(reR, reG, reB, reA)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                         vc.addVertex(entry, rightEyeEndX - cx, rightEyeEndY - cy, rightEyeEndZ - cz)
                           .setColor(reR, reG, reB, reA)
                           .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLight(light);
+                          .setLineWidth(1.0f);
                     });
                 }
             }
