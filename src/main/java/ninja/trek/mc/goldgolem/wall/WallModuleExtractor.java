@@ -38,21 +38,67 @@ public final class WallModuleExtractor {
         }
 
         // Step 3: For each interior marker, determine the cut plane.
-        // The cross-section axis is the one with FEWER voxels in the plane (the thin direction).
+        // A valid cross-section plane will not pass through any other gold marker,
+        // since gold blocks are used exclusively as module boundary markers.
         int numCuts = numSegments - 1; // interior markers count
         boolean[] cutIsX = new boolean[numCuts];
         int[] cutCoord = new int[numCuts];
+        boolean[] resolved = new boolean[numCuts];
+
         for (int ci = 0; ci < numCuts; ci++) {
             BlockPos g = goldMarkersRel.get(chain.get(ci + 1)); // interior marker
-            int xCount = 0, zCount = 0;
-            for (BlockPos v : allNonGold) {
-                if (v.getX() == g.getX()) xCount++;
-                if (v.getZ() == g.getZ()) zCount++;
+
+            // For each candidate plane, BFS from the gold marker within the plane
+            // and check if the connected component contains any OTHER gold marker.
+            boolean xPlaneHasOtherGold = planeSliceContainsOtherGold(g, true, voxelsRel, goldSet);
+            boolean zPlaneHasOtherGold = planeSliceContainsOtherGold(g, false, voxelsRel, goldSet);
+
+            if (!xPlaneHasOtherGold && zPlaneHasOtherGold) {
+                cutIsX[ci] = true;
+                cutCoord[ci] = g.getX();
+                resolved[ci] = true;
+            } else if (xPlaneHasOtherGold && !zPlaneHasOtherGold) {
+                cutIsX[ci] = false;
+                cutCoord[ci] = g.getZ();
+                resolved[ci] = true;
             }
-            cutIsX[ci] = xCount <= zCount;
-            cutCoord[ci] = cutIsX[ci] ? g.getX() : g.getZ();
+            // else: both valid or both invalid — left unresolved for propagation
+        }
+
+        // Propagation: use the first resolved cut axis to resolve ambiguous ones.
+        // In a straight wall all cuts share the same axis.
+        Boolean knownAxis = null;
+        for (int ci = 0; ci < numCuts; ci++) {
+            if (resolved[ci]) { knownAxis = cutIsX[ci]; break; }
+        }
+        for (int ci = 0; ci < numCuts; ci++) {
+            if (!resolved[ci] && knownAxis != null) {
+                BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
+                cutIsX[ci] = knownAxis;
+                cutCoord[ci] = knownAxis ? g.getX() : g.getZ();
+                resolved[ci] = true;
+            }
+        }
+
+        // Final fallback: if no cuts resolved (e.g. all gold markers collinear on both axes),
+        // use heuristic of picking the axis with fewer voxels in the plane
+        for (int ci = 0; ci < numCuts; ci++) {
+            if (!resolved[ci]) {
+                BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
+                int xCount = 0, zCount = 0;
+                for (BlockPos v : allNonGold) {
+                    if (v.getX() == g.getX()) xCount++;
+                    if (v.getZ() == g.getZ()) zCount++;
+                }
+                cutIsX[ci] = xCount <= zCount;
+                cutCoord[ci] = cutIsX[ci] ? g.getX() : g.getZ();
+            }
+        }
+
+        for (int ci = 0; ci < numCuts; ci++) {
+            BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
             System.out.println("[WallExtractor] Cut " + ci + " at " + (cutIsX[ci] ? "x" : "z") + "=" + cutCoord[ci]
-                    + " (xCount=" + xCount + " zCount=" + zCount + ")");
+                    + " (resolved=" + resolved[ci] + ", marker=" + g + ")");
         }
 
         // Step 4: Remove all voxels at cut planes from the working set
@@ -205,5 +251,59 @@ public final class WallModuleExtractor {
         double dy = a.getY() - b.getY();
         double dz = a.getZ() - b.getZ();
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /**
+     * BFS within a plane slice from the given gold marker and check if the connected
+     * component contains any other gold block. The plane is defined by either
+     * x = marker.x (isX=true) or z = marker.z (isX=false). Connectivity is 4-neighbor
+     * within the 2D plane (y + the other horizontal axis).
+     */
+    private static boolean planeSliceContainsOtherGold(BlockPos marker, boolean isX,
+                                                        Set<BlockPos> allVoxels, Set<BlockPos> goldSet) {
+        int planeCoord = isX ? marker.getX() : marker.getZ();
+
+        // Index all voxels in this plane by their 2D (y, u) key
+        // u = z when isX, u = x when !isX
+        Map<Long, BlockPos> planeIndex = new HashMap<>();
+        for (BlockPos v : allVoxels) {
+            if ((isX ? v.getX() : v.getZ()) == planeCoord) {
+                int y = v.getY();
+                int u = isX ? v.getZ() : v.getX();
+                long key = (((long) y) << 32) ^ (u & 0xffffffffL);
+                planeIndex.put(key, v);
+            }
+        }
+
+        // BFS from the marker position within the plane
+        int startY = marker.getY();
+        int startU = isX ? marker.getZ() : marker.getX();
+        long startKey = (((long) startY) << 32) ^ (startU & 0xffffffffL);
+        if (!planeIndex.containsKey(startKey)) return false;
+
+        Set<Long> visited = new HashSet<>();
+        ArrayDeque<long[]> queue = new ArrayDeque<>();
+        visited.add(startKey);
+        queue.add(new long[]{startY, startU});
+
+        while (!queue.isEmpty()) {
+            long[] cur = queue.removeFirst();
+            int cy = (int) cur[0];
+            int cu = (int) cur[1];
+            long ck = (((long) cy) << 32) ^ (cu & 0xffffffffL);
+            BlockPos v = planeIndex.get(ck);
+            if (v != null && !v.equals(marker) && goldSet.contains(v)) {
+                return true;
+            }
+            for (int[] d : new int[][]{{0, 1}, {0, -1}, {1, 0}, {-1, 0}}) {
+                int ny = cy + d[0];
+                int nu = cu + d[1];
+                long nk = (((long) ny) << 32) ^ (nu & 0xffffffffL);
+                if (planeIndex.containsKey(nk) && visited.add(nk)) {
+                    queue.add(new long[]{ny, nu});
+                }
+            }
+        }
+        return false;
     }
 }

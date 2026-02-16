@@ -492,21 +492,12 @@ public class PumpkinSummoning {
             golem.setWallCapture(def.uniqueBlockIds, def.origin, jsonRel);
             golem.setWallJoinSignature(validation.signature());
             golem.setWallJoinMeta(validation.axis(), validation.uSize());
-            // Build join template from a non-summon slice, picking the smallest (cross-section) per gold
-            // Choose the smallest valid slice per marker, then pick the best (a non-summon one)
+            // Build join template from a non-summon slice using the validated axis
             ninja.trek.mc.goldgolem.wall.WallJoinSlice best = null;
             for (var g : def.goldMarkers) {
-                var sx = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK).orElse(null);
-                var sz = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK).orElse(null);
-                ninja.trek.mc.goldgolem.wall.WallJoinSlice s;
-                if (sx != null && sz != null) {
-                    s = (sx.points.size() <= sz.points.size()) ? sx : sz;
-                } else {
-                    s = (sx != null) ? sx : sz;
-                }
+                var s = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, validation.axis()).orElse(null);
                 if (s != null) {
                     // Prefer the slice from a non-summon marker; among those, pick the one with most points
-                    // (all non-summon slices should be the same size, but pick largest for completeness)
                     BlockPos markerAbs = def.origin.offset(g);
                     boolean isSummonMarker = markerAbs.equals(below);
                     if (best == null || (!isSummonMarker && s.points.size() >= best.points.size())) best = s;
