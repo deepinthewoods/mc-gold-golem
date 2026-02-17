@@ -220,6 +220,19 @@ public final class WallJoinSlice {
         return true;
     }
 
+    /** Check if the slice is mirror-symmetric along the du axis (shape and block ids). */
+    public boolean isSymmetric() {
+        int maxU = points.stream().mapToInt(p -> p.du).max().orElse(0);
+        for (Point p : points) {
+            Point mirrored = new Point(p.dy, maxU - p.du);
+            if (!points.contains(mirrored)) return false;
+            String id = blockIds.get(p);
+            String mirId = blockIds.get(mirrored);
+            if (!Objects.equals(id, mirId)) return false;
+        }
+        return true;
+    }
+
     /** A compact signature string for persistence and debugging. */
     public String signature() {
         StringBuilder sb = new StringBuilder();

@@ -535,6 +535,7 @@ public class PumpkinSummoning {
             golem.setWallCapture(def.uniqueBlockIds, def.origin, jsonRel);
             golem.setWallJoinSignature(validation.signature());
             golem.setWallJoinMeta(validation.axis(), validation.uSize());
+            golem.setWallSliceSymmetric(validation.symmetric());
             // Build join template from a non-summon slice using the validated axis
             ninja.trek.mc.goldgolem.wall.WallJoinSlice best = null;
             for (var g : def.goldMarkers) {

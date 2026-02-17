@@ -10,12 +10,12 @@ import net.minecraft.world.level.Level;
  * we try all combinations to find a consistent set.
  */
 public final class WallModuleValidator {
-    public record Validation(String signature, WallJoinSlice.Axis axis, int uSize, String error) {
+    public record Validation(String signature, WallJoinSlice.Axis axis, int uSize, boolean symmetric, String error) {
         public boolean ok() { return signature != null && (error == null || error.isEmpty()); }
     }
 
     public static Validation validate(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
-        if (goldMarkersRel == null || goldMarkersRel.size() < 2) return new Validation(null, null, 0, "Need at least two gold markers");
+        if (goldMarkersRel == null || goldMarkersRel.size() < 2) return new Validation(null, null, 0, false, "Need at least two gold markers");
 
         int n = goldMarkersRel.size();
 
@@ -31,7 +31,7 @@ public final class WallModuleValidator {
             var sx = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, ignoreAbsMarker);
             var sz = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, ignoreAbsMarker);
             if (sx.isEmpty() && sz.isEmpty()) {
-                return new Validation(null, null, 0, "Gold marker has no join slice at rel=" + g);
+                return new Validation(null, null, 0, false, "Gold marker has no join slice at rel=" + g);
             }
             xSlices.add(sx.orElse(null));
             zSlices.add(sz.orElse(null));
@@ -96,7 +96,8 @@ public final class WallModuleValidator {
             if (allMatch) {
                 int maxU = base.points.stream().mapToInt(p -> p.du()).max().orElse(0);
                 int uSize = maxU + 1;
-                return new Validation(base.signature(), base.axis, uSize, null);
+                boolean symmetric = base.isSymmetric();
+                return new Validation(base.signature(), base.axis, uSize, symmetric, null);
             }
         }
 
@@ -109,7 +110,7 @@ public final class WallModuleValidator {
             if (zSlices.get(i) != null) dbg.append(" Z(").append(zSlices.get(i).points.size()).append("pts)");
             if (Boolean.TRUE.equals(isSummon.get(i))) dbg.append(" [summon]");
         }
-        return new Validation(null, null, 0, dbg.toString());
+        return new Validation(null, null, 0, false, dbg.toString());
     }
 
     /**

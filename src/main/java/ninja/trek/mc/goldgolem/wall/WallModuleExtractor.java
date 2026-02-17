@@ -37,68 +37,75 @@ public final class WallModuleExtractor {
             if (!goldSet.contains(r)) allNonGold.add(r);
         }
 
-        // Step 3: For each interior marker, determine the cut plane.
-        // A valid cross-section plane will not pass through any other gold marker,
-        // since gold blocks are used exclusively as module boundary markers.
+        // Step 3: For each interior marker, determine the cut plane by matching
+        // its join slice against a reference. The axis that produces a matching
+        // slice is the correct cut axis for that marker.
         int numCuts = numSegments - 1; // interior markers count
         boolean[] cutIsX = new boolean[numCuts];
         int[] cutCoord = new int[numCuts];
-        boolean[] resolved = new boolean[numCuts];
+
+        // Find a reference slice from a non-summon marker
+        WallJoinSlice refSlice = null;
+        for (int i = 0; i < n; i++) {
+            BlockPos g = goldMarkersRel.get(i);
+            BlockPos markerAbs = originAbs.offset(g);
+            if (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) continue;
+            for (WallJoinSlice.Axis axis : WallJoinSlice.Axis.values()) {
+                var s = WallJoinSlice.from(world, originAbs, voxelsRel, g, axis);
+                if (s.isPresent()) { refSlice = s.get(); break; }
+            }
+            if (refSlice != null) break;
+        }
+        // Fallback: use any marker (including summon)
+        if (refSlice == null) {
+            for (int i = 0; i < n; i++) {
+                BlockPos g = goldMarkersRel.get(i);
+                BlockPos markerAbs = originAbs.offset(g);
+                BlockPos ignore = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.above() : null;
+                for (WallJoinSlice.Axis axis : WallJoinSlice.Axis.values()) {
+                    var s = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, axis, ignore);
+                    if (s.isPresent()) { refSlice = s.get(); break; }
+                }
+                if (refSlice != null) break;
+            }
+        }
+        if (refSlice == null) {
+            return new ExtractResult(null, "Could not find any reference join slice");
+        }
 
         for (int ci = 0; ci < numCuts; ci++) {
             BlockPos g = goldMarkersRel.get(chain.get(ci + 1)); // interior marker
+            BlockPos markerAbs = originAbs.offset(g);
+            boolean isSummonMarker = summonGoldAbs != null && markerAbs.equals(summonGoldAbs);
+            BlockPos ignore = isSummonMarker ? markerAbs.above() : null;
 
-            // For each candidate plane, BFS from the gold marker within the plane
-            // and check if the connected component contains any OTHER gold marker.
-            boolean xPlaneHasOtherGold = planeSliceContainsOtherGold(g, true, voxelsRel, goldSet);
-            boolean zPlaneHasOtherGold = planeSliceContainsOtherGold(g, false, voxelsRel, goldSet);
+            var sx = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, ignore);
+            var sz = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, ignore);
 
-            if (!xPlaneHasOtherGold && zPlaneHasOtherGold) {
+            boolean xMatch = sx.isPresent() && (isSummonMarker
+                    ? refSlice.matchesFuzzy(sx.get(), 1, 0)
+                    : refSlice.matches(sx.get()));
+            boolean zMatch = sz.isPresent() && (isSummonMarker
+                    ? refSlice.matchesFuzzy(sz.get(), 1, 0)
+                    : refSlice.matches(sz.get()));
+
+            if (xMatch && zMatch) {
+                return new ExtractResult(null, "Ambiguous cut axis at marker " + g + " — both X and Z slices match the reference");
+            } else if (xMatch) {
                 cutIsX[ci] = true;
                 cutCoord[ci] = g.getX();
-                resolved[ci] = true;
-            } else if (xPlaneHasOtherGold && !zPlaneHasOtherGold) {
+            } else if (zMatch) {
                 cutIsX[ci] = false;
                 cutCoord[ci] = g.getZ();
-                resolved[ci] = true;
-            }
-            // else: both valid or both invalid — left unresolved for propagation
-        }
-
-        // Propagation: use the first resolved cut axis to resolve ambiguous ones.
-        // In a straight wall all cuts share the same axis.
-        Boolean knownAxis = null;
-        for (int ci = 0; ci < numCuts; ci++) {
-            if (resolved[ci]) { knownAxis = cutIsX[ci]; break; }
-        }
-        for (int ci = 0; ci < numCuts; ci++) {
-            if (!resolved[ci] && knownAxis != null) {
-                BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
-                cutIsX[ci] = knownAxis;
-                cutCoord[ci] = knownAxis ? g.getX() : g.getZ();
-                resolved[ci] = true;
-            }
-        }
-
-        // Final fallback: if no cuts resolved (e.g. all gold markers collinear on both axes),
-        // use heuristic of picking the axis with fewer voxels in the plane
-        for (int ci = 0; ci < numCuts; ci++) {
-            if (!resolved[ci]) {
-                BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
-                int xCount = 0, zCount = 0;
-                for (BlockPos v : allNonGold) {
-                    if (v.getX() == g.getX()) xCount++;
-                    if (v.getZ() == g.getZ()) zCount++;
-                }
-                cutIsX[ci] = xCount <= zCount;
-                cutCoord[ci] = cutIsX[ci] ? g.getX() : g.getZ();
+            } else {
+                return new ExtractResult(null, "No matching slice found at marker " + g);
             }
         }
 
         for (int ci = 0; ci < numCuts; ci++) {
             BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
             System.out.println("[WallExtractor] Cut " + ci + " at " + (cutIsX[ci] ? "x" : "z") + "=" + cutCoord[ci]
-                    + " (resolved=" + resolved[ci] + ", marker=" + g + ")");
+                    + " (marker=" + g + ")");
         }
 
         // Step 4: Remove all voxels at cut planes from the working set

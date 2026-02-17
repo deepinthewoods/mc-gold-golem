@@ -145,6 +145,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private int wallJoinUSize = 1;
     private int wallModuleCount = 0;
     private int wallLongestModule = 0; // by voxel count for now
+    private boolean wallSliceSymmetric = true; // whether join slice is mirror-symmetric
     private java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates = java.util.Collections.emptyList();
     private ModulePlacement currentModulePlacement = null;
     private final java.util.ArrayDeque<ModulePlacement> pendingModules = new java.util.ArrayDeque<>();
@@ -442,6 +443,8 @@ public class GoldGolemEntity extends PathfinderMob {
     public void setWallModulesMeta(int count, int longest) { this.wallModuleCount = count; this.wallLongestModule = longest; }
     public int getWallModuleCount() { return wallModuleCount; }
     public int getWallLongestModule() { return wallLongestModule; }
+    public void setWallSliceSymmetric(boolean symmetric) { this.wallSliceSymmetric = symmetric; }
+    public boolean isWallSliceSymmetric() { return wallSliceSymmetric; }
     public void setWallTemplates(java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> tpls) { this.wallTemplates = tpls == null ? java.util.Collections.emptyList() : tpls; }
     public void setWallJoinTemplate(java.util.List<int[]> pointsDyDuAndIdIndex, java.util.List<String> idLut) {
         java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>();
@@ -1061,7 +1064,7 @@ public class GoldGolemEntity extends PathfinderMob {
                     joinTpl.add(new ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry(e.dy, e.du, e.id));
                 }
                 wall.setConfig(wallOrigin, getJsonFileForMode(BuildMode.WALL), wallUniqueBlockIds, wallJoinSignature,
-                        wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, data.wallTemplates(), joinTpl);
+                        wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, wallSliceSymmetric, data.wallTemplates(), joinTpl);
             }
         }
         if (data.towerTemplate() != null) {
@@ -2346,6 +2349,7 @@ public class GoldGolemEntity extends PathfinderMob {
         view.putInt("WallJoinU", this.wallJoinUSize);
         view.putInt("WallModCount", this.wallModuleCount);
         view.putInt("WallModLongest", this.wallLongestModule);
+        view.putBoolean("WallSliceSym", this.wallSliceSymmetric);
         // Join template
         view.putInt("WallJoinTplCount", wallJoinTemplate == null ? 0 : wallJoinTemplate.size());
         for (int i = 0; wallJoinTemplate != null && i < wallJoinTemplate.size(); i++) {
@@ -2559,6 +2563,7 @@ public class GoldGolemEntity extends PathfinderMob {
         this.wallJoinUSize = Math.max(1, view.getIntOr("WallJoinU", 1));
         this.wallModuleCount = view.getIntOr("WallModCount", 0);
         this.wallLongestModule = view.getIntOr("WallModLongest", 0);
+        this.wallSliceSymmetric = view.getBooleanOr("WallSliceSym", true);
         int jt = view.getIntOr("WallJoinTplCount", 0);
         if (jt > 0) {
             java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>(jt);

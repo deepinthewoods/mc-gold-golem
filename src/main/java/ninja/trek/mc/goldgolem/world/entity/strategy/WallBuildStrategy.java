@@ -36,6 +36,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private int wallJoinUSize = 1;
     private int wallModuleCount = 0;
     private int wallLongestModule = 0;
+    private boolean wallSliceSymmetric = true;
     private List<WallModuleTemplate> wallTemplates = Collections.emptyList();
     private List<JoinEntry> wallJoinTemplate = Collections.emptyList();
     private int wallLastDirX = 1;
@@ -117,6 +118,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("JoinUSize", wallJoinUSize);
         nbt.putInt("ModCount", wallModuleCount);
         nbt.putInt("ModLongest", wallLongestModule);
+        nbt.putBoolean("SliceSym", wallSliceSymmetric);
 
         // Save join template
         nbt.putInt("JoinTplCount", wallJoinTemplate.size());
@@ -185,6 +187,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         wallJoinUSize = Math.max(1, nbt.getIntOr("JoinUSize", 1));
         wallModuleCount = nbt.getIntOr("ModCount", 0);
         wallLongestModule = nbt.getIntOr("ModLongest", 0);
+        wallSliceSymmetric = nbt.getBooleanOr("SliceSym", true);
 
         // Load join template
         int joinTplCount = nbt.getIntOr("JoinTplCount", 0);
@@ -255,6 +258,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             int joinUSize,
             int moduleCount,
             int longestModule,
+            boolean sliceSymmetric,
             List<WallModuleTemplate> templates,
             List<JoinEntry> joinTemplate
     ) {
@@ -266,6 +270,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         this.wallJoinUSize = Math.max(1, joinUSize);
         this.wallModuleCount = moduleCount;
         this.wallLongestModule = longestModule;
+        this.wallSliceSymmetric = sliceSymmetric;
         this.wallTemplates = templates != null ? new ArrayList<>(templates) : Collections.emptyList();
         this.wallJoinTemplate = joinTemplate != null ? new ArrayList<>(joinTemplate) : Collections.emptyList();
     }
@@ -502,8 +507,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             int dxModule = tpl.bMarker.getX() - tpl.aMarker.getX();
             int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
 
+            int mirrorMax = wallSliceSymmetric ? 2 : 1;
             for (int rot = 0; rot < 4; rot++) {
-                for (int mir = 0; mir < 2; mir++) {
+                for (int mir = 0; mir < mirrorMax; mir++) {
                     int[] d = ModulePlacement.rotateAndMirror(dxModule, dyModule, dzModule, rot, mir == 1);
                     Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
                     // Y rule: toward player Y and no overshoot
