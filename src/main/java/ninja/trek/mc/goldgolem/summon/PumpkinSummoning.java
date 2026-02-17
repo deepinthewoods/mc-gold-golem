@@ -528,6 +528,47 @@ public class PumpkinSummoning {
                     }
                 }
 
+                // Add voxels at gold marker positions (A and B) to fill 1-block gaps at module boundaries
+                // Positions relative to module's A marker
+                BlockPos aRelToA = BlockPos.ZERO; // A marker relative to itself
+                BlockPos bRelToA = new BlockPos(
+                        mod.bMarker().getX() - mod.aMarker().getX(),
+                        mod.bMarker().getY() - mod.aMarker().getY(),
+                        mod.bMarker().getZ() - mod.aMarker().getZ());
+                // Index existing voxel positions for fast lookup
+                java.util.Map<BlockPos, ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> voxIndex = new java.util.HashMap<>();
+                for (var vv : vox) voxIndex.put(vv.rel, vv);
+                for (BlockPos goldRelToA : new BlockPos[]{aRelToA, bRelToA}) {
+                    if (voxIndex.containsKey(goldRelToA)) continue; // already present
+                    // Try voxel directly above
+                    BlockPos above = goldRelToA.above();
+                    net.minecraft.world.level.block.state.BlockState fillState = null;
+                    if (voxIndex.containsKey(above)) {
+                        fillState = voxIndex.get(above).state;
+                    } else {
+                        // Fallback: try adjacent voxels (N/S/E/W/below)
+                        for (net.minecraft.core.Direction adjDir : new net.minecraft.core.Direction[]{
+                                net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH,
+                                net.minecraft.core.Direction.EAST, net.minecraft.core.Direction.WEST,
+                                net.minecraft.core.Direction.DOWN}) {
+                            BlockPos adj = goldRelToA.relative(adjDir);
+                            if (voxIndex.containsKey(adj)) {
+                                fillState = voxIndex.get(adj).state;
+                                break;
+                            }
+                        }
+                    }
+                    if (fillState == null && correctPumpkinState != null) {
+                        fillState = correctPumpkinState;
+                    }
+                    if (fillState != null) {
+                        var newVoxel = new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(goldRelToA, fillState);
+                        vox.add(newVoxel);
+                        voxIndex.put(goldRelToA, newVoxel);
+                        minY = Math.min(minY, goldRelToA.getY());
+                    }
+                }
+
                 templates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(mod.aMarker(), mod.bMarker(), vox, minY == Integer.MAX_VALUE ? 0 : minY));
             }
 

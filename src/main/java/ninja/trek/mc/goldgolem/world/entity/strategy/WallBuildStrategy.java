@@ -589,34 +589,45 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     + ") bestScore=" + String.format("%.3f", bestTplScore) + " rot=" + bestTplRot + " mir=" + bestTplMir);
         }
 
+        // Only consider gap (empty corner) placements if no template can turn corners
+        boolean hasCornerModule = false;
+        for (var tpl : wallTemplates) {
+            int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
+            int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+            if (dx != 0 && dz != 0) { hasCornerModule = true; break; }
+        }
+
         // Consider empty corner (gap only) turning left/right by wall thickness
-        int t = Math.max(1, wallJoinUSize);
-        int lx = wallLastDirX, lz = wallLastDirZ;
-        int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
-        System.out.println("[WallStrategy] GAP candidates: lastDir=(" + lx + "," + lz
-                + ") thickness=" + t + " anchor=(" + String.format("%.1f", anchor.x)
-                + "," + String.format("%.1f", anchor.y) + "," + String.format("%.1f", anchor.z) + ")");
-        for (int pi = 0; pi < perps.length; pi++) {
-            int[] pv = perps[pi];
-            int dxGap = pv[0] * t;
-            int dzGap = pv[1] * t;
-            Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
-            double dyNeed = playerPos.y - anchor.y;
-            double yScore = Math.abs(dyNeed);
-            double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
-            // Penalize gaps going away from the player
-            double dotGap = dxGap * lineDx + dzGap * lineDz;
-            double dirPenalty = dotGap < 0 ? 100.0 : 0.0;
-            double score = dirPenalty + yScore * 10.0 + xz + 0.5; // slight penalty vs real module
-            String label = pi == 0 ? "LEFT" : "RIGHT";
-            System.out.println("[WallStrategy]   gap " + label + " perpDir=(" + pv[0] + "," + pv[1]
-                    + ") d=(" + dxGap + "," + dzGap + ") end=(" + String.format("%.1f", end.x)
-                    + "," + String.format("%.1f", end.z) + ") perpDist=" + String.format("%.2f", xz)
-                    + " yScore=" + String.format("%.2f", yScore) + " score=" + String.format("%.3f", score)
-                    + (score < bestScore ? " *NEW BEST*" : ""));
-            if (score < bestScore) {
-                bestScore = score;
-                best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
+        // Skip gap placements when a corner module exists (it handles turns natively)
+        if (!hasCornerModule) {
+            int t = Math.max(1, wallJoinUSize);
+            int lx = wallLastDirX, lz = wallLastDirZ;
+            int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
+            System.out.println("[WallStrategy] GAP candidates: lastDir=(" + lx + "," + lz
+                    + ") thickness=" + t + " anchor=(" + String.format("%.1f", anchor.x)
+                    + "," + String.format("%.1f", anchor.y) + "," + String.format("%.1f", anchor.z) + ")");
+            for (int pi = 0; pi < perps.length; pi++) {
+                int[] pv = perps[pi];
+                int dxGap = pv[0] * t;
+                int dzGap = pv[1] * t;
+                Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
+                double dyNeed = playerPos.y - anchor.y;
+                double yScore = Math.abs(dyNeed);
+                double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
+                // Penalize gaps going away from the player
+                double dotGap = dxGap * lineDx + dzGap * lineDz;
+                double dirPenalty = dotGap < 0 ? 100.0 : 0.0;
+                double score = dirPenalty + yScore * 10.0 + xz + 0.5; // slight penalty vs real module
+                String label = pi == 0 ? "LEFT" : "RIGHT";
+                System.out.println("[WallStrategy]   gap " + label + " perpDir=(" + pv[0] + "," + pv[1]
+                        + ") d=(" + dxGap + "," + dzGap + ") end=(" + String.format("%.1f", end.x)
+                        + "," + String.format("%.1f", end.z) + ") perpDist=" + String.format("%.2f", xz)
+                        + " yScore=" + String.format("%.2f", yScore) + " score=" + String.format("%.3f", score)
+                        + (score < bestScore ? " *NEW BEST*" : ""));
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
+                }
             }
         }
 

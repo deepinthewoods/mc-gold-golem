@@ -63,6 +63,20 @@ public final class WallJoinSlice {
                 plane.add(r);
             }
         }
+        // If ignoreAbs is set but wasn't found in voxelsRel (e.g., air before pumpkin placement),
+        // synthetically add it as a BFS-only bridge node so the slice stays connected
+        if (ignoreAbs != null) {
+            BlockPos ignoreRel = ignoreAbs.subtract(originAbs);
+            if ((axis == Axis.X_THICK && ignoreRel.getX() == planeCoord) || (axis == Axis.Z_THICK && ignoreRel.getZ() == planeCoord)) {
+                int y = ignoreRel.getY();
+                int u = (axis == Axis.X_THICK) ? ignoreRel.getZ() : ignoreRel.getX();
+                long key = (((long) y) << 32) ^ (u & 0xffffffffL);
+                if (!ignoreKeys.contains(key)) {
+                    plane.add(ignoreRel);
+                    ignoreKeys.add(key);
+                }
+            }
+        }
         if (plane.isEmpty()) return Optional.empty();
 
         // Build a 2D grid for BFS in-plane to extract the connected component containing the gold's in-plane coordinate
