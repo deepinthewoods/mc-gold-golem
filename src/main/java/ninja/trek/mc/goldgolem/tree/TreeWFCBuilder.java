@@ -22,6 +22,7 @@ public final class TreeWFCBuilder {
     private final Level world;
     private final Set<Block> stopBlocks; // blocks that act as boundaries
     private final Set<Block> groundBlocks; // ground blocks for initial candidate filtering
+    private final Set<BlockPos> nonStopOverrides; // positions that bypass stop-block checks
     private final Random random;
 
     // Wave function: for each position, track possible tile IDs
@@ -42,15 +43,21 @@ public final class TreeWFCBuilder {
     private final Set<BlockPos> plannedBlocks;
 
     public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks, Random random) {
-        this(tileCache, world, startPos, stopBlocks, Collections.emptySet(), random);
+        this(tileCache, world, startPos, stopBlocks, Collections.emptySet(), random, Collections.emptySet());
     }
 
     public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks,
                           Set<Block> groundBlocks, Random random) {
+        this(tileCache, world, startPos, stopBlocks, groundBlocks, random, Collections.emptySet());
+    }
+
+    public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks,
+                          Set<Block> groundBlocks, Random random, Set<BlockPos> nonStopOverrides) {
         this.tileCache = tileCache;
         this.world = world;
         this.stopBlocks = new HashSet<>(stopBlocks);
         this.groundBlocks = new HashSet<>(groundBlocks);
+        this.nonStopOverrides = new HashSet<>(nonStopOverrides);
         this.random = random;
 
         this.waveFunction = new HashMap<>();
@@ -348,6 +355,10 @@ public final class TreeWFCBuilder {
      * Checks if a position contains a stop block (boundary).
      */
     private boolean isStopBlock(BlockPos pos) {
+        // Non-stop overrides: positions that should never be treated as boundaries
+        // (e.g. gold blocks from partial scan, whether still present or already mined to air)
+        if (nonStopOverrides.contains(pos)) return false;
+
         // Shadow map: position will be filled by a collapsed tile, not a real boundary
         if (plannedBlocks.contains(pos)) return false;
 

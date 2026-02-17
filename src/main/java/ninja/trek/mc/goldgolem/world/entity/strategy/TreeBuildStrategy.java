@@ -3,6 +3,7 @@ package ninja.trek.mc.goldgolem.world.entity.strategy;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tree.TreeDefinition;
 import ninja.trek.mc.goldgolem.tree.TreeModule;
+import ninja.trek.mc.goldgolem.tree.TreeScanner;
 import ninja.trek.mc.goldgolem.tree.TreeTile;
 import ninja.trek.mc.goldgolem.tree.TreeTileCache;
 import ninja.trek.mc.goldgolem.tree.TreeTileExtractor;
@@ -48,6 +49,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         FAILED
     }
 
+    // Phase state machine for partial structure integration
+    private enum TreePhase { NORMAL, MINING_GOLD, BUILDING }
+
     // E6: Resource recovery check cooldown (in ticks)
     private static final int RESOURCE_CHECK_COOLDOWN = 100; // 5 seconds
 
@@ -73,6 +77,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
     // Gradient mining helper for mine-action slots
     private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
+
+    // Partial structure integration state
+    private TreePhase treePhase = TreePhase.NORMAL;
+    private Set<BlockPos> partialScanGoldPositions = new HashSet<>();
+    private BlockPos partialScanOrigin = null;
+    private Deque<BlockPos> goldMineQueue = new ArrayDeque<>();
 
     @Override
     public BuildMode getMode() {
@@ -134,6 +144,24 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         // Save gradient groups
         groups.writeToNbt(nbt, "Groups");
+
+        // Save partial scan state
+        nbt.putString("TreePhase", treePhase.name());
+        if (partialScanOrigin != null) {
+            nbt.putInt("PartialOriginX", partialScanOrigin.getX());
+            nbt.putInt("PartialOriginY", partialScanOrigin.getY());
+            nbt.putInt("PartialOriginZ", partialScanOrigin.getZ());
+        }
+        if (!partialScanGoldPositions.isEmpty()) {
+            int[] coords = new int[partialScanGoldPositions.size() * 3];
+            int i = 0;
+            for (BlockPos pos : partialScanGoldPositions) {
+                coords[i++] = pos.getX();
+                coords[i++] = pos.getY();
+                coords[i++] = pos.getZ();
+            }
+            nbt.putIntArray("PartialGoldPositions", coords);
+        }
     }
 
     @Override
@@ -169,6 +197,41 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         // Load gradient groups
         groups.readFromNbt(nbt, "Groups");
+
+        // Load partial scan state
+        if (nbt.contains("TreePhase")) {
+            try {
+                treePhase = TreePhase.valueOf(nbt.getStringOr("TreePhase", TreePhase.NORMAL.name()));
+            } catch (IllegalArgumentException e) {
+                treePhase = TreePhase.NORMAL;
+            }
+        }
+        if (nbt.contains("PartialOriginX")) {
+            partialScanOrigin = new BlockPos(
+                nbt.getIntOr("PartialOriginX", 0),
+                nbt.getIntOr("PartialOriginY", 0),
+                nbt.getIntOr("PartialOriginZ", 0)
+            );
+        }
+        partialScanGoldPositions.clear();
+        if (nbt.contains("PartialGoldPositions")) {
+            int[] coords = nbt.getIntArray("PartialGoldPositions").orElseGet(() -> new int[0]);
+            for (int i = 0; i + 2 < coords.length; i += 3) {
+                partialScanGoldPositions.add(new BlockPos(coords[i], coords[i + 1], coords[i + 2]));
+            }
+        }
+        // Reconstruct gold mine queue for MINING_GOLD phase
+        goldMineQueue.clear();
+        if (treePhase == TreePhase.MINING_GOLD && entity != null) {
+            for (BlockPos pos : partialScanGoldPositions) {
+                if (entity.level().getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
+                    goldMineQueue.add(pos);
+                }
+            }
+            if (goldMineQueue.isEmpty()) {
+                treePhase = TreePhase.BUILDING;
+            }
+        }
     }
 
     @Override
@@ -202,9 +265,15 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         tileBlocksLoaded = false;
         currentTileOrigin = null;
         currentTileBlocks.clear();
+        minePositions.clear();
         if (planner != null) {
             planner.clear();
         }
+        // Clear partial scan state
+        treePhase = TreePhase.NORMAL;
+        partialScanGoldPositions.clear();
+        partialScanOrigin = null;
+        goldMineQueue.clear();
     }
 
     // ========== Getters ==========
@@ -255,6 +324,23 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         if (planner != null) {
             planner.writeView(view.child("TreePlanner"));
         }
+        // Partial scan persistence
+        view.putString("TreePhase", treePhase.name());
+        if (partialScanOrigin != null) {
+            view.putInt("PartialOriginX", partialScanOrigin.getX());
+            view.putInt("PartialOriginY", partialScanOrigin.getY());
+            view.putInt("PartialOriginZ", partialScanOrigin.getZ());
+        }
+        if (!partialScanGoldPositions.isEmpty()) {
+            int[] coords = new int[partialScanGoldPositions.size() * 3];
+            int i = 0;
+            for (BlockPos pos : partialScanGoldPositions) {
+                coords[i++] = pos.getX();
+                coords[i++] = pos.getY();
+                coords[i++] = pos.getZ();
+            }
+            view.putIntArray("PartialGoldPositions", coords);
+        }
     }
 
     @Override
@@ -266,6 +352,36 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         if (planner != null) {
             view.child("TreePlanner").ifPresent(planner::readView);
         }
+        // Load partial scan state
+        String phaseStr = view.getStringOr("TreePhase", TreePhase.NORMAL.name());
+        try {
+            treePhase = TreePhase.valueOf(phaseStr);
+        } catch (IllegalArgumentException e) {
+            treePhase = TreePhase.NORMAL;
+        }
+        int ox = view.getIntOr("PartialOriginX", Integer.MIN_VALUE);
+        if (ox != Integer.MIN_VALUE) {
+            partialScanOrigin = new BlockPos(ox,
+                view.getIntOr("PartialOriginY", 0),
+                view.getIntOr("PartialOriginZ", 0));
+        }
+        partialScanGoldPositions.clear();
+        int[] coords = view.getIntArray("PartialGoldPositions").orElseGet(() -> new int[0]);
+        for (int i = 0; i + 2 < coords.length; i += 3) {
+            partialScanGoldPositions.add(new BlockPos(coords[i], coords[i + 1], coords[i + 2]));
+        }
+        // Reconstruct gold mine queue
+        goldMineQueue.clear();
+        if (treePhase == TreePhase.MINING_GOLD && entity != null) {
+            for (BlockPos pos : partialScanGoldPositions) {
+                if (entity.level().getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
+                    goldMineQueue.add(pos);
+                }
+            }
+            if (goldMineQueue.isEmpty()) {
+                treePhase = TreePhase.BUILDING;
+            }
+        }
     }
 
     @Override
@@ -274,12 +390,132 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
         }
+
+        // Check if golem is standing on gold block → start partial scan
+        if (entity != null && !entity.level().isClientSide()) {
+            BlockPos belowFeet = entity.blockPosition().below();
+            if (entity.level().getBlockState(belowFeet).is(Blocks.GOLD_BLOCK)) {
+                startPartialScan(player, belowFeet);
+                return FeedResult.STARTED;
+            }
+        }
+
         return FeedResult.STARTED;
     }
 
     @Override
     public void handleOwnerDamage() {
         treeWaitingForInventory = false;
+    }
+
+    // ========== Partial Scan ==========
+
+    private void startPartialScan(Player player, BlockPos goldPos) {
+        if (entity.getTreeModules().isEmpty()) return;
+
+        TreeScanner.PartialScanResult result = TreeScanner.scanPartial(
+            entity.level(), goldPos, player);
+        if (!result.ok()) {
+            LOGGER.warn("Partial scan failed: {}", result.error());
+            return;
+        }
+
+        // Reset WFC state (keep tile cache and modules)
+        treeWFCBuilder = null;
+        cacheState = CacheState.NOT_STARTED;
+        tileBlocksLoaded = false;
+        currentTileOrigin = null;
+        currentTileBlocks.clear();
+        minePositions.clear();
+        if (planner != null) planner.clear();
+
+        // Store scan results
+        partialScanGoldPositions = result.goldPositions();
+        partialScanOrigin = goldPos;
+
+        // Mine gold first if golem has a tool, otherwise go straight to building
+        if (golemHasTool() && !partialScanGoldPositions.isEmpty()) {
+            treePhase = TreePhase.MINING_GOLD;
+            goldMineQueue = new ArrayDeque<>(partialScanGoldPositions);
+        } else {
+            treePhase = TreePhase.BUILDING;
+        }
+
+        // Ensure building is active
+        entity.setBuildingPaths(true);
+    }
+
+    private boolean golemHasTool() {
+        if (entity == null) return false;
+        var inventory = entity.getInventory();
+        BlockState goldState = Blocks.GOLD_BLOCK.defaultBlockState();
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            var stack = inventory.getItem(i);
+            if (!stack.isEmpty() && stack.getDestroySpeed(goldState) > 1.0f) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ========== Gold Mining Phase ==========
+
+    private void tickGoldMining(GoldGolemEntity golem) {
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
+
+        // If currently mining a block, tick the miner
+        if (gradientMiner.isMining()) {
+            boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
+            if (done) {
+                gradientMiner.reset(golem);
+                // Remove from queue — block is now mined
+            }
+            return;
+        }
+
+        // If queue is empty, transition to building
+        if (goldMineQueue.isEmpty()) {
+            treePhase = TreePhase.BUILDING;
+            planner.clear();
+            tileBlocksLoaded = false;
+            return;
+        }
+
+        // Load gold positions into planner if needed
+        if (planner.isComplete()) {
+            List<BlockPos> remaining = new ArrayList<>();
+            // Only queue positions that are still gold blocks
+            for (BlockPos pos : goldMineQueue) {
+                if (golem.level().getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
+                    remaining.add(pos);
+                }
+            }
+            goldMineQueue = new ArrayDeque<>(remaining);
+            if (remaining.isEmpty()) {
+                treePhase = TreePhase.BUILDING;
+                planner.clear();
+                tileBlocksLoaded = false;
+                return;
+            }
+            planner.setBlocks(remaining, pos ->
+                !golem.level().getBlockState(pos).is(Blocks.GOLD_BLOCK));
+        }
+
+        // Tick planner — callback starts mining instead of placing
+        PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+            goldMineQueue.remove(pos);
+            gradientMiner.startMining(pos);
+            return false; // mining happens over subsequent ticks
+        });
+
+        if (result == PlacementPlanner.TickResult.COMPLETED) {
+            // All gold mined or skipped
+            treePhase = TreePhase.BUILDING;
+            planner.clear();
+            tileBlocksLoaded = false;
+        }
     }
 
     // ========== Main tick logic ==========
@@ -299,6 +535,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         TilingPreset treeTilingPreset = golem.getTreeTilingPreset();
 
         if (treeModules.isEmpty() || treeOrigin == null) return;
+
+        // Handle gold mining phase before any WFC/building logic
+        if (treePhase == TreePhase.MINING_GOLD) {
+            tickGoldMining(golem);
+            return;
+        }
 
         // E6: If waiting for inventory, check periodically if resources are available
         if (isWaitingForResources()) {
@@ -355,12 +597,16 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                     return;
                 }
 
-                // Initialize WFC builder at golem's current position (only if new)
+                // Initialize WFC builder (only if new)
                 if (treeWFCBuilder == null) {
                     Random random = new Random(golem.getUUID().getMostSignificantBits());
+                    BlockPos wfcStart = (treePhase == TreePhase.BUILDING && partialScanOrigin != null)
+                        ? partialScanOrigin : golem.blockPosition();
+                    Set<BlockPos> overrides = (treePhase == TreePhase.BUILDING)
+                        ? partialScanGoldPositions : Collections.emptySet();
                     treeWFCBuilder = new TreeWFCBuilder(
-                        treeTileCache, golem.level(), golem.blockPosition(), stopBlocks,
-                        groundBlocks, random);
+                        treeTileCache, golem.level(), wfcStart, stopBlocks,
+                        groundBlocks, random, overrides);
                 }
 
             } catch (OutOfMemoryError e) {
@@ -450,6 +696,10 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         // No current tile, check if done
         if (currentTileOrigin == null) {
             if (treeWFCBuilder != null && treeWFCBuilder.isFinished() && !treeWFCBuilder.hasPendingBlocks()) {
+                // Reset partial scan state on completion
+                treePhase = TreePhase.NORMAL;
+                partialScanGoldPositions.clear();
+                partialScanOrigin = null;
                 golem.setBuildingPaths(false);
             }
             return;
@@ -527,8 +777,15 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                     // Skip ground marker positions (ground already exists)
                     if (targetState == TreeTileExtractor.GROUND_MARKER) continue;
 
-                    // Don't overwrite existing non-air blocks
-                    if (!golem.level().getBlockState(placePos).isAir()) continue;
+                    // Don't overwrite existing non-air blocks (except gold from partial scan)
+                    if (!golem.level().getBlockState(placePos).isAir()) {
+                        if (partialScanGoldPositions.contains(placePos)
+                                && golem.level().getBlockState(placePos).is(Blocks.GOLD_BLOCK)) {
+                            // Allow overwriting unmined gold blocks from partial scan
+                        } else {
+                            continue;
+                        }
+                    }
 
                     // Check if gradient maps to a mine action
                     if (isTreeGradientMineAction(golem, targetState, placePos)) {

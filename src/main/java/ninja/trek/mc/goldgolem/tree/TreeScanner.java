@@ -30,6 +30,82 @@ public final class TreeScanner {
         public boolean ok() { return def != null && (error == null || error.isEmpty()); }
     }
 
+    public record PartialScanResult(Set<BlockPos> goldPositions, String error) {
+        public boolean ok() { return error == null; }
+    }
+
+    /**
+     * Flood-fill scan for partial structure integration.
+     * Starts from a gold block, fills through all non-air/non-ground blocks,
+     * and returns the set of gold block positions found.
+     */
+    public static PartialScanResult scanPartial(Level world, BlockPos startGoldPos, Player player) {
+        // Determine the block the player is standing on (one below feet)
+        BlockPos playerGround = player == null ? null : player.blockPosition().below();
+
+        // Canonicalize ground-equivalence only if the player stands on a ground type
+        boolean unifyGround = false;
+        Block groundType = null;
+        if (playerGround != null) {
+            BlockState gs = world.getBlockState(playerGround);
+            groundType = gs.getBlock();
+            if (groundType == Blocks.GRASS_BLOCK || groundType == Blocks.DIRT || groundType == Blocks.DIRT_PATH) {
+                unifyGround = true;
+            }
+        }
+
+        // Constrained flood fill
+        Set<BlockPos> visited = new HashSet<>();
+        ArrayDeque<BlockPos> queue = new ArrayDeque<>();
+        queue.add(startGoldPos);
+        visited.add(startGoldPos);
+
+        BlockPos min = new BlockPos(startGoldPos);
+        BlockPos max = new BlockPos(startGoldPos);
+
+        while (!queue.isEmpty()) {
+            BlockPos cur = queue.removeFirst();
+            for (Direction d : NEIGHBORS) {
+                BlockPos n = cur.relative(d);
+                if (visited.contains(n)) continue;
+
+                BlockState st = world.getBlockState(n);
+                if (st.is(Blocks.SNOW)) continue;
+                if (st.isAir()) continue;
+                if (groundType != null) {
+                    Block nb = st.getBlock();
+                    if (nb == groundType) continue;
+                    if (unifyGround && (nb == Blocks.GRASS_BLOCK || nb == Blocks.DIRT || nb == Blocks.DIRT_PATH)) continue;
+                }
+                if (playerGround != null && n.equals(playerGround)) continue;
+
+                visited.add(n);
+                min = new BlockPos(Math.min(min.getX(), n.getX()), Math.min(min.getY(), n.getY()), Math.min(min.getZ(), n.getZ()));
+                max = new BlockPos(Math.max(max.getX(), n.getX()), Math.max(max.getY(), n.getY()), Math.max(max.getZ(), n.getZ()));
+
+                if (visited.size() > MAX_VOXELS) {
+                    return new PartialScanResult(null, "Partial scan exceeded " + MAX_VOXELS + " blocks");
+                }
+                if ((max.getX() - min.getX() + 1) > MAX_EXTENT ||
+                        (max.getY() - min.getY() + 1) > MAX_EXTENT ||
+                        (max.getZ() - min.getZ() + 1) > MAX_EXTENT) {
+                    return new PartialScanResult(null, "Partial scan exceeded 512x512x512 bounds");
+                }
+                queue.addLast(n);
+            }
+        }
+
+        // Separate gold blocks
+        Set<BlockPos> goldBlocks = new HashSet<>();
+        for (BlockPos abs : visited) {
+            if (world.getBlockState(abs).is(Blocks.GOLD_BLOCK)) {
+                goldBlocks.add(abs.immutable());
+            }
+        }
+
+        return new PartialScanResult(goldBlocks, null);
+    }
+
     public static Result scan(Level world, BlockPos secondGoldPos, Player summoner) {
         // Determine the block the player is standing on (one below feet)
         BlockPos playerGround = summoner == null ? null : summoner.blockPosition().below();
