@@ -125,7 +125,7 @@ public class SectionFactory {
                 // GroupModeSection (paginable)
                 GroupModeStrategy strategy = screen.getGroupModeStrategy();
                 if (strategy != null) {
-                    groupModeSection = new GroupModeSection(strategy, screen.getFont());
+                    groupModeSection = new GroupModeSection(strategy, screen, screen.getFont());
                     sections.add(groupModeSection);
                 }
 

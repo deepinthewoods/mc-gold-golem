@@ -69,6 +69,26 @@ public interface GuiSection {
     boolean handleClick(int mouseX, int mouseY, int button);
 
     /**
+     * Handle mouse release events in this section.
+     *
+     * @param mouseX Mouse X position on screen
+     * @param mouseY Mouse Y position on screen
+     * @param button Mouse button released
+     * @return true if the release was handled, false otherwise
+     */
+    boolean handleMouseRelease(int mouseX, int mouseY, int button);
+
+    /**
+     * Handle mouse scroll events in this section.
+     *
+     * @param mouseX Mouse X position on screen
+     * @param mouseY Mouse Y position on screen
+     * @param amount Scroll amount
+     * @return true if the scroll was handled, false otherwise
+     */
+    boolean handleMouseScroll(double mouseX, double mouseY, double amount);
+
+    /**
      * Check if this section can be paginated (content scrollable when space is limited).
      * Non-paginable sections (settings, inventories) must always be fully visible.
      *

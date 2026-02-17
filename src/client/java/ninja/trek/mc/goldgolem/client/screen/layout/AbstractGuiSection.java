@@ -47,13 +47,21 @@ public abstract class AbstractGuiSection implements GuiSection {
 
     @Override
     public boolean handleClick(int mouseX, int mouseY, int button) {
-        // Default: no click handling
+        return false;
+    }
+
+    @Override
+    public boolean handleMouseRelease(int mouseX, int mouseY, int button) {
+        return false;
+    }
+
+    @Override
+    public boolean handleMouseScroll(double mouseX, double mouseY, double amount) {
         return false;
     }
 
     @Override
     public boolean isPaginable() {
-        // Default: not paginable
         return false;
     }
 }

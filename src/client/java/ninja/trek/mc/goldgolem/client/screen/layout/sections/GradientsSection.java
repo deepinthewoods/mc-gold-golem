@@ -1,5 +1,6 @@
 package ninja.trek.mc.goldgolem.client.screen.layout.sections;
 
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -74,10 +75,7 @@ public class GradientsSection extends AbstractGuiSection {
 
     @Override
     public int calculateRequiredHeight(LayoutContext context) {
-        // Height = (number of rows * row spacing) + top margin
-        // Top margin includes space for labels if in terraforming mode
-        int topMargin = (mode == GradientMode.TERRAFORMING) ? 10 : 0;
-        return topMargin + (mode.rows * ROW_SPACING);
+        return mode.rows * ROW_SPACING;
     }
 
     @Override
@@ -93,7 +91,7 @@ public class GradientsSection extends AbstractGuiSection {
 
         // Draw slot frames and items for all rows
         for (int row = 0; row < mode.rows; row++) {
-            int slotY = baseY + (mode == GradientMode.TERRAFORMING ? 10 : 0) + row * ROW_SPACING;
+            int slotY = baseY + row * ROW_SPACING;
 
             // Draw slot frames
             for (int col = 0; col < SLOTS_PER_ROW; col++) {
@@ -151,7 +149,7 @@ public class GradientsSection extends AbstractGuiSection {
             int baseY = y;
 
             for (int row = 0; row < mode.rows && row < rowLabels.length; row++) {
-                int labelY = baseY + row * ROW_SPACING;
+                int labelY = baseY + row * ROW_SPACING - 10; // 10px above slot
                 context.drawString(textRenderer, Component.literal(rowLabels[row]),
                         labelX, labelY, 0xFFFFFFFF, false);
             }
@@ -160,8 +158,21 @@ public class GradientsSection extends AbstractGuiSection {
 
     @Override
     public boolean handleClick(int mouseX, int mouseY, int button) {
-        // Slot click handling is currently managed by GolemHandledScreen
-        // This will be refactored in later phases
+        if (button != 0) return false;
+        int guiX = screen.getGuiX();
+        int guiY = screen.getGuiY();
+        SlotPosition pos = getSlotAt(mouseX, mouseY, guiX, guiY);
+        if (pos != null) {
+            var blockId = screen.getCursorBlockId();
+            if (mode == GradientMode.PATH) {
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetGradientSlotC2SPayload(
+                        screen.getEntityId(), pos.row, pos.col, blockId));
+            } else if (mode == GradientMode.TERRAFORMING) {
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetTerraformingGradientSlotC2SPayload(
+                        screen.getEntityId(), pos.row, pos.col, blockId));
+            }
+            return true;
+        }
         return false;
     }
 
@@ -176,7 +187,7 @@ public class GradientsSection extends AbstractGuiSection {
      */
     public SlotPosition getSlotAt(int mouseX, int mouseY, int guiX, int guiY) {
         int slotsX = guiX + 8;
-        int baseY = guiY + y + (mode == GradientMode.TERRAFORMING ? 10 : 0);
+        int baseY = guiY + y;
 
         for (int row = 0; row < mode.rows; row++) {
             int slotY = baseY + row * ROW_SPACING;

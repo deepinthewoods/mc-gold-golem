@@ -49,7 +49,8 @@ public final class GolemScreens {
         }
 
         // Build dynamic UI spec
-        int gradientRows = (terraformingMode || sliderEnabled) ? 3 : 2; // 3 rows for terraforming and path mode
+        boolean isGroupMode = towerMode || treeMode || (!sliderEnabled && !excavationMode && !miningMode && !terraformingMode && !tunnelMode);
+        int gradientRows = (terraformingMode || sliderEnabled) ? 3 : (isGroupMode ? 6 : 2);
         int golemSlots = golemInventory.getContainerSize();
         int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : 0))))));
         String jsonName = "";
