@@ -480,8 +480,11 @@ public class PumpkinSummoning {
             for (BlockPos gRel : def.goldMarkers) {
                 BlockPos gAbs = def.origin.offset(gRel);
                 if (gAbs.equals(below)) continue;
-                correctPumpkinState = world.getBlockState(gAbs.above());
-                break;
+                net.minecraft.world.level.block.state.BlockState candidate = world.getBlockState(gAbs.above());
+                if (!candidate.isAir()) {
+                    correctPumpkinState = candidate;
+                    break;
+                }
             }
 
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> templates = new java.util.ArrayList<>();
@@ -497,8 +500,13 @@ public class PumpkinSummoning {
                     minY = Math.min(minY, relToA.getY());
                 }
 
-                // Patch pumpkin position and its neighbors in the module that contains it
-                if (correctPumpkinState != null && mod.voxels().contains(pumpkinRel)) {
+                // Add/patch the pumpkin position in the module that contains the summon gold marker.
+                // The pumpkin hasn't been placed in the world yet (UseBlockCallback fires before
+                // placement), so the scanner never included this position. Infer the correct block
+                // from the equivalent position above a non-summon gold marker (all slices are identical).
+                BlockPos summonGoldRel = below.subtract(def.origin);
+                if (correctPumpkinState != null &&
+                        (mod.aMarker().equals(summonGoldRel) || mod.bMarker().equals(summonGoldRel))) {
                     BlockPos pumpkinRelToA = new net.minecraft.core.BlockPos(
                             pumpkinRel.getX() - mod.aMarker().getX(),
                             pumpkinRel.getY() - mod.aMarker().getY(),
@@ -507,23 +515,28 @@ public class PumpkinSummoning {
                     java.util.Map<BlockPos, Integer> posToIdx = new java.util.HashMap<>();
                     for (int vi = 0; vi < vox.size(); vi++) posToIdx.put(vox.get(vi).rel, vi);
 
-                    // Replace pumpkin block with the correct state
                     Integer pi = posToIdx.get(pumpkinRelToA);
                     if (pi != null) {
+                        // Replace existing block state with the correct one
                         vox.set(pi, new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(pumpkinRelToA, correctPumpkinState));
-                        // Recompute neighbor states as if the correct block were at the pumpkin position
-                        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
-                            BlockPos neighborRelToA = pumpkinRelToA.relative(dir);
-                            Integer ni = posToIdx.get(neighborRelToA);
-                            if (ni == null) continue;
-                            BlockPos neighborAbs = pumpkinAbs.relative(dir);
-                            net.minecraft.world.level.block.state.BlockState neighborState = vox.get(ni).state;
-                            net.minecraft.world.level.block.state.BlockState corrected = neighborState.updateShape(
-                                    world, world, neighborAbs, dir.getOpposite(),
-                                    pumpkinAbs, correctPumpkinState, world.getRandom());
-                            if (corrected != neighborState) {
-                                vox.set(ni, new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(neighborRelToA, corrected));
-                            }
+                    } else {
+                        // Position was not scanned (was air during scan) — add it
+                        vox.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(pumpkinRelToA, correctPumpkinState));
+                        posToIdx.put(pumpkinRelToA, vox.size() - 1);
+                        minY = Math.min(minY, pumpkinRelToA.getY());
+                    }
+                    // Recompute neighbor states to account for the correct block at the pumpkin position
+                    for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
+                        BlockPos neighborRelToA = pumpkinRelToA.relative(dir);
+                        Integer ni = posToIdx.get(neighborRelToA);
+                        if (ni == null) continue;
+                        BlockPos neighborAbs = pumpkinAbs.relative(dir);
+                        net.minecraft.world.level.block.state.BlockState neighborState = vox.get(ni).state;
+                        net.minecraft.world.level.block.state.BlockState corrected = neighborState.updateShape(
+                                world, world, neighborAbs, dir.getOpposite(),
+                                pumpkinAbs, correctPumpkinState, world.getRandom());
+                        if (corrected != neighborState) {
+                            vox.set(ni, new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(neighborRelToA, corrected));
                         }
                     }
                 }
