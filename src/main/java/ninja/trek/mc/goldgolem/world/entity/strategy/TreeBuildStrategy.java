@@ -22,6 +22,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.storage.ValueInput;
@@ -326,24 +327,22 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         // Cache tiles if not already done
         if (cacheState != CacheState.CACHED || treeTileCache == null) {
             try {
-                // Build stop blocks set (air, gold, ground types)
-                Set<net.minecraft.world.level.block.Block> stopBlocks = new HashSet<>();
-                stopBlocks.add(Blocks.GOLD_BLOCK);
-                if (owner != null) {
-                    BlockPos playerGround = owner.blockPosition().below();
-                    BlockState gs = golem.level().getBlockState(playerGround);
-                    net.minecraft.world.level.block.Block groundType = gs.getBlock();
-                    if (groundType == Blocks.GRASS_BLOCK ||
-                        groundType == Blocks.DIRT ||
-                        groundType == Blocks.DIRT_PATH) {
-                        stopBlocks.add(Blocks.GRASS_BLOCK);
-                        stopBlocks.add(Blocks.DIRT);
-                        stopBlocks.add(Blocks.DIRT_PATH);
-                    }
+                // Build ground blocks set from persisted ground type
+                Set<Block> groundBlocks = new HashSet<>();
+                String groundId = golem.getTreeGroundBlockId();
+                if (groundId != null) {
+                    groundBlocks.add(Blocks.GRASS_BLOCK);
+                    groundBlocks.add(Blocks.DIRT);
+                    groundBlocks.add(Blocks.DIRT_PATH);
                 }
 
-                // Extract tiles using current preset
-                TreeDefinition def = new TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds);
+                // Build stop blocks set (air, gold, ground types)
+                Set<Block> stopBlocks = new HashSet<>();
+                stopBlocks.add(Blocks.GOLD_BLOCK);
+                stopBlocks.addAll(groundBlocks);
+
+                // Extract tiles using current preset (groundBlockId flows through TreeDefinition)
+                TreeDefinition def = new TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds, groundId);
                 var stored = golem.getTreeModuleBlockStates();
                 treeTileCache = TreeTileExtractor.extract(
                     golem.level(), def, treeTilingPreset, treeOrigin,
@@ -360,7 +359,8 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                 if (treeWFCBuilder == null) {
                     Random random = new Random(golem.getUUID().getMostSignificantBits());
                     treeWFCBuilder = new TreeWFCBuilder(
-                        treeTileCache, golem.level(), golem.blockPosition(), stopBlocks, random);
+                        treeTileCache, golem.level(), golem.blockPosition(), stopBlocks,
+                        groundBlocks, random);
                 }
 
             } catch (OutOfMemoryError e) {
@@ -523,6 +523,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
                     // Skip air blocks
                     if (targetState.isAir()) continue;
+
+                    // Skip ground marker positions (ground already exists)
+                    if (targetState == TreeTileExtractor.GROUND_MARKER) continue;
 
                     // Don't overwrite existing non-air blocks
                     if (!golem.level().getBlockState(placePos).isAir()) continue;

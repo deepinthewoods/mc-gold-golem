@@ -8,6 +8,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -20,6 +21,7 @@ public final class TreeWFCBuilder {
     private final TreeTileCache tileCache;
     private final Level world;
     private final Set<Block> stopBlocks; // blocks that act as boundaries
+    private final Set<Block> groundBlocks; // ground blocks for initial candidate filtering
     private final Random random;
 
     // Wave function: for each position, track possible tile IDs
@@ -36,10 +38,19 @@ public final class TreeWFCBuilder {
     // Queue of positions to process for building
     private final ArrayDeque<BlockPos> buildQueue;
 
+    // Shadow map: positions that will be filled by collapsed tiles (prevents premature air-boundary stops)
+    private final Set<BlockPos> plannedBlocks;
+
     public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks, Random random) {
+        this(tileCache, world, startPos, stopBlocks, Collections.emptySet(), random);
+    }
+
+    public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks,
+                          Set<Block> groundBlocks, Random random) {
         this.tileCache = tileCache;
         this.world = world;
         this.stopBlocks = new HashSet<>(stopBlocks);
+        this.groundBlocks = new HashSet<>(groundBlocks);
         this.random = random;
 
         this.waveFunction = new HashMap<>();
@@ -51,6 +62,7 @@ public final class TreeWFCBuilder {
         }));
         this.collapsed = new HashMap<>();
         this.buildQueue = new ArrayDeque<>();
+        this.plannedBlocks = new HashSet<>();
 
         // Initialize with start position
         initialize(startPos);
@@ -58,11 +70,35 @@ public final class TreeWFCBuilder {
 
     /**
      * Initializes the WFC algorithm with the starting position.
+     * When ground blocks are present around the seed, filters initial candidates
+     * to "base" tiles that sit on ground.
      */
     private void initialize(BlockPos startPos) {
-        // Start position can have any tile
-        Set<String> allTiles = new HashSet<>(tileCache.getAllTileIds());
-        waveFunction.put(startPos, allTiles);
+        Set<String> candidates;
+        if (!groundBlocks.isEmpty()) {
+            // Check if ground is present below the start position
+            boolean groundBelow = false;
+            int tileSize = tileCache.tileSize;
+            for (int dx = 0; dx < tileSize && !groundBelow; dx++) {
+                for (int dz = 0; dz < tileSize && !groundBelow; dz++) {
+                    BlockState below = world.getBlockState(startPos.offset(dx, -1, dz));
+                    if (groundBlocks.contains(below.getBlock())) {
+                        groundBelow = true;
+                    }
+                }
+            }
+            if (groundBelow) {
+                Set<String> baseTiles = tileCache.getBottomGroundTileIds();
+                candidates = baseTiles.isEmpty()
+                        ? new HashSet<>(tileCache.getAllTileIds())
+                        : new HashSet<>(baseTiles);
+            } else {
+                candidates = new HashSet<>(tileCache.getAllTileIds());
+            }
+        } else {
+            candidates = new HashSet<>(tileCache.getAllTileIds());
+        }
+        waveFunction.put(startPos, candidates);
         addToFrontier(startPos);
     }
 
@@ -174,6 +210,24 @@ public final class TreeWFCBuilder {
         // Collapse to this single tile
         collapsed.put(pos, chosenTile);
         waveFunction.put(pos, Collections.singleton(chosenTile));
+
+        // Register non-air positions in shadow map so frontier expansion
+        // doesn't treat them as air boundaries before they're actually built.
+        // Skip GROUND_MARKER positions — ground is already placed and shouldn't
+        // prevent stop-block detection.
+        TreeTile tile = tileCache.getTile(chosenTile);
+        if (tile != null) {
+            for (int dx = 0; dx < tile.size; dx++) {
+                for (int dy = 0; dy < tile.size; dy++) {
+                    for (int dz = 0; dz < tile.size; dz++) {
+                        BlockState bs = tile.blocks[dx][dy][dz];
+                        if (!bs.isAir() && bs != TreeTileExtractor.GROUND_MARKER) {
+                            plannedBlocks.add(pos.offset(dx, dy, dz));
+                        }
+                    }
+                }
+            }
+        }
 
         // Add to build queue
         buildQueue.add(pos);
@@ -294,6 +348,9 @@ public final class TreeWFCBuilder {
      * Checks if a position contains a stop block (boundary).
      */
     private boolean isStopBlock(BlockPos pos) {
+        // Shadow map: position will be filled by a collapsed tile, not a real boundary
+        if (plannedBlocks.contains(pos)) return false;
+
         BlockState state = world.getBlockState(pos);
         Block block = state.getBlock();
 

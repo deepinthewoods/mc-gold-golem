@@ -4,6 +4,7 @@ import java.util.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -12,6 +13,9 @@ import net.minecraft.world.level.block.state.BlockState;
  * Generates rotated variants and builds adjacency constraints for WFC.
  */
 public final class TreeTileExtractor {
+
+    /** Sentinel block state used to mark ground positions inside tiles. */
+    public static final BlockState GROUND_MARKER = Blocks.STRUCTURE_VOID.defaultBlockState();
 
     /**
      * Extracts tiles from the given definition using the specified tiling preset.
@@ -32,6 +36,15 @@ public final class TreeTileExtractor {
         Map<String, Map<Direction, Set<String>>> adjacencyRules = new HashMap<>();
         Map<Integer, String> patternToTileId = new HashMap<>(); // de-duplicate identical patterns
         int tileCounter = 0;
+
+        // Build ground block set from definition
+        Set<Block> groundBlocks = new HashSet<>();
+        if (def.groundBlockId != null) {
+            groundBlocks.add(Blocks.GRASS_BLOCK);
+            groundBlocks.add(Blocks.DIRT);
+            groundBlocks.add(Blocks.DIRT_PATH);
+        }
+        boolean hasGround = !groundBlocks.isEmpty();
 
         // Process each module separately (no cross-module adjacency)
         for (int moduleIdx = 0; moduleIdx < def.modules.size(); moduleIdx++) {
@@ -66,11 +79,15 @@ public final class TreeTileExtractor {
                 maxZ = Math.max(maxZ, p.getZ());
             }
 
+            // Extend Y bounds down by 1 when ground is detected so the sliding window
+            // captures the ground fringe below the module
+            int effectiveMinY = hasGround ? minY - 1 : minY;
+
             // Extract tiles using sliding window
             Map<BlockPos, String> positionToTileId = new HashMap<>(); // track which tile is at each position
 
             for (int x = minX; x <= maxX - tileSize + 1; x++) {
-                for (int y = minY; y <= maxY - tileSize + 1; y++) {
+                for (int y = effectiveMinY; y <= maxY - tileSize + 1; y++) {
                     for (int z = minZ; z <= maxZ - tileSize + 1; z++) {
                         BlockPos tileOrigin = new BlockPos(x, y, z);
 
@@ -81,7 +98,20 @@ public final class TreeTileExtractor {
                             for (int dy = 0; dy < tileSize; dy++) {
                                 for (int dz = 0; dz < tileSize; dz++) {
                                     BlockPos pos = tileOrigin.offset(dx, dy, dz);
-                                    BlockState state = moduleBlocks.getOrDefault(pos, Blocks.AIR.defaultBlockState());
+                                    BlockState state = moduleBlocks.get(pos);
+                                    if (state == null) {
+                                        // Position not part of the module — check for ground
+                                        if (hasGround) {
+                                            BlockPos absPos = origin.offset(pos);
+                                            BlockState worldState = world.getBlockState(absPos);
+                                            if (groundBlocks.contains(worldState.getBlock())) {
+                                                state = GROUND_MARKER;
+                                            }
+                                        }
+                                        if (state == null) {
+                                            state = Blocks.AIR.defaultBlockState();
+                                        }
+                                    }
                                     blocks[dx][dy][dz] = state;
                                     if (!state.isAir()) hasNonAir = true;
                                 }

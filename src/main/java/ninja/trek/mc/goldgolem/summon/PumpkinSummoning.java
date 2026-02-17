@@ -311,7 +311,7 @@ public class PumpkinSummoning {
             golem.setTreeModuleBlockStates(moduleStates);
 
             // Set tree capture data on golem
-            golem.setTreeCapture(def.modules, def.uniqueBlockIds, secondGoldPos, jsonRel);
+            golem.setTreeCapture(def.modules, def.uniqueBlockIds, secondGoldPos, jsonRel, def.groundBlockId);
             // Set name AFTER all data is set so the snapshot written by setCustomName is complete
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TREE)));
 

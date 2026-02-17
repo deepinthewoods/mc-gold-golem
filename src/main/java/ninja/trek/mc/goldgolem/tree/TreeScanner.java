@@ -137,7 +137,10 @@ public final class TreeScanner {
             modules.add(new TreeModule(relVoxels));
         }
 
-        TreeDefinition def = new TreeDefinition(secondGoldPos.immutable(), modules, uniques);
+        String groundId = groundType != null
+                ? BuiltInRegistries.BLOCK.getKey(groundType).toString()
+                : null;
+        TreeDefinition def = new TreeDefinition(secondGoldPos.immutable(), modules, uniques, groundId);
         return new Result(def, null);
     }
 

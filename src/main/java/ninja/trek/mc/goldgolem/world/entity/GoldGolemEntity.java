@@ -195,6 +195,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private java.util.List<String> treeUniqueBlockIds = java.util.Collections.emptyList();
     private net.minecraft.core.BlockPos treeOrigin = null; // second gold block position
     private String treeJsonFile = null; // saved snapshot path (relative to game dir)
+    private String treeGroundBlockId = null; // registry ID of the ground block detected at scan time
     private ninja.trek.mc.goldgolem.tree.TilingPreset treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.SMALL_3x3;
     // Tree UI state: dynamic gradient groups (same pattern as wall/tower)
     private final java.util.List<String[]> treeGroupSlots = new java.util.ArrayList<>(); // each String[9]
@@ -651,11 +652,13 @@ public class GoldGolemEntity extends PathfinderMob {
 
     // Tree mode configuration
     public void setTreeCapture(java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> modules,
-                              java.util.List<String> uniqueIds, net.minecraft.core.BlockPos origin, String jsonPath) {
+                              java.util.List<String> uniqueIds, net.minecraft.core.BlockPos origin, String jsonPath,
+                              String groundBlockId) {
         this.treeModules = modules == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(modules);
         this.treeUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
         this.treeOrigin = origin;
         this.treeJsonFile = jsonPath;
+        this.treeGroundBlockId = groundBlockId;
         // Initialize tree groups
         initTreeGroups(uniqueIds);
     }
@@ -1200,6 +1203,7 @@ public class GoldGolemEntity extends PathfinderMob {
         arr[slot] = (id == null) ? "" : id;
     }
     public BlockPos getTreeOrigin() { return treeOrigin; }
+    public String getTreeGroundBlockId() { return treeGroundBlockId; }
     public java.util.Map<String, Integer> getTreeBlockGroup() { return treeBlockGroup; }
     public java.util.List<String[]> getTreeGroupSlots() { return treeGroupSlots; }
 
@@ -2433,6 +2437,7 @@ public class GoldGolemEntity extends PathfinderMob {
             view.putInt("TreeOZ", this.treeOrigin.getZ());
         }
         if (this.treeJsonFile != null) view.putString("TreeJson", this.treeJsonFile);
+        if (this.treeGroundBlockId != null) view.putString("TreeGroundId", this.treeGroundBlockId);
         view.putInt("TreeTilingPreset", this.treeTilingPreset.ordinal());
         // Note: TreeWaitingForInventory is now written via activeStrategy.writeLegacyNbt(view) above
 
@@ -2652,6 +2657,7 @@ public class GoldGolemEntity extends PathfinderMob {
             this.treeOrigin = new net.minecraft.core.BlockPos(x, y, z);
         }
         this.treeJsonFile = view.getString("TreeJson").orElse(null);
+        this.treeGroundBlockId = view.getString("TreeGroundId").orElse(null);
         int presetOrdinal = view.getIntOr("TreeTilingPreset", 0);
         this.treeTilingPreset = ninja.trek.mc.goldgolem.tree.TilingPreset.fromOrdinal(presetOrdinal);
         // Tree state is deserialized by strategy (if active)
