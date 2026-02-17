@@ -840,41 +840,22 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
         BlockPos below = entity.blockPosition().below();
         if (!entity.level().getBlockState(below).isAir()) return;
 
-        Container inventory = entity.getInventory();
         if (buildingBlockType == null) {
-            for (int i = 0; i < inventory.getContainerSize(); i++) {
-                ItemStack stack = inventory.getItem(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-
-                var block = blockItem.getBlock();
-                String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
-
-                if (!isGravityBlock(block)) {
-                    buildingBlockType = blockId;
-                    break;
-                }
-            }
+            buildingBlockType = findBuildingBlockType(false);
             if (buildingBlockType == null) {
                 entity.handleMissingBuildingBlock();
                 return;
             }
         }
 
-        if (buildingBlockType != null) {
-            for (int i = 0; i < inventory.getContainerSize(); i++) {
-                ItemStack stack = inventory.getItem(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
+        BlockState state = entity.getBlockStateFromId(buildingBlockType);
+        if (state == null) return;
 
-                String blockId = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
-                if (blockId.equals(buildingBlockType)) {
-                    BlockState state = blockItem.getBlock().defaultBlockState();
-                    entity.level().setBlockAndUpdate(below, state);
-                    entity.beginHandAnimation(isLeftHandActive(), below, null);
-                    alternateHand();
-                    stack.shrink(1);
-                    return;
-                }
-            }
+        if (entity.consumeBlockFromInventory(buildingBlockType)) {
+            entity.level().setBlockAndUpdate(below, state);
+            entity.beginHandAnimation(isLeftHandActive(), below, null);
+            alternateHand();
+        } else {
             entity.handleMissingBuildingBlock();
         }
     }

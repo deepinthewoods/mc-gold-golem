@@ -669,13 +669,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         long key = pos.asLong();
         if (!golem.recordPlaced(key)) return false;
 
-        int invSlot = golem.findItem(block.asItem());
-        if (invSlot < 0) {
-            golem.unrecordPlaced(key);
-            golem.handleMissingBuildingBlock();
-            return false;
-        }
-
         net.minecraft.world.level.block.Rotation rotation = switch (rot & 3) {
             case 1 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_90;
             case 2 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_180;
@@ -692,8 +685,14 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             }
         } catch (Throwable ignored) {}
 
+        String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString();
+        if (!golem.consumeBlockFromInventory(blockId)) {
+            golem.unrecordPlaced(key);
+            golem.handleMissingBuildingBlock();
+            return false;
+        }
+
         world.setBlock(pos, place, 3);
-        golem.decrementInventorySlot(invSlot);
         golem.beginHandAnimation(isLeftHandActive(), pos, nextPos);
         return true;
     }

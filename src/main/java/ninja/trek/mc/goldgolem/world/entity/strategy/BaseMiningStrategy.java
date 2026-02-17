@@ -11,7 +11,10 @@ import net.minecraft.world.Container;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.ItemContainerContents;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.level.block.FallingBlock;
+import net.minecraft.world.level.block.ShulkerBoxBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
@@ -508,43 +511,22 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
         BlockPos below = entity.blockPosition().below();
         if (!entity.level().getBlockState(below).isAir()) return;
 
-        Container inventory = entity.getInventory();
         if (buildingBlockType == null) {
-            // Find a suitable building block
-            for (int i = 0; i < inventory.getContainerSize(); i++) {
-                ItemStack stack = inventory.getItem(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-
-                var block = blockItem.getBlock();
-                String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
-
-                if (!isOreBlock(blockId) && !isGravityBlock(block)) {
-                    buildingBlockType = blockId;
-                    break;
-                }
-            }
+            buildingBlockType = findBuildingBlockType(true);
             if (buildingBlockType == null) {
                 entity.handleMissingBuildingBlock();
                 return;
             }
         }
 
-        if (buildingBlockType != null) {
-            for (int i = 0; i < inventory.getContainerSize(); i++) {
-                ItemStack stack = inventory.getItem(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
+        BlockState state = entity.getBlockStateFromId(buildingBlockType);
+        if (state == null) return;
 
-                String blockId = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
-                if (blockId.equals(buildingBlockType)) {
-                    BlockState state = blockItem.getBlock().defaultBlockState();
-                    entity.level().setBlockAndUpdate(below, state);
-                    entity.beginHandAnimation(isLeftHandActive(), below, null);
-                    alternateHand();
-                    stack.shrink(1);
-                    inventory.setItem(i, stack);
-                    return;
-                }
-            }
+        if (entity.consumeBlockFromInventory(buildingBlockType)) {
+            entity.level().setBlockAndUpdate(below, state);
+            entity.beginHandAnimation(isLeftHandActive(), below, null);
+            alternateHand();
+        } else {
             entity.handleMissingBuildingBlock();
         }
     }
@@ -731,35 +713,67 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
         if (entity.level().isClientSide()) return;
         if (!entity.level().getBlockState(pos).isAir()) return;
 
-        Container inventory = entity.getInventory();
         if (buildingBlockType == null) {
-            for (int i = 0; i < inventory.getContainerSize(); i++) {
-                ItemStack stack = inventory.getItem(i);
-                if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-                var block = blockItem.getBlock();
-                String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
-                if (!isOreBlock(blockId) && !isGravityBlock(block)) {
-                    buildingBlockType = blockId;
-                    break;
-                }
-            }
+            buildingBlockType = findBuildingBlockType(true);
             if (buildingBlockType == null) return;
         }
 
+        BlockState state = entity.getBlockStateFromId(buildingBlockType);
+        if (state == null) return;
+
+        if (entity.consumeBlockFromInventory(buildingBlockType)) {
+            entity.level().setBlockAndUpdate(pos, state);
+            entity.beginHandAnimation(isLeftHandActive(), pos, null);
+            alternateHand();
+        }
+    }
+
+    /**
+     * Find a suitable building block type from inventory or shulker boxes.
+     * @param excludeOres if true, skip ore blocks
+     * @return block ID string, or null if none found
+     */
+    protected String findBuildingBlockType(boolean excludeOres) {
+        Container inventory = entity.getInventory();
+
+        // First check direct inventory items
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem blockItem)) continue;
-            String blockId = BuiltInRegistries.BLOCK.getKey(blockItem.getBlock()).toString();
-            if (blockId.equals(buildingBlockType)) {
-                BlockState state = blockItem.getBlock().defaultBlockState();
-                entity.level().setBlockAndUpdate(pos, state);
-                entity.beginHandAnimation(isLeftHandActive(), pos, null);
-                alternateHand();
-                stack.shrink(1);
-                inventory.setItem(i, stack);
-                return;
+
+            var block = blockItem.getBlock();
+            String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
+
+            if (block instanceof ShulkerBoxBlock) continue;
+            if (isGravityBlock(block)) continue;
+            if (excludeOres && isOreBlock(blockId)) continue;
+
+            return blockId;
+        }
+
+        // Then check inside shulker boxes
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (stack.isEmpty()) continue;
+            if (!(stack.getItem() instanceof BlockItem bi) || !(bi.getBlock() instanceof ShulkerBoxBlock)) continue;
+
+            ItemContainerContents container = stack.get(DataComponents.CONTAINER);
+            if (container == null) continue;
+
+            for (ItemStack inner : container.stream().toList()) {
+                if (inner.isEmpty() || !(inner.getItem() instanceof BlockItem innerBi)) continue;
+
+                var block = innerBi.getBlock();
+                String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
+
+                if (isGravityBlock(block)) continue;
+                if (excludeOres && isOreBlock(blockId)) continue;
+
+                return blockId;
             }
         }
+
+        return null;
     }
 
     // ==================== Block Classification ====================

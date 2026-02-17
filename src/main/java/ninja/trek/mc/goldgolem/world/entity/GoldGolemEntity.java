@@ -3285,21 +3285,17 @@ public class GoldGolemEntity extends PathfinderMob {
             if (rs.is(block)) break; // already desired block at surface
             long key = rp.asLong();
             if (!recordPlaced(key)) break;
-            int invSlot = findItem(block.asItem());
-            if (invSlot < 0) {
-                unrecordPlaced(key);
-                handleMissingBuildingBlock();
-                return;
-            }
             // Prevent placing blocks inside self to avoid suffocation damage
             if (wouldBlockOverlapSelf(rp)) {
                 unrecordPlaced(key);
                 break;
             }
+            if (!consumeBlockFromInventory(id)) {
+                unrecordPlaced(key);
+                handleMissingBuildingBlock();
+                return;
+            }
             world.setBlock(rp, block.defaultBlockState(), 3);
-            var stInv = inventory.getItem(invSlot);
-            stInv.shrink(1);
-            inventory.setItem(invSlot, stInv);
 
             break; // only one placement per column
         }
@@ -3340,20 +3336,14 @@ public class GoldGolemEntity extends PathfinderMob {
                                     if (sBlock != null) {
                                         long surfKey = abovePos.asLong();
                                         if (recordPlaced(surfKey)) {
-                                            int invSlot3 = findItem(sBlock.asItem());
-                                            if (invSlot3 >= 0) {
-                                                if (!wouldBlockOverlapSelf(abovePos)) {
-                                                    world.setBlock(abovePos, sBlock.defaultBlockState(), 3);
-                                                    var st3 = inventory.getItem(invSlot3);
-                                                    st3.shrink(1);
-                                                    inventory.setItem(invSlot3, st3);
-                                                } else {
-                                                    unrecordPlaced(surfKey);
-                                                }
-                                            } else {
+                                            if (wouldBlockOverlapSelf(abovePos)) {
+                                                unrecordPlaced(surfKey);
+                                            } else if (!consumeBlockFromInventory(sid)) {
                                                 unrecordPlaced(surfKey);
                                                 handleMissingBuildingBlock();
                                                 return;
+                                            } else {
+                                                world.setBlock(abovePos, sBlock.defaultBlockState(), 3);
                                             }
                                         }
                                     }
@@ -3406,33 +3396,27 @@ public class GoldGolemEntity extends PathfinderMob {
                                     if (sBlock.asItem() == block.asItem()) return;
                                     long key2 = stepPos.asLong();
                                     if (recordPlaced(key2)) {
-                                        int invSlot2 = findItem(sBlock.asItem());
-                                        if (invSlot2 >= 0) {
-                                            var placeState = sBlock.defaultBlockState();
-                                            if (sBlock instanceof net.minecraft.world.level.block.StairBlock) {
-                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, travelDir); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, travelDir); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE, net.minecraft.world.level.block.state.properties.StairsShape.STRAIGHT); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
-                                            } else if (sBlock instanceof net.minecraft.world.level.block.SlabBlock) {
-                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE, net.minecraft.world.level.block.state.properties.SlabType.BOTTOM); } catch (IllegalArgumentException ignored) {}
-                                                try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
-                                            }
-                                            // Prevent placing blocks inside self to avoid suffocation damage
-                                            if (wouldBlockOverlapSelf(stepPos)) {
-                                                unrecordPlaced(key2);
-                                                return;
-                                            }
-                                            world.setBlock(stepPos, placeState, 3);
-                                            var st2 = inventory.getItem(invSlot2);
-                                            st2.shrink(1);
-                                            inventory.setItem(invSlot2, st2);
-
-                                        } else {
+                                        var placeState = sBlock.defaultBlockState();
+                                        if (sBlock instanceof net.minecraft.world.level.block.StairBlock) {
+                                            try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, travelDir); } catch (IllegalArgumentException ignored) {}
+                                            try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, travelDir); } catch (IllegalArgumentException ignored) {}
+                                            try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.STAIRS_SHAPE, net.minecraft.world.level.block.state.properties.StairsShape.STRAIGHT); } catch (IllegalArgumentException ignored) {}
+                                            try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
+                                        } else if (sBlock instanceof net.minecraft.world.level.block.SlabBlock) {
+                                            try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE, net.minecraft.world.level.block.state.properties.SlabType.BOTTOM); } catch (IllegalArgumentException ignored) {}
+                                            try { placeState = placeState.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE); } catch (IllegalArgumentException ignored) {}
+                                        }
+                                        // Prevent placing blocks inside self to avoid suffocation damage
+                                        if (wouldBlockOverlapSelf(stepPos)) {
+                                            unrecordPlaced(key2);
+                                            return;
+                                        }
+                                        if (!consumeBlockFromInventory(sid)) {
                                             unrecordPlaced(key2);
                                             handleMissingBuildingBlock();
                                             return;
                                         }
+                                        world.setBlock(stepPos, placeState, 3);
                                     }
                                 }
                             }
@@ -3479,21 +3463,17 @@ public class GoldGolemEntity extends PathfinderMob {
                 if (rs2.is(block)) break; // already desired block at surface
                 long key2 = rp2.asLong();
                 if (!recordPlaced(key2)) break;
-                int invSlot = findItem(block.asItem());
-                if (invSlot < 0) {
-                    unrecordPlaced(key2);
-                    handleMissingBuildingBlock();
-                    return;
-                }
                 // Prevent placing blocks inside self to avoid suffocation damage
                 if (wouldBlockOverlapSelf(rp2)) {
                     unrecordPlaced(key2);
                     break;
                 }
+                if (!consumeBlockFromInventory(id)) {
+                    unrecordPlaced(key2);
+                    handleMissingBuildingBlock();
+                    return;
+                }
                 world.setBlock(rp2, block.defaultBlockState(), 3);
-                var stInv = inventory.getItem(invSlot);
-                stInv.shrink(1);
-                inventory.setItem(invSlot, stInv);
 
                 break; // one placement per column
             }
