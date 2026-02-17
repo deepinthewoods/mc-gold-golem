@@ -473,6 +473,17 @@ public class PumpkinSummoning {
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
                 sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Extraction OK: " + extraction.modules().size() + " modules"), false);
             }
+            // Find the correct block state for the pumpkin position from a non-summon gold marker
+            BlockPos pumpkinAbs = below.above();
+            BlockPos pumpkinRel = pumpkinAbs.subtract(def.origin);
+            net.minecraft.world.level.block.state.BlockState correctPumpkinState = null;
+            for (BlockPos gRel : def.goldMarkers) {
+                BlockPos gAbs = def.origin.offset(gRel);
+                if (gAbs.equals(below)) continue;
+                correctPumpkinState = world.getBlockState(gAbs.above());
+                break;
+            }
+
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> templates = new java.util.ArrayList<>();
             for (var mod : extraction.modules()) {
                 java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> vox = new java.util.ArrayList<>();
@@ -485,6 +496,38 @@ public class PumpkinSummoning {
                     vox.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(relToA, st));
                     minY = Math.min(minY, relToA.getY());
                 }
+
+                // Patch pumpkin position and its neighbors in the module that contains it
+                if (correctPumpkinState != null && mod.voxels().contains(pumpkinRel)) {
+                    BlockPos pumpkinRelToA = new net.minecraft.core.BlockPos(
+                            pumpkinRel.getX() - mod.aMarker().getX(),
+                            pumpkinRel.getY() - mod.aMarker().getY(),
+                            pumpkinRel.getZ() - mod.aMarker().getZ());
+                    // Index voxel positions for fast lookup
+                    java.util.Map<BlockPos, Integer> posToIdx = new java.util.HashMap<>();
+                    for (int vi = 0; vi < vox.size(); vi++) posToIdx.put(vox.get(vi).rel, vi);
+
+                    // Replace pumpkin block with the correct state
+                    Integer pi = posToIdx.get(pumpkinRelToA);
+                    if (pi != null) {
+                        vox.set(pi, new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(pumpkinRelToA, correctPumpkinState));
+                        // Recompute neighbor states as if the correct block were at the pumpkin position
+                        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
+                            BlockPos neighborRelToA = pumpkinRelToA.relative(dir);
+                            Integer ni = posToIdx.get(neighborRelToA);
+                            if (ni == null) continue;
+                            BlockPos neighborAbs = pumpkinAbs.relative(dir);
+                            net.minecraft.world.level.block.state.BlockState neighborState = vox.get(ni).state;
+                            net.minecraft.world.level.block.state.BlockState corrected = neighborState.updateShape(
+                                    world, world, neighborAbs, dir.getOpposite(),
+                                    pumpkinAbs, correctPumpkinState, world.getRandom());
+                            if (corrected != neighborState) {
+                                vox.set(ni, new ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel(neighborRelToA, corrected));
+                            }
+                        }
+                    }
+                }
+
                 templates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(mod.aMarker(), mod.bMarker(), vox, minY == Integer.MAX_VALUE ? 0 : minY));
             }
 
