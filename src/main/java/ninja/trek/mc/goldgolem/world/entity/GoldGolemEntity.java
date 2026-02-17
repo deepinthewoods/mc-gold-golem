@@ -402,7 +402,7 @@ public class GoldGolemEntity extends PathfinderMob {
      */
     private void configureWallStrategy(ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
         wall.setConfig(wallOrigin, getJsonFileForMode(BuildMode.WALL), wallUniqueBlockIds, wallJoinSignature,
-                wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, wallSliceSymmetric, wallTemplates, wallJoinTemplate);
+                wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, wallSliceSymmetric, getWallTemplates(), wallJoinTemplate);
     }
 
     /**
@@ -453,6 +453,29 @@ public class GoldGolemEntity extends PathfinderMob {
         if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
             configureWallStrategy(wall);
         }
+    }
+    /**
+     * Get wall templates, lazy-loading from snapshot JSON if not yet loaded.
+     * Mirrors the getTowerTemplate() pattern for persistence across world reloads.
+     */
+    public java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> getWallTemplates() {
+        if ((wallTemplates == null || wallTemplates.isEmpty()) && wallJsonFile != null && !wallJsonFile.isEmpty()) {
+            if (this.level() instanceof net.minecraft.server.level.ServerLevel serverWorld) {
+                try {
+                    java.nio.file.Path path = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve(wallJsonFile);
+                    if (java.nio.file.Files.exists(path)) {
+                        SnapshotData data = readSnapshot(serverWorld, path);
+                        if (data != null && data.wallTemplates() != null && !data.wallTemplates().isEmpty()) {
+                            this.wallTemplates = data.wallTemplates();
+                            LOGGER.info("Lazy-loaded wall templates from {}", wallJsonFile);
+                        }
+                    }
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to lazy-load wall templates from {}: {}", wallJsonFile, e.getMessage());
+                }
+            }
+        }
+        return wallTemplates;
     }
     public void setWallJoinTemplate(java.util.List<int[]> pointsDyDuAndIdIndex, java.util.List<String> idLut) {
         java.util.ArrayList<ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry> list = new java.util.ArrayList<>();
@@ -641,7 +664,27 @@ public class GoldGolemEntity extends PathfinderMob {
         this.treeModuleBlockStates = states == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(states);
     }
 
+    /**
+     * Get tree module block states, lazy-loading from snapshot JSON if not yet loaded.
+     * Mirrors the getTowerTemplate() / getWallTemplates() pattern for persistence across world reloads.
+     */
     public java.util.List<java.util.Map<BlockPos, BlockState>> getTreeModuleBlockStates() {
+        if ((treeModuleBlockStates == null || treeModuleBlockStates.isEmpty()) && treeJsonFile != null && !treeJsonFile.isEmpty()) {
+            if (this.level() instanceof net.minecraft.server.level.ServerLevel serverWorld) {
+                try {
+                    java.nio.file.Path path = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve(treeJsonFile);
+                    if (java.nio.file.Files.exists(path)) {
+                        SnapshotData data = readSnapshot(serverWorld, path);
+                        if (data != null && data.treeModuleStates() != null && !data.treeModuleStates().isEmpty()) {
+                            this.treeModuleBlockStates = new java.util.ArrayList<>(data.treeModuleStates());
+                            LOGGER.info("Lazy-loaded tree module block states from {}", treeJsonFile);
+                        }
+                    }
+                } catch (Exception e) {
+                    LOGGER.warn("Failed to lazy-load tree module block states from {}: {}", treeJsonFile, e.getMessage());
+                }
+            }
+        }
         return treeModuleBlockStates;
     }
 
@@ -898,7 +941,7 @@ public class GoldGolemEntity extends PathfinderMob {
         root.addProperty("nbt", NbtUtils.structureToSnbt(nbt));
 
         JsonArray wallTemplatesJson = new JsonArray();
-        for (var tpl : wallTemplates) {
+        for (var tpl : getWallTemplates()) {
             JsonObject t = new JsonObject();
             t.add("a", serializeVec(tpl.aMarker));
             t.add("b", serializeVec(tpl.bMarker));
@@ -931,7 +974,7 @@ public class GoldGolemEntity extends PathfinderMob {
         }
 
         JsonArray treeModulesJson = new JsonArray();
-        for (var module : treeModuleBlockStates) {
+        for (var module : getTreeModuleBlockStates()) {
             JsonArray voxels = new JsonArray();
             for (var entry : module.entrySet()) {
                 JsonObject vj = new JsonObject();
