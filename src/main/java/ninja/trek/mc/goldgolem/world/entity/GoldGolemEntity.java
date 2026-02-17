@@ -2011,7 +2011,7 @@ public class GoldGolemEntity extends PathfinderMob {
      * 2. Same property set → copy all properties
      * 3. Different block family → simulate player placement
      */
-    private BlockState getPlacementStateForBlock(BlockPos pos, net.minecraft.world.level.block.Block targetBlock, BlockState templateState, int rotation, boolean mirror) {
+    public BlockState getPlacementStateForBlock(BlockPos pos, net.minecraft.world.level.block.Block targetBlock, BlockState templateState, int rotation, boolean mirror) {
         net.minecraft.world.level.block.Block templateBlock = templateState.getBlock();
 
         // Case A: Exact same block type - copy state directly

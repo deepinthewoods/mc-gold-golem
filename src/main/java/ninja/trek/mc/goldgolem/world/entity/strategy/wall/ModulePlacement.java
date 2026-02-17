@@ -128,7 +128,10 @@ public class ModulePlacement {
                         } else {
                             BlockState sampledState = golem.getBlockStateFromId(sampledId);
                             if (sampledState != null) {
-                                stateToPlace = sampledState;
+                                // Use template state properties on the sampled block
+                                // (copies connection states for walls/fences, orientation for stairs, etc.)
+                                BlockPos worldPos = new BlockPos(wx, wy, wz);
+                                stateToPlace = golem.getPlacementStateForBlock(worldPos, sampledState.getBlock(), v.state, 0, false);
                             } else {
                                 // Sampled slot is empty - skip this block entirely
                                 skipBlock = true;
@@ -257,7 +260,9 @@ public class ModulePlacement {
                     if (sampledId != null && !sampledId.isEmpty()) {
                         BlockState sampledState = golem.getBlockStateFromId(sampledId);
                         if (sampledState != null) {
-                            stateToPlace = sampledState;
+                            // Use template state properties on the sampled block
+                            BlockPos worldPos = new BlockPos(wx, wy, wz);
+                            stateToPlace = golem.getPlacementStateForBlock(worldPos, sampledState.getBlock(), v.state, 0, false);
                         } else {
                             // Sampled slot is empty - skip this block entirely
                             skipBlock = true;
