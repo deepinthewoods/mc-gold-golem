@@ -27,7 +27,6 @@ public class GroupModeSection extends AbstractGuiSection {
     private static final int SLOTS_PER_ROW = 9;
     private static final int SLOT_SIZE = 18;
 
-    private final GroupModeStrategy strategy;
     private final GolemHandledScreen screen;
     private final Font textRenderer;
     private int maxVisibleRows = 6;
@@ -41,14 +40,19 @@ public class GroupModeSection extends AbstractGuiSection {
     private int draggingStartY = 0;
 
     public GroupModeSection(GroupModeStrategy strategy, GolemHandledScreen screen, Font textRenderer) {
-        this.strategy = strategy;
         this.screen = screen;
         this.textRenderer = textRenderer;
     }
 
+    /** Always fetch the current strategy from the screen to avoid stale references. */
+    private GroupModeStrategy getStrategy() {
+        return screen.getGroupModeStrategy();
+    }
+
     @Override
     public int calculateRequiredHeight(LayoutContext context) {
-        int totalGroups = strategy.getVisibleGroups().size();
+        GroupModeStrategy strategy = getStrategy();
+        int totalGroups = strategy != null ? strategy.getVisibleGroups().size() : 0;
         if (totalGroups == 0) totalGroups = 1;
         return totalGroups * ROW_SPACING;
     }
@@ -75,6 +79,9 @@ public class GroupModeSection extends AbstractGuiSection {
     @Override
     public void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY) {
         iconHits.clear();
+
+        GroupModeStrategy strategy = getStrategy();
+        if (strategy == null) return;
 
         List<Integer> vis = strategy.getVisibleGroups();
         int rows = vis.size();
@@ -186,6 +193,8 @@ public class GroupModeSection extends AbstractGuiSection {
     }
 
     private void renderTowerTotals(GuiGraphics context) {
+        GroupModeStrategy strategy = getStrategy();
+        if (strategy == null) return;
         Map<String, Integer> blockCounts = strategy.getBlockCounts();
         int totalBlocks = 0;
         for (Integer count : blockCounts.values()) {
@@ -212,6 +221,9 @@ public class GroupModeSection extends AbstractGuiSection {
     @Override
     public boolean handleClick(int mouseX, int mouseY, int button) {
         if (button != 0) return false;
+
+        GroupModeStrategy strategy = getStrategy();
+        if (strategy == null) return false;
 
         int guiX = screen.getGuiX();
         int guiY = screen.getGuiY();
@@ -273,6 +285,13 @@ public class GroupModeSection extends AbstractGuiSection {
     public boolean handleMouseRelease(int mouseX, int mouseY, int button) {
         if (!draggingFromIcon || draggingBlockId == null) return false;
 
+        GroupModeStrategy strategy = getStrategy();
+        if (strategy == null) {
+            draggingFromIcon = false;
+            draggingBlockId = null;
+            return false;
+        }
+
         int guiX = screen.getGuiX();
         int guiY = screen.getGuiY();
         BuildMode mode = strategy.getMode();
@@ -328,6 +347,8 @@ public class GroupModeSection extends AbstractGuiSection {
     }
 
     private void handleSlotClick(int visualRow, int col) {
+        GroupModeStrategy strategy = getStrategy();
+        if (strategy == null) return;
         List<Integer> vis = strategy.getVisibleGroups();
         int scroll = strategy.getScroll();
         int actualRow = visualRow + scroll;
@@ -339,6 +360,8 @@ public class GroupModeSection extends AbstractGuiSection {
     }
 
     private void updateLocalBlockGroup(String blockId, int groupIdx) {
+        GroupModeStrategy strategy = getStrategy();
+        if (strategy == null) return;
         List<String> uniqueBlocks = strategy.getUniqueBlocks();
         List<Integer> blockGroups = strategy.getBlockGroups();
         for (int i = 0; i < uniqueBlocks.size(); i++) {
@@ -356,10 +379,6 @@ public class GroupModeSection extends AbstractGuiSection {
 
     public int getMaxVisibleRows() {
         return maxVisibleRows;
-    }
-
-    public GroupModeStrategy getStrategy() {
-        return strategy;
     }
 
     public boolean isDragging() {

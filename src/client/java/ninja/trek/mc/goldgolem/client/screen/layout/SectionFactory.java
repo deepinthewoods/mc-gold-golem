@@ -2,7 +2,6 @@ package ninja.trek.mc.goldgolem.client.screen.layout;
 
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen;
-import ninja.trek.mc.goldgolem.client.screen.GroupModeStrategy;
 import ninja.trek.mc.goldgolem.client.screen.layout.sections.*;
 
 import java.util.ArrayList;
@@ -122,12 +121,9 @@ public class SectionFactory {
             case WALL:
             case TOWER:
             case TREE:
-                // GroupModeSection (paginable)
-                GroupModeStrategy strategy = screen.getGroupModeStrategy();
-                if (strategy != null) {
-                    groupModeSection = new GroupModeSection(strategy, screen, screen.getFont());
-                    sections.add(groupModeSection);
-                }
+                // GroupModeSection (paginable) - always create; it fetches strategy dynamically
+                groupModeSection = new GroupModeSection(null, screen, screen.getFont());
+                sections.add(groupModeSection);
 
                 // SettingsSection (mode-specific - will be populated during init)
                 settingsSection = new SettingsSection();
