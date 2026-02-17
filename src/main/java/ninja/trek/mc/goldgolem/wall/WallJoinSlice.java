@@ -5,6 +5,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.Property;
 
 /**
  * Represents a 1-wide vertical join slice lying in a plane of thickness 1 along X or Z.
@@ -16,15 +18,17 @@ public final class WallJoinSlice {
     public final Axis axis; // which plane: X_THICK means x = const, Z_THICK means z = const
     public final Set<Point> points; // normalized (dy, du) pairs starting at (0,0)
     public final Map<Point, String> blockIds; // block id per point
+    public final Map<Point, BlockState> blockStates; // full block state per point (for placement)
 
     public record Point(int dy, int du) {
         public Point add(int oy, int ou) { return new Point(dy + oy, du + ou); }
     }
 
-    private WallJoinSlice(Axis axis, Set<Point> points, Map<Point, String> blockIds) {
+    private WallJoinSlice(Axis axis, Set<Point> points, Map<Point, String> blockIds, Map<Point, BlockState> blockStates) {
         this.axis = axis;
         this.points = Collections.unmodifiableSet(points);
         this.blockIds = Collections.unmodifiableMap(blockIds);
+        this.blockStates = Collections.unmodifiableMap(blockStates);
     }
 
     /** Build a slice from the plane through goldRel (relative to originAbs) along the given axis. */
@@ -112,6 +116,7 @@ public final class WallJoinSlice {
         }
         Set<Point> pts = new HashSet<>();
         Map<Point, String> ids = new HashMap<>();
+        Map<Point, BlockState> states = new HashMap<>();
         for (BlockPos r : component) {
             int dy = r.getY() - minY;
             int du = ((axis == Axis.X_THICK) ? r.getZ() : r.getX()) - minU;
@@ -119,8 +124,9 @@ public final class WallJoinSlice {
             pts.add(p);
             var st = world.getBlockState(originAbs.offset(r));
             ids.put(p, BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString());
+            states.put(p, st);
         }
-        return Optional.of(new WallJoinSlice(axis, pts, ids));
+        return Optional.of(new WallJoinSlice(axis, pts, ids, states));
     }
 
     /**
@@ -228,5 +234,62 @@ public final class WallJoinSlice {
             sb.append(id == null ? "" : id).append(';');
         }
         return sb.toString();
+    }
+
+    /** Serialize a BlockState to a string with properties, e.g. "minecraft:oak_stairs[facing=north,half=bottom]". */
+    public static String serializeState(BlockState state) {
+        String id = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
+        if (state.getValues().isEmpty()) return id;
+        StringBuilder sb = new StringBuilder(id);
+        sb.append('[');
+        boolean first = true;
+        for (var entry : state.getValues().entrySet()) {
+            if (!first) sb.append(',');
+            sb.append(entry.getKey().getName()).append('=').append(propertyValueName(entry.getKey(), entry.getValue()));
+            first = false;
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Comparable<T>> String propertyValueName(Property<?> rawProp, Comparable<?> rawVal) {
+        Property<T> prop = (Property<T>) rawProp;
+        T val = (T) rawVal;
+        return prop.getName(val);
+    }
+
+    /** Parse a block state string back to a BlockState. Handles both "id[props]" and plain "id" formats. */
+    public static BlockState parseState(String str) {
+        if (str == null || str.isEmpty()) return null;
+        int bracket = str.indexOf('[');
+        String blockId = bracket >= 0 ? str.substring(0, bracket) : str;
+        var ident = net.minecraft.resources.Identifier.tryParse(blockId);
+        if (ident == null) return null;
+        var block = BuiltInRegistries.BLOCK.getValue(ident);
+        if (block == null) return null;
+        BlockState state = block.defaultBlockState();
+        if (bracket < 0) return state;
+        // Parse properties from "[key=val,key=val,...]"
+        int end = str.indexOf(']', bracket);
+        if (end < 0) return state;
+        String propsStr = str.substring(bracket + 1, end);
+        if (propsStr.isEmpty()) return state;
+        var stateDefinition = block.getStateDefinition();
+        for (String pair : propsStr.split(",")) {
+            String[] kv = pair.split("=", 2);
+            if (kv.length != 2) continue;
+            Property<?> prop = stateDefinition.getProperty(kv[0]);
+            if (prop != null) {
+                state = applyProperty(state, prop, kv[1]);
+            }
+        }
+        return state;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Comparable<T>> BlockState applyProperty(BlockState state, Property<T> prop, String valueName) {
+        Optional<T> val = prop.getValue(valueName);
+        return val.map(v -> state.setValue(prop, v)).orElse(state);
     }
 }

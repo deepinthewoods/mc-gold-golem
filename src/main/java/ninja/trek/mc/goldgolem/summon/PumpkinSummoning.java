@@ -547,13 +547,16 @@ public class PumpkinSummoning {
                 }
             }
             if (best != null) {
-                // Pack entries as (dy,du,idIndex) with a small LUT
+                // Pack entries as (dy,du,idIndex) with a small LUT using full state strings
                 java.util.ArrayList<String> lut = new java.util.ArrayList<>();
                 java.util.ArrayList<int[]> entries = new java.util.ArrayList<>();
                 for (var p : best.points) {
-                    String id = best.blockIds.get(p);
-                    int idx2 = lut.indexOf(id);
-                    if (idx2 < 0) { idx2 = lut.size(); lut.add(id); }
+                    net.minecraft.world.level.block.state.BlockState st = best.blockStates.get(p);
+                    String stateStr = (st != null)
+                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.serializeState(st)
+                            : best.blockIds.get(p);
+                    int idx2 = lut.indexOf(stateStr);
+                    if (idx2 < 0) { idx2 = lut.size(); lut.add(stateStr); }
                     entries.add(new int[]{p.dy(), p.du(), idx2});
                 }
                 golem.setWallJoinTemplate(entries, lut);

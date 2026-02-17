@@ -3848,11 +3848,9 @@ public class GoldGolemEntity extends PathfinderMob {
                 int wx = ax + px * e.du;
                 int wy = ay + e.dy;
                 int wz = az + pz * e.du;
-                var ident = net.minecraft.resources.Identifier.tryParse(e.id);
-                if (ident == null) continue;
-                var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
-                if (block == null) continue;
-                placeBlockStateAt(wx, wy, wz, block.defaultBlockState(), rot, mirror);
+                net.minecraft.world.level.block.state.BlockState parsed = ninja.trek.mc.goldgolem.wall.WallJoinSlice.parseState(e.id);
+                if (parsed == null) continue;
+                placeBlockStateAt(wx, wy, wz, parsed, rot, mirror);
             }
         }
     }
