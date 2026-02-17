@@ -147,16 +147,8 @@ public class GoldGolemEntity extends PathfinderMob {
     private int wallLongestModule = 0; // by voxel count for now
     private boolean wallSliceSymmetric = true; // whether join slice is mirror-symmetric
     private java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates = java.util.Collections.emptyList();
-    private ModulePlacement currentModulePlacement = null;
-    private final java.util.ArrayDeque<ModulePlacement> pendingModules = new java.util.ArrayDeque<>();
-    private int wallLastDirX = 1, wallLastDirZ = 0; // cardinal last forward dir
     // Join-slice inferred template: points in (dy,du) with ids; uses wallJoinAxis
-    private java.util.List<JoinEntry> wallJoinTemplate = java.util.Collections.emptyList();
-
-    private static final class JoinEntry {
-        final int dy; final int du; final String id;
-        JoinEntry(int dy, int du, String id) { this.dy = dy; this.du = du; this.id = id == null ? "" : id; }
-    }
+    private java.util.List<ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry> wallJoinTemplate = java.util.Collections.emptyList();
     // Wall UI state: dynamic gradient groups
     private final java.util.List<String[]> wallGroupSlots = new java.util.ArrayList<>(); // each String[9]
     private final java.util.List<Float> wallGroupWindows = new java.util.ArrayList<>();
@@ -400,6 +392,17 @@ public class GoldGolemEntity extends PathfinderMob {
             BuildStrategy newStrategy = BuildStrategyRegistry.create(mode);
             setActiveStrategy(newStrategy);
         }
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
+            configureWallStrategy(wall);
+        }
+    }
+
+    /**
+     * Transfer the entity's wall capture data into the given WallBuildStrategy.
+     */
+    private void configureWallStrategy(ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
+        wall.setConfig(wallOrigin, getJsonFileForMode(BuildMode.WALL), wallUniqueBlockIds, wallJoinSignature,
+                wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, wallSliceSymmetric, wallTemplates, wallJoinTemplate);
     }
 
     /**
@@ -445,13 +448,18 @@ public class GoldGolemEntity extends PathfinderMob {
     public int getWallLongestModule() { return wallLongestModule; }
     public void setWallSliceSymmetric(boolean symmetric) { this.wallSliceSymmetric = symmetric; }
     public boolean isWallSliceSymmetric() { return wallSliceSymmetric; }
-    public void setWallTemplates(java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> tpls) { this.wallTemplates = tpls == null ? java.util.Collections.emptyList() : tpls; }
+    public void setWallTemplates(java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> tpls) {
+        this.wallTemplates = tpls == null ? java.util.Collections.emptyList() : tpls;
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
+            configureWallStrategy(wall);
+        }
+    }
     public void setWallJoinTemplate(java.util.List<int[]> pointsDyDuAndIdIndex, java.util.List<String> idLut) {
-        java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>();
+        java.util.ArrayList<ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry> list = new java.util.ArrayList<>();
         for (int[] p : pointsDyDuAndIdIndex) {
             int dy = p[0], du = p[1], idx = p[2];
             String id = (idx >= 0 && idx < idLut.size()) ? idLut.get(idx) : "";
-            list.add(new JoinEntry(dy, du, id));
+            list.add(new ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry(dy, du, id));
         }
         this.wallJoinTemplate = list;
     }
@@ -1058,14 +1066,6 @@ public class GoldGolemEntity extends PathfinderMob {
         setJsonFileForMode(getBuildMode(), FabricLoader.getInstance().getGameDir().relativize(path).toString());
         if (data.wallTemplates() != null && !data.wallTemplates().isEmpty()) {
             setWallTemplates(data.wallTemplates());
-            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
-                java.util.List<ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry> joinTpl = new java.util.ArrayList<>();
-                for (JoinEntry e : wallJoinTemplate) {
-                    joinTpl.add(new ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry(e.dy, e.du, e.id));
-                }
-                wall.setConfig(wallOrigin, getJsonFileForMode(BuildMode.WALL), wallUniqueBlockIds, wallJoinSignature,
-                        wallJoinAxis, wallJoinUSize, wallModuleCount, wallLongestModule, wallSliceSymmetric, data.wallTemplates(), joinTpl);
-            }
         }
         if (data.towerTemplate() != null) {
             this.towerTemplate = data.towerTemplate();
@@ -1824,75 +1824,6 @@ public class GoldGolemEntity extends PathfinderMob {
         this.getNavigation().stop();
     }
 
-    // WALL MODE runtime tick handler
-    private void tickWallMode(Player owner) {
-        // Track anchors and enqueue modules based on movement
-        if (owner != null && owner.onGround()) {
-            Vec3 p = new Vec3(owner.getX(), owner.getY() + 0.05, owner.getZ());
-            if (trackStart == null) {
-                trackStart = p;
-            } else {
-                double threshold = Math.max(2.0, getWallLongestHoriz() + 1.0);
-                double dist = Math.sqrt((p.x - trackStart.x) * (p.x - trackStart.x) + (p.z - trackStart.z) * (p.z - trackStart.z));
-                if (dist >= threshold) {
-                    var cand = chooseNextModule(trackStart, p);
-                    if (cand != null) {
-                        pendingModules.addLast(cand);
-                        // update anchor to end
-                        trackStart = cand.end();
-                        // preview
-                        if (this.level() instanceof ServerLevel) {
-                            var owner2 = getOwnerPlayer();
-                            if (owner2 instanceof net.minecraft.server.level.ServerPlayer sp2) {
-                                java.util.List<Vec3> list = new java.util.ArrayList<>();
-                                list.add(cand.anchor()); list.add(cand.end());
-                                java.util.Optional<Vec3> anchor = java.util.Optional.ofNullable(this.trackStart);
-                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, this.getId(), list, anchor);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (currentModulePlacement == null) {
-            currentModulePlacement = pendingModules.pollFirst();
-            if (currentModulePlacement != null) {
-                currentModulePlacement.begin(this);
-                Vec3 end = currentModulePlacement.end();
-                double ty = computeGroundTargetY(end);
-                this.getNavigation().moveTo(end.x, ty, end.z, 1.1);
-            }
-        }
-        if (currentModulePlacement != null) {
-            // Place 1 block every 2 ticks, alternating hands (same as path mode)
-            if (placementTickCounter == 0) {
-                // For wall mode, we'll place blocks but without specific position tracking for now
-                // This maintains the alternating hand animation
-                currentModulePlacement.placeSome(this, 1); // Place only 1 block
-            }
-            Vec3 end = currentModulePlacement.end();
-            double ty = computeGroundTargetY(end);
-            this.getNavigation().moveTo(end.x, ty, end.z, 1.1);
-            double dx = this.getX() - end.x;
-            double dz = this.getZ() - end.z;
-            double distSq = dx * dx + dz * dz;
-            if (this.getNavigation().isDone() && distSq > 1.0) {
-                stuckTicks++;
-                if (stuckTicks >= 20) {
-                    LOGGER.info("Gold Golem stuck in Wall Mode! Teleporting to {}", end);
-                    BlockPos targetPos = new BlockPos((int) Math.floor(end.x), (int) Math.floor(ty), (int) Math.floor(end.z));
-                    this.teleportWithParticles(targetPos);
-                    stuckTicks = 0;
-                }
-            } else {
-                stuckTicks = 0;
-            }
-            if (currentModulePlacement.done()) {
-                currentModulePlacement = null;
-            }
-        }
-    }
-
     // Tower mode logic has been moved to TowerBuildStrategy
 
     // Tree mode logic has been moved to TreeBuildStrategy
@@ -2566,12 +2497,12 @@ public class GoldGolemEntity extends PathfinderMob {
         this.wallSliceSymmetric = view.getBooleanOr("WallSliceSym", true);
         int jt = view.getIntOr("WallJoinTplCount", 0);
         if (jt > 0) {
-            java.util.ArrayList<JoinEntry> list = new java.util.ArrayList<>(jt);
+            java.util.ArrayList<ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry> list = new java.util.ArrayList<>(jt);
             for (int i = 0; i < jt; i++) {
                 int dy = view.getIntOr("WJT_dy" + i, 0);
                 int du = view.getIntOr("WJT_du" + i, 0);
                 String id = view.getStringOr("WJT_id" + i, "");
-                list.add(new JoinEntry(dy, du, id));
+                list.add(new ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry(dy, du, id));
             }
             this.wallJoinTemplate = list;
         } else {
@@ -3663,216 +3594,6 @@ public class GoldGolemEntity extends PathfinderMob {
         // Clamp and round
         int index = (int) Math.round(s_ref);
         return Math.max(0, Math.min(G - 1, index));
-    }
-
-    // WALL MODE helpers and types
-    private double getWallLongestHoriz() {
-        double longest = 0.0;
-        for (var t : wallTemplates) longest = Math.max(longest, t.horizLen());
-        return longest;
-    }
-
-    private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
-        if (wallTemplates == null || wallTemplates.isEmpty()) return null;
-        double bestScore = Double.POSITIVE_INFINITY;
-        ModulePlacement best = null;
-        for (int ti = 0; ti < wallTemplates.size(); ti++) {
-            var tpl = wallTemplates.get(ti);
-            int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
-            int dxModule = tpl.bMarker.getX() - tpl.aMarker.getX();
-            int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-            for (int rot = 0; rot < 4; rot++) {
-                for (int mir = 0; mir < 2; mir++) {
-                    int[] d = rotateAndMirror(dxModule, dyModule, dzModule, rot, mir == 1);
-                    Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
-                    // Y rule: toward player Y and no overshoot
-                    double dyNeed = playerPos.y - anchor.y;
-                    double dyStep = d[1];
-                    boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
-                    if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
-                    double yScore = Math.abs(dyNeed - dyStep);
-                    double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
-                    double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz;
-                    if (score < bestScore) { bestScore = score; best = new ModulePlacement(ti, rot, mir == 1, anchor, end); }
-                }
-            }
-        }
-        // Consider empty corner (gap only) turning left/right by wall thickness when useful
-        int t = Math.max(1, this.wallJoinUSize);
-        int lx = wallLastDirX, lz = wallLastDirZ;
-        int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
-        for (int[] pv : perps) {
-            int dx = pv[0] * t;
-            int dz = pv[1] * t;
-            Vec3 end = new Vec3(anchor.x + dx, anchor.y, anchor.z + dz);
-            double dyNeed = playerPos.y - anchor.y;
-            double yScore = Math.abs(dyNeed - 0.0);
-            double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
-            double score = yScore * 10.0 + xz + 0.5; // slight penalty vs real module
-            if (score < bestScore) {
-                bestScore = score;
-                best = new GapPlacement(dx, dz, anchor, end, pv[0], pv[1]);
-            }
-        }
-        return best;
-    }
-
-    private static int[] rotateAndMirror(int x, int y, int z, int rot, boolean mirror) {
-        int rx = x, rz = z;
-        switch (rot & 3) {
-            case 1 -> { int ox = rx; rx = -rz; rz = ox; }
-            case 2 -> { rx = -rx; rz = -rz; }
-            case 3 -> { int ox = rx; rx = rz; rz = -ox; }
-        }
-        if (mirror) rx = -rx;
-        return new int[]{rx, y, rz};
-    }
-
-    private void placeBlockStateAt(int wx, int wy, int wz, net.minecraft.world.level.block.state.BlockState baseState, int rot, boolean mirror) {
-        var world = this.level();
-        BlockPos pos = new BlockPos(wx, wy, wz);
-        net.minecraft.world.level.block.Block block = baseState.getBlock();
-        var current = world.getBlockState(pos);
-        if (!current.isAir() && current.is(block)) return;
-        long key = pos.asLong();
-        if (!recordPlaced(key)) return;
-        int invSlot = findItem(block.asItem());
-        if (invSlot < 0) {
-            unrecordPlaced(key);
-            handleMissingBuildingBlock();
-            return;
-        }
-
-        // Use new placement logic to determine final state
-        net.minecraft.world.level.block.state.BlockState place = getPlacementStateForBlock(pos, block, baseState, rot, mirror);
-
-        // Apply waterlogging fix
-        try {
-            if (place.hasProperty(BlockStateProperties.WATERLOGGED)) {
-                place = place.setValue(BlockStateProperties.WATERLOGGED, Boolean.FALSE);
-            }
-        } catch (Throwable ignored) {}
-
-        // Prevent placing blocks inside self to avoid suffocation damage
-        if (wouldBlockOverlapSelf(pos)) {
-            unrecordPlaced(key);
-            return;
-        }
-        world.setBlock(pos, place, 3);
-        var st = inventory.getItem(invSlot);
-        st.shrink(1);
-        inventory.setItem(invSlot, st);
-    }
-
-    private class ModulePlacement {
-        final int tplIndex;
-        final int rot; // 0..3
-        final boolean mirror;
-        final Vec3 anchor;
-        final Vec3 end;
-        java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> voxels;
-        int cursor = 0;
-        boolean joinPlaced = false;
-        ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3 anchor, Vec3 end) {
-            this.tplIndex = tplIndex; this.rot = rot; this.mirror = mirror; this.anchor = anchor; this.end = end;
-        }
-        Vec3 anchor() { return anchor; }
-        Vec3 end() { return end; }
-        void begin(GoldGolemEntity golem) {
-            var tpl = wallTemplates.get(tplIndex);
-            this.voxels = tpl.voxels;
-            // update last direction
-            int dx = wallTemplates.get(tplIndex).bMarker.getX() - wallTemplates.get(tplIndex).aMarker.getX();
-            int dz = wallTemplates.get(tplIndex).bMarker.getZ() - wallTemplates.get(tplIndex).aMarker.getZ();
-            int[] d = rotateAndMirror(dx, 0, dz, rot, mirror);
-            if (Math.abs(d[0]) >= Math.abs(d[2])) { wallLastDirX = Integer.signum(d[0]); wallLastDirZ = 0; }
-            else { wallLastDirX = 0; wallLastDirZ = Integer.signum(d[2]); }
-        }
-        void placeSome(GoldGolemEntity golem, int maxOps) {
-            if (!joinPlaced) { placeJoinSliceAtAnchor(); joinPlaced = true; }
-            var tpl = wallTemplates.get(tplIndex);
-            int ops = 0;
-            // Calculate module height for gradient sampling
-            int moduleMinY = tpl.minY;
-            int moduleMaxY = tpl.voxels.stream().mapToInt(v -> v.rel.getY()).max().orElse(moduleMinY);
-            int moduleHeight = Math.max(1, moduleMaxY - moduleMinY + 1);
-
-            while (cursor < voxels.size() && ops < maxOps) {
-                var v = voxels.get(cursor++);
-                int rx = v.rel.getX();
-                int ry = v.rel.getY();
-                int rz = v.rel.getZ();
-                int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
-                int wx = Mth.floor(anchor.x) + d[0];
-                int wy = Mth.floor(anchor.y) + d[1];
-                int wz = Mth.floor(anchor.z) + d[2];
-
-                // Apply gradient sampling for wall mode
-                BlockState stateToPlace = v.state;
-                String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
-                Integer groupIdx = wallBlockGroup.get(blockId);
-                if (groupIdx != null && groupIdx >= 0 && groupIdx < wallGroupSlots.size()) {
-                    String[] slots = wallGroupSlots.get(groupIdx);
-                    float window = (groupIdx < wallGroupWindows.size()) ? wallGroupWindows.get(groupIdx) : 1.0f;
-                    int noiseScale = (groupIdx < wallGroupNoiseScales.size()) ? wallGroupNoiseScales.get(groupIdx) : 1;
-                    // Calculate relative Y position within module (0 at bottom)
-                    int relY = ry - moduleMinY;
-                    int sampledIndex = golem.sampleWallGradient(slots, window, noiseScale, moduleHeight, relY, new BlockPos(wx, wy, wz));
-                    if (sampledIndex >= 0 && sampledIndex < 9) {
-                        String sampledId = slots[sampledIndex];
-                        if (sampledId != null && !sampledId.isEmpty()) {
-                            BlockState sampledState = golem.getBlockStateFromId(sampledId);
-                            if (sampledState != null) {
-                                stateToPlace = sampledState;
-                            }
-                        }
-                    }
-                }
-
-                placeBlockStateAt(wx, wy, wz, stateToPlace, rot, mirror);
-                ops++;
-            }
-        }
-        boolean done() { return cursor >= (voxels == null ? 0 : voxels.size()); }
-
-        private void placeJoinSliceAtAnchor() {
-            if (wallJoinTemplate == null || wallJoinTemplate.isEmpty()) return;
-            var tpl = wallTemplates.get(tplIndex);
-            int dxm = tpl.bMarker.getX() - tpl.aMarker.getX();
-            int dzm = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-            int[] d = rotateAndMirror(dxm, 0, dzm, rot, mirror);
-            int fx = Integer.signum(d[0]);
-            int fz = Integer.signum(d[2]);
-            int px = -fz;
-            int pz = fx;
-            int ax = Mth.floor(anchor.x);
-            int ay = Mth.floor(anchor.y);
-            int az = Mth.floor(anchor.z);
-            for (JoinEntry e : wallJoinTemplate) {
-                if (e.id == null || e.id.isEmpty()) continue;
-                int wx = ax + px * e.du;
-                int wy = ay + e.dy;
-                int wz = az + pz * e.du;
-                net.minecraft.world.level.block.state.BlockState parsed = ninja.trek.mc.goldgolem.wall.WallJoinSlice.parseState(e.id);
-                if (parsed == null) continue;
-                placeBlockStateAt(wx, wy, wz, parsed, rot, mirror);
-            }
-        }
-    }
-
-    private final class GapPlacement extends ModulePlacement {
-        final int dx, dz;
-        final int dirx, dirz;
-        GapPlacement(int dx, int dz, Vec3 anchor, Vec3 end, int dirx, int dirz) {
-            super(-1, 0, false, anchor, end);
-            this.dx = dx; this.dz = dz; this.dirx = dirx; this.dirz = dirz;
-        }
-        @Override void begin(GoldGolemEntity golem) {
-            this.voxels = java.util.Collections.emptyList();
-            wallLastDirX = dirx; wallLastDirZ = dirz;
-        }
-        @Override void placeSome(GoldGolemEntity golem, int maxOps) { /* nothing */ }
-        @Override boolean done() { return true; }
     }
 
     public int findItem(net.minecraft.world.item.Item item) {

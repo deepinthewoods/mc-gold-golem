@@ -52,6 +52,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
     // Gradient mining helper for mine-action slots
     private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
+    private BlockPos currentMineTarget = null;  // Track position being mined so planner can mark it done
 
     @Override
     public BuildMode getMode() {
@@ -282,6 +283,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         currentModulePlacement = null;
         pendingModules.clear();
         moduleBlocksLoaded = false;
+        currentMineTarget = null;
         if (planner != null) {
             planner.clear();
         }
@@ -443,19 +445,21 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
                 if (done) {
                     gradientMiner.reset(golem);
+                    // Mark the mined position as done in the planner so it doesn't retry it
+                    if (currentMineTarget != null && planner != null) {
+                        planner.markBlockDone(currentMineTarget);
+                        currentMineTarget = null;
+                    }
                 }
                 return;
             }
 
-            // Tick with 2-tick pacing
-            if (!shouldPlaceThisTick()) {
-                return;
-            }
-
             // Use planner to handle movement and placement
+            // Navigation always ticks; block placement is gated by 2-tick pacing
+            boolean canPlace = shouldPlaceThisTick();
             PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
                 return placeWallBlockAt(golem, pos, nextPos);
-            });
+            }, canPlace);
 
             switch (result) {
                 case PLACED_BLOCK:
@@ -495,8 +499,25 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return longest;
     }
 
+    /**
+     * Perpendicular distance from point (px, pz) to the line through the origin
+     * with direction (ldx, ldz) of length lLen. Falls back to point distance
+     * from origin if the line has zero length.
+     */
+    private static double perpDistToLine(double px, double pz, double ldx, double ldz, double lLen) {
+        if (lLen < 1e-9) return Math.hypot(px, pz);
+        // 2D cross product gives signed perpendicular distance * lLen
+        double cross = px * ldz - pz * ldx;
+        return Math.abs(cross) / lLen;
+    }
+
     private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
         if (wallTemplates == null || wallTemplates.isEmpty()) return null;
+
+        // Anchor→player line direction in XZ plane
+        double lineDx = playerPos.x - anchor.x;
+        double lineDz = playerPos.z - anchor.z;
+        double lineLen = Math.hypot(lineDx, lineDz);
 
         double bestScore = Double.POSITIVE_INFINITY;
         ModulePlacement best = null;
@@ -518,7 +539,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
                     if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
                     double yScore = Math.abs(dyNeed - dyStep);
-                    double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
+                    double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
                     double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz;
                     if (score < bestScore) {
                         bestScore = score;
@@ -538,7 +559,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
             double dyNeed = playerPos.y - anchor.y;
             double yScore = Math.abs(dyNeed);
-            double xz = Math.hypot(end.x - playerPos.x, end.z - playerPos.z);
+            double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
             double score = yScore * 10.0 + xz + 0.5; // slight penalty vs real module
             if (score < bestScore) {
                 bestScore = score;
@@ -559,6 +580,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         if (currentModulePlacement == null) return false;
         // Check for mine action
         if (currentModulePlacement.isMinePosition(pos)) {
+            currentMineTarget = pos;
             gradientMiner.startMining(pos);
             return false; // will mine over subsequent ticks
         }

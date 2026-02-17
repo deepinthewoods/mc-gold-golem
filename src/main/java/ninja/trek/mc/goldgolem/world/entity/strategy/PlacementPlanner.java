@@ -78,6 +78,8 @@ public class PlacementPlanner {
     private long lastPathBudgetTick = Long.MIN_VALUE;
     private int remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
     private int consecutiveOverlapDeferrals = 0;  // Track when golem is trapped by its own builds
+    private int allFilteredTicks = 0;  // Track consecutive ticks where block filter excluded all candidates
+    private static final int ALL_FILTERED_TELEPORT_THRESHOLD = 4;  // Bypass filter after this many consecutive all-filtered ticks
 
     // Optional filter and scorer for organic placement
     private BlockFilter blockFilter = null;
@@ -212,6 +214,7 @@ public class PlacementPlanner {
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
         consecutiveOverlapDeferrals = 0;
+        allFilteredTicks = 0;
 
         // Filter out blocks that are already correctly placed
         List<BlockPos> toPlace = blocks;
@@ -329,11 +332,37 @@ public class PlacementPlanner {
     }
 
     /**
+     * Mark a block as completed and remove it from all queues.
+     * Used when a block is handled outside the normal placement flow (e.g., mining).
+     */
+    public void markBlockDone(BlockPos pos) {
+        remainingBlocks.remove(pos);
+        deferredBlocks.removeIf(db -> db.pos.equals(pos));
+        deferAttempts.remove(pos);
+        skipUntilTick.remove(pos);
+        if (pos.equals(currentTarget)) {
+            currentTarget = null;
+            currentStandPos = null;
+        }
+    }
+
+    /**
      * Main tick method. Call this every tick while building.
      * @param blockPlacer Callback to actually place the block (handles inventory, animation, etc.)
      * @return The result of this tick
      */
     public TickResult tick(BlockPlacer blockPlacer) {
+        return tick(blockPlacer, true);
+    }
+
+    /**
+     * Main tick method with placement gating.
+     * Navigation and target selection always run. Block placement only happens when placingAllowed is true.
+     * @param blockPlacer Callback to actually place the block
+     * @param placingAllowed If false, navigation and target selection run but no blocks are placed
+     * @return The result of this tick
+     */
+    public TickResult tick(BlockPlacer blockPlacer, boolean placingAllowed) {
         if (DEBUG_COUNTERS) {
             long now = golem.level().getGameTime();
             if (now != debugLastTick) {
@@ -352,13 +381,18 @@ public class PlacementPlanner {
             currentTarget = selectNextBlock();
             if (currentTarget == null) {
                 if (selectionBlockedByBudget || !remainingBlocks.isEmpty() || !deferredBlocks.isEmpty()) {
-                    LOGGER.debug("No target selected, still working: budget={} remaining={} deferred={}",
-                        selectionBlockedByBudget, remainingBlocks.size(), deferredBlocks.size());
+                    // Track consecutive ticks where filter excluded all candidates
+                    if (!selectionBlockedByBudget && !remainingBlocks.isEmpty()) {
+                        allFilteredTicks++;
+                    }
+                    LOGGER.debug("No target selected, still working: budget={} remaining={} deferred={} allFiltered={}",
+                        selectionBlockedByBudget, remainingBlocks.size(), deferredBlocks.size(), allFilteredTicks);
                     return TickResult.WORKING;
                 }
                 LOGGER.info("All blocks placed, returning COMPLETED");
                 return TickResult.COMPLETED;
             }
+            allFilteredTicks = 0;  // Successfully selected a target
 
             // If already in reach, place without moving.
             Vec3 golemPos = new Vec3(golem.getX(), golem.getEyeY(), golem.getZ());
@@ -523,6 +557,11 @@ public class PlacementPlanner {
                 return TickResult.DEFERRED;
             }
 
+            // Wait for placement pacing if needed
+            if (!placingAllowed) {
+                return TickResult.WORKING;
+            }
+
             // Place the block (even if slightly out of range)
             BlockPos nextTarget = peekNextTarget();
             LOGGER.info("Attempting to place block at target={} golemPos={} nextTarget={}",
@@ -539,10 +578,16 @@ public class PlacementPlanner {
                 consecutiveOverlapDeferrals = 0;  // Reset since we made progress
                 return TickResult.PLACED_BLOCK;
             } else {
-                // Couldn't place (missing inventory) - keep target and return IDLE to stop building
-                // Golem will wait to be fed a nugget to restart
-                LOGGER.info("Block placer rejected (missing inventory?), stopping: target={}", currentTarget);
-                return TickResult.IDLE;
+                // Couldn't place - defer the block and try another.
+                // If this was a missing inventory issue, handleMissingBuildingBlock will have
+                // already set buildingPaths=false, stopping the outer tick loop.
+                // For other failures (mine actions, duplicates), deferring lets the planner
+                // try other blocks instead of getting stuck on this one forever.
+                LOGGER.info("Block placer rejected, deferring: target={}", currentTarget);
+                defer(currentTarget);
+                currentTarget = null;
+                currentStandPos = null;
+                return TickResult.DEFERRED;
             }
         }
 
@@ -584,6 +629,7 @@ public class PlacementPlanner {
         preselectedStandPos = null;
         long now = golem.level().getGameTime();
         pruneSkipMap(now);
+        boolean bypassFilter = allFilteredTicks >= ALL_FILTERED_TELEPORT_THRESHOLD;
 
         if (!deferredBlocks.isEmpty()) {
             if (remainingBlocks.isEmpty() || deferredRetryCountdown <= 0) {
@@ -594,7 +640,7 @@ public class PlacementPlanner {
                 while (checked < size) {
                     DeferredBlock candidate = deferredBlocks.pollFirst();
                     if (candidate == null) break;
-                    if (blockFilter != null && blockFilter.shouldExclude(candidate.pos)) {
+                    if (!bypassFilter && blockFilter != null && blockFilter.shouldExclude(candidate.pos)) {
                         deferredBlocks.addLast(candidate); // Put back at end
                         checked++;
                         continue;
@@ -625,6 +671,11 @@ public class PlacementPlanner {
         resortByDistanceToGolem();
 
         // PHASE 3: Collect up to NEIGHBOR_CANDIDATE_COUNT non-excluded candidates for scoring
+        // If the filter has been blocking ALL candidates for several ticks, bypass it
+        // so the golem can teleport to a new position where the filter yields different results
+        if (bypassFilter) {
+            LOGGER.info("Bypassing block filter after {} all-filtered ticks to allow teleport", allFilteredTicks);
+        }
         List<BlockPos> scoringCandidates = new ArrayList<>();
         int scanned = 0;
         while (scoringCandidates.size() < NEIGHBOR_CANDIDATE_COUNT && scanned < remainingBlocks.size()) {
@@ -636,7 +687,7 @@ public class PlacementPlanner {
                 remainingBlocks.addLast(pos);
                 continue;
             }
-            if (blockFilter != null && blockFilter.shouldExclude(pos)) {
+            if (!bypassFilter && blockFilter != null && blockFilter.shouldExclude(pos)) {
                 remainingBlocks.addLast(pos);
                 continue;
             }
@@ -1266,6 +1317,7 @@ public class PlacementPlanner {
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
         consecutiveOverlapDeferrals = 0;
+        allFilteredTicks = 0;
         blockFilter = null;
         blockScorer = null;
     }
@@ -1333,6 +1385,7 @@ public class PlacementPlanner {
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
         consecutiveOverlapDeferrals = 0;
+        allFilteredTicks = 0;
 
         int[] remaining = nbt.getIntArray("RemainingBlocks").orElseGet(() -> new int[0]);
         int[] deferred = nbt.getIntArray("DeferredBlocks").orElseGet(() -> new int[0]);
@@ -1398,6 +1451,7 @@ public class PlacementPlanner {
         lastPathBudgetTick = Long.MIN_VALUE;
         remainingPathfindBudget = MAX_PATHFINDS_PER_TICK;
         consecutiveOverlapDeferrals = 0;
+        allFilteredTicks = 0;
 
         int[] remaining = view.getIntArray("RemainingBlocks").orElseGet(() -> new int[0]);
         int[] deferred = view.getIntArray("DeferredBlocks").orElseGet(() -> new int[0]);
