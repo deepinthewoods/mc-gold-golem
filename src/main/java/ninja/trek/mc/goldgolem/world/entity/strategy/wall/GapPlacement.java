@@ -29,7 +29,14 @@ public final class GapPlacement extends ModulePlacement {
     public void begin(GoldGolemEntity golem, WallBuildStrategy strategy) {
         this.voxels = Collections.emptyList();
         this.blockStatesMap = Collections.emptyMap();
+        int prevDirX = strategy.getWallLastDirX();
+        int prevDirZ = strategy.getWallLastDirZ();
         strategy.setWallLastDir(dirx, dirz);
+        System.out.println("[WallGap] begin: anchor=(" + String.format("%.1f", anchor.x)
+                + "," + String.format("%.1f", anchor.y) + "," + String.format("%.1f", anchor.z)
+                + ") end=(" + String.format("%.1f", end.x) + "," + String.format("%.1f", end.y)
+                + "," + String.format("%.1f", end.z) + ") d=(" + dx + "," + dz
+                + ") dirChange=(" + prevDirX + "," + prevDirZ + ")->(" + dirx + "," + dirz + ")");
     }
 
     @Override

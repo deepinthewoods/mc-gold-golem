@@ -31,6 +31,8 @@ public class ModulePlacement {
     protected Set<BlockPos> minePositions = new HashSet<>();
     protected int moduleMinY = 0;
     protected int moduleHeight = 1;
+    protected int incomingDirX = 1;
+    protected int incomingDirZ = 0;
 
     public ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3 anchor, Vec3 end) {
         this.tplIndex = tplIndex;
@@ -65,6 +67,9 @@ public class ModulePlacement {
         if (tplIndex >= 0 && tplIndex < templates.size()) {
             var tpl = templates.get(tplIndex);
             this.voxels = tpl.voxels;
+            // Save incoming direction for join slice perpendicular
+            this.incomingDirX = strategy.getWallLastDirX();
+            this.incomingDirZ = strategy.getWallLastDirZ();
             // Update last direction
             int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
             int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
@@ -94,23 +99,33 @@ public class ModulePlacement {
         // Add join slice blocks
         var joinTemplate = strategy.getWallJoinTemplate();
         if (joinTemplate != null && !joinTemplate.isEmpty()) {
-            int dxm = tpl.bMarker.getX() - tpl.aMarker.getX();
-            int dzm = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-            int[] d = rotateAndMirror(dxm, 0, dzm, rot, mirror);
-            int fx = Integer.signum(d[0]);
-            int fz = Integer.signum(d[2]);
+            // Use incoming direction for join slice perpendicular (not A→B which is diagonal for L-corners)
+            int fx = this.incomingDirX;
+            int fz = this.incomingDirZ;
             int px = -fz;
             int pz = fx;
             int ax = Mth.floor(anchor.x);
             int ay = Mth.floor(anchor.y);
             int az = Mth.floor(anchor.z);
+            // Center the join slice on the anchor: du values are normalized from minU (left edge),
+            // but module voxels are centered on the gold marker. Offset by maxDu/2 to center.
+            int maxDu = 0;
+            for (JoinEntry e : joinTemplate) maxDu = Math.max(maxDu, e.du);
+            int duCenter = maxDu / 2;
+            System.out.println("[WallJoin] buildBlockStatesMap: joinTemplate size=" + joinTemplate.size()
+                    + " maxDu=" + maxDu + " duCenter=" + duCenter
+                    + " incomingDir=(" + fx + "," + fz + ") perp=(" + px + "," + pz + ")"
+                    + " anchor=(" + ax + "," + ay + "," + az + ")");
             for (JoinEntry e : joinTemplate) {
                 if (e.id == null || e.id.isEmpty()) continue;
-                int wx = ax + px * e.du;
+                int duOff = e.du - duCenter;
+                int wx = ax + px * duOff;
                 int wy = ay + e.dy;
-                int wz = az + pz * e.du;
+                int wz = az + pz * duOff;
                 BlockState parsed = ninja.trek.mc.goldgolem.wall.WallJoinSlice.parseState(e.id);
                 if (parsed == null) continue;
+                System.out.println("[WallJoin]   entry du=" + e.du + " dy=" + e.dy + " duOff=" + duOff
+                        + " -> (" + wx + "," + wy + "," + wz + ") " + e.id);
                 blockStatesMap.put(new BlockPos(wx, wy, wz), parsed);
             }
         }
@@ -314,21 +329,24 @@ public class ModulePlacement {
         if (tplIndex < 0 || tplIndex >= templates.size()) return;
 
         var tpl = templates.get(tplIndex);
-        int dxm = tpl.bMarker.getX() - tpl.aMarker.getX();
-        int dzm = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-        int[] d = rotateAndMirror(dxm, 0, dzm, rot, mirror);
-        int fx = Integer.signum(d[0]);
-        int fz = Integer.signum(d[2]);
+        // Use incoming direction for join slice perpendicular
+        int fx = this.incomingDirX;
+        int fz = this.incomingDirZ;
         int px = -fz;
         int pz = fx;
         int ax = Mth.floor(anchor.x);
         int ay = Mth.floor(anchor.y);
         int az = Mth.floor(anchor.z);
+        // Center the join slice on the anchor (same logic as buildBlockStatesMap)
+        int maxDu = 0;
+        for (JoinEntry e : joinTemplate) maxDu = Math.max(maxDu, e.du);
+        int duCenter = maxDu / 2;
         for (JoinEntry e : joinTemplate) {
             if (e.id == null || e.id.isEmpty()) continue;
-            int wx = ax + px * e.du;
+            int duOff = e.du - duCenter;
+            int wx = ax + px * duOff;
             int wy = ay + e.dy;
-            int wz = az + pz * e.du;
+            int wz = az + pz * duOff;
             BlockState parsed = ninja.trek.mc.goldgolem.wall.WallJoinSlice.parseState(e.id);
             if (parsed == null) continue;
             strategy.placeBlockStateAt(golem, wx, wy, wz, parsed, rot, mirror, null);

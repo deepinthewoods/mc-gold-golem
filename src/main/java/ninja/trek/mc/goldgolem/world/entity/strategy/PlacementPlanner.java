@@ -229,7 +229,7 @@ public class PlacementPlanner {
                 }
             }
             if (skipped > 0) {
-                LOGGER.info("Skipped {} already-correct blocks, {} remaining to place", skipped, toPlace.size());
+                LOGGER.debug("Skipped {} already-correct blocks, {} remaining to place", skipped, toPlace.size());
             }
         }
 
@@ -271,7 +271,7 @@ public class PlacementPlanner {
                 }
             }
             if (skipped > 0) {
-                LOGGER.info("Skipped {} already-correct blocks when adding, {} remaining to add", skipped, toAdd.size());
+                LOGGER.debug("Skipped {} already-correct blocks when adding, {} remaining to add", skipped, toAdd.size());
             }
         }
 
@@ -389,7 +389,7 @@ public class PlacementPlanner {
                         selectionBlockedByBudget, remainingBlocks.size(), deferredBlocks.size(), allFilteredTicks);
                     return TickResult.WORKING;
                 }
-                LOGGER.info("All blocks placed, returning COMPLETED");
+                LOGGER.debug("All blocks placed, returning COMPLETED");
                 return TickResult.COMPLETED;
             }
             allFilteredTicks = 0;  // Successfully selected a target
@@ -420,7 +420,7 @@ public class PlacementPlanner {
                     // Pathfinding failed - use aggressive fallback: find ANY position and teleport
                     BlockPos fallbackPos = findAnyStandPosition(currentTarget);
                     if (fallbackPos != null) {
-                        LOGGER.info("Using fallback teleport: target={} fallback={}", currentTarget, fallbackPos);
+                        LOGGER.debug("Using fallback teleport: target={} fallback={}", currentTarget, fallbackPos);
                         teleportToStandPosition(fallbackPos);
                         currentStandPos = fallbackPos;
                         navigatingToStandPos = false;
@@ -429,7 +429,7 @@ public class PlacementPlanner {
                         navigationFailures = 0;
                     } else {
                         // No valid position at all - force place from current position
-                        LOGGER.info("No valid stand position, force placing: target={}", currentTarget);
+                        LOGGER.debug("No valid stand position, force placing: target={}", currentTarget);
                         currentStandPos = golem.blockPosition();
                         navigatingToStandPos = false;
                         stuckTicks = 0;
@@ -443,7 +443,7 @@ public class PlacementPlanner {
                     stuckTicks = 0;
                     lastNavPos = null;
                     navigationFailures = 0;
-                    LOGGER.info("Selected standPos={} for target={}", currentStandPos, currentTarget);
+                    LOGGER.debug("Selected standPos={} for target={}", currentStandPos, currentTarget);
                 }
             }
         }
@@ -472,7 +472,7 @@ public class PlacementPlanner {
                     // Give navigation a few attempts before teleporting
                     if (navigationFailures >= 3) {
                         if (currentStandPos != null && !currentStandPos.equals(golem.blockPosition())) {
-                            LOGGER.info("Navigation failed {} times, teleporting: standPos={} target={}",
+                            LOGGER.debug("Navigation failed {} times, teleporting: standPos={} target={}",
                                     navigationFailures, currentStandPos, currentTarget);
                             teleportToStandPosition(currentStandPos);
                         }
@@ -502,7 +502,7 @@ public class PlacementPlanner {
                     }
                     if (stuckTicks >= STUCK_THRESHOLD_TICKS) {
                         // Stuck - teleport as last resort
-                        LOGGER.info("Stuck, teleporting: standPos={} target={}", currentStandPos, currentTarget);
+                        LOGGER.debug("Stuck, teleporting: standPos={} target={}", currentStandPos, currentTarget);
                         teleportToStandPosition(currentStandPos);
                         stuckTicks = 0;
                         navigatingToStandPos = false;
@@ -526,22 +526,22 @@ public class PlacementPlanner {
                 // Not in reach - try to find a better position and teleport
                 BlockPos betterPos = findAnyStandPosition(currentTarget);
                 if (betterPos != null && !betterPos.equals(golem.blockPosition())) {
-                    LOGGER.info("Teleporting to better position: target={} pos={}", currentTarget, betterPos);
+                    LOGGER.debug("Teleporting to better position: target={} pos={}", currentTarget, betterPos);
                     teleportToStandPosition(betterPos);
                     return TickResult.WORKING;
                 }
                 // No better position - force place anyway
-                LOGGER.info("Force placing out of range: target={}", currentTarget);
+                LOGGER.debug("Force placing out of range: target={}", currentTarget);
             }
 
             // Check if placing would cause golem to overlap with the block (suffocation)
             if (wouldOverlapGolem(currentTarget)) {
                 consecutiveOverlapDeferrals++;
-                LOGGER.info("Target {} overlaps golem, deferring (consecutive: {})", currentTarget, consecutiveOverlapDeferrals);
+                LOGGER.debug("Target {} overlaps golem, deferring (consecutive: {})", currentTarget, consecutiveOverlapDeferrals);
 
                 // If we've been deferring due to overlap repeatedly, we're trapped - teleport out
                 if (consecutiveOverlapDeferrals >= MAX_CONSECUTIVE_OVERLAP_DEFERRALS) {
-                    LOGGER.info("Golem trapped by own builds after {} deferrals, teleporting out", consecutiveOverlapDeferrals);
+                    LOGGER.debug("Golem trapped by own builds after {} deferrals, teleporting out", consecutiveOverlapDeferrals);
                     BlockPos escapePos = findEscapePosition();
                     if (escapePos != null) {
                         teleportToStandPosition(escapePos);
@@ -564,11 +564,11 @@ public class PlacementPlanner {
 
             // Place the block (even if slightly out of range)
             BlockPos nextTarget = peekNextTarget();
-            LOGGER.info("Attempting to place block at target={} golemPos={} nextTarget={}",
+            LOGGER.debug("Attempting to place block at target={} golemPos={} nextTarget={}",
                 currentTarget, golem.blockPosition(), nextTarget);
             boolean placed = blockPlacer.placeBlock(currentTarget, nextTarget);
             if (placed) {
-                LOGGER.info("Successfully placed block at {} remaining={} deferred={}",
+                LOGGER.debug("Successfully placed block at {} remaining={} deferred={}",
                     currentTarget, remainingBlocks.size(), deferredBlocks.size());
                 remainingBlocks.remove(currentTarget);
                 deferAttempts.remove(currentTarget);
@@ -583,7 +583,7 @@ public class PlacementPlanner {
                 // already set buildingPaths=false, stopping the outer tick loop.
                 // For other failures (mine actions, duplicates), deferring lets the planner
                 // try other blocks instead of getting stuck on this one forever.
-                LOGGER.info("Block placer rejected, deferring: target={}", currentTarget);
+                LOGGER.debug("Block placer rejected, deferring: target={}", currentTarget);
                 defer(currentTarget);
                 currentTarget = null;
                 currentStandPos = null;
@@ -674,7 +674,7 @@ public class PlacementPlanner {
         // If the filter has been blocking ALL candidates for several ticks, bypass it
         // so the golem can teleport to a new position where the filter yields different results
         if (bypassFilter) {
-            LOGGER.info("Bypassing block filter after {} all-filtered ticks to allow teleport", allFilteredTicks);
+            LOGGER.debug("Bypassing block filter after {} all-filtered ticks to allow teleport", allFilteredTicks);
         }
         List<BlockPos> scoringCandidates = new ArrayList<>();
         int scanned = 0;
@@ -765,7 +765,7 @@ public class PlacementPlanner {
         }
 
         if (!remainingBlocks.isEmpty() || !deferredBlocks.isEmpty()) {
-             LOGGER.warn("PlacementPlanner: yielded no target. Remaining={}, Deferred={}, BudgetLimited={}",
+             LOGGER.debug("PlacementPlanner: yielded no target. Remaining={}, Deferred={}, BudgetLimited={}",
                  remainingBlocks.size(), deferredBlocks.size(), selectionBlockedByBudget);
         }
 
@@ -953,9 +953,9 @@ public class PlacementPlanner {
 
         // Debug: log candidate selection
         if (candidates.size() <= 5) {
-            LOGGER.info("Stand candidates for target={}: {}", target, candidates);
+            LOGGER.debug("Stand candidates for target={}: {}", target, candidates);
         } else {
-            LOGGER.info("Stand candidates for target={}: top5={}, total={}", target,
+            LOGGER.debug("Stand candidates for target={}: top5={}, total={}", target,
                 candidates.subList(0, 5), candidates.size());
         }
 
@@ -991,7 +991,7 @@ public class PlacementPlanner {
         // because entities can't walk up without stairs/ladders. Teleport immediately.
         int fallbackAboveGolem = fallback.getY() - golemY;
         if (fallbackAboveGolem >= 1) {
-            LOGGER.info("Fallback above golem, teleporting up: fallback={} golemY={} target={}",
+            LOGGER.debug("Fallback above golem, teleporting up: fallback={} golemY={} target={}",
                 fallback, golemY, target);
             return new PlacementSearchResult(fallback, false, true);
         }
@@ -999,20 +999,20 @@ public class PlacementPlanner {
         // If target is above the golem, we're likely in tower mode - teleport immediately
         int targetAboveGolem = targetY - golemY;
         if (targetAboveGolem >= 2) {
-            LOGGER.info("Target above golem (tower mode), using fallback: fallback={} golemY={} target={}",
+            LOGGER.debug("Target above golem (tower mode), using fallback: fallback={} golemY={} target={}",
                 fallback, golemY, target);
             return new PlacementSearchResult(fallback, false, true);
         }
 
         if (attempts >= MAX_DEFER_ATTEMPTS - 1) {
-            LOGGER.info("Using fallback after max attempts: fallback={} target={}", fallback, target);
+            LOGGER.debug("Using fallback after max attempts: fallback={} target={}", fallback, target);
             return new PlacementSearchResult(fallback, false, true);
         }
 
         // If we have a good fallback (close to target Y) and many positions weren't pathable,
         // use it sooner - this helps with tower building where golem needs to teleport up
         if (fallbackIsCloseToTarget && notPathableCount >= 3) {
-            LOGGER.info("Using close fallback for tower: fallback={} target={} notPathable={}",
+            LOGGER.debug("Using close fallback for tower: fallback={} target={} notPathable={}",
                 fallback, target, notPathableCount);
             return new PlacementSearchResult(fallback, false, true);
         }
@@ -1020,7 +1020,7 @@ public class PlacementPlanner {
         // If we checked several positions and none were pathable, just use the fallback
         // This prevents getting stuck when pathfinding is unreliable
         if (notPathableCount >= 5) {
-            LOGGER.info("Many unpathable positions, using fallback: fallback={} target={} notPathable={}",
+            LOGGER.debug("Many unpathable positions, using fallback: fallback={} target={} notPathable={}",
                 fallback, target, notPathableCount);
             return new PlacementSearchResult(fallback, false, true);
         }
@@ -1031,7 +1031,7 @@ public class PlacementPlanner {
 
         // Final fallback: if we have valid candidates but couldn't path to any,
         // just return the best one and let the caller teleport
-        LOGGER.info("No pathable positions found, using fallback anyway: fallback={} target={}",
+        LOGGER.debug("No pathable positions found, using fallback anyway: fallback={} target={}",
             fallback, target);
         return new PlacementSearchResult(fallback, false, true);
     }

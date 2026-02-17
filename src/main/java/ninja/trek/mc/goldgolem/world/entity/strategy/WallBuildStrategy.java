@@ -374,23 +374,26 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 double threshold = Math.max(2.0, getWallLongestHoriz() + 1.0);
                 double dist = Math.sqrt((p.x - trackStart.x) * (p.x - trackStart.x) + (p.z - trackStart.z) * (p.z - trackStart.z));
                 if (dist >= threshold) {
+                    // Initialize lastDir from walking direction for first module
+                    if (pendingModules.isEmpty() && currentModulePlacement == null) {
+                        double initDx = p.x - trackStart.x;
+                        double initDz = p.z - trackStart.z;
+                        if (Math.abs(initDx) >= Math.abs(initDz)) {
+                            wallLastDirX = initDx >= 0 ? 1 : -1;
+                            wallLastDirZ = 0;
+                        } else {
+                            wallLastDirX = 0;
+                            wallLastDirZ = initDz >= 0 ? 1 : -1;
+                        }
+                    }
                     var cand = chooseNextModule(trackStart, p);
                     if (cand != null) {
                         pendingModules.addLast(cand);
                         // Update anchor to end
                         golem.setTrackStart(cand.end());
                         trackStart = cand.end();
-                        // Preview
-                        if (golem.level() instanceof ServerLevel) {
-                            var owner2 = golem.getOwnerPlayer();
-                            if (owner2 instanceof net.minecraft.server.level.ServerPlayer sp2) {
-                                List<Vec3> list = new ArrayList<>();
-                                list.add(cand.anchor());
-                                list.add(cand.end());
-                                Optional<Vec3> anchor = Optional.ofNullable(golem.getTrackStart());
-                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp2, golem.getId(), list, anchor);
-                            }
-                        }
+                        // Send accumulated preview lines
+                        sendPreviewLines(golem);
                     }
                 }
             }
@@ -471,6 +474,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     // Module complete, move to next
                     currentModulePlacement = null;
                     moduleBlocksLoaded = false;
+                    sendPreviewLines(golem);
                     break;
 
                 case DEFERRED:
@@ -487,8 +491,26 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             if (currentModulePlacement != null && currentModulePlacement.done()) {
                 currentModulePlacement = null;
                 moduleBlocksLoaded = false;
+                sendPreviewLines(golem);
             }
         }
+    }
+
+    private void sendPreviewLines(GoldGolemEntity golem) {
+        if (!(golem.level() instanceof ServerLevel)) return;
+        var owner = golem.getOwnerPlayer();
+        if (!(owner instanceof net.minecraft.server.level.ServerPlayer sp)) return;
+        List<Vec3> list = new ArrayList<>();
+        if (currentModulePlacement != null) {
+            list.add(currentModulePlacement.anchor());
+            list.add(currentModulePlacement.end());
+        }
+        for (var mod : pendingModules) {
+            list.add(mod.anchor());
+            list.add(mod.end());
+        }
+        java.util.Optional<Vec3> anchor = java.util.Optional.ofNullable(golem.getTrackStart());
+        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, golem.getId(), list, anchor);
     }
 
     private double getWallLongestHoriz() {
@@ -519,6 +541,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         double lineDz = playerPos.z - anchor.z;
         double lineLen = Math.hypot(lineDx, lineDz);
 
+        System.out.println("[WallStrategy] chooseNextModule: " + wallTemplates.size() + " templates, lineDir=("
+                + String.format("%.2f", lineDx) + ", " + String.format("%.2f", lineDz) + ") len="
+                + String.format("%.2f", lineLen) + " lastDir=(" + wallLastDirX + "," + wallLastDirZ + ")");
+
         double bestScore = Double.POSITIVE_INFINITY;
         ModulePlacement best = null;
 
@@ -527,6 +553,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
             int dxModule = tpl.bMarker.getX() - tpl.aMarker.getX();
             int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+
+            double bestTplScore = Double.POSITIVE_INFINITY;
+            int bestTplRot = -1;
+            boolean bestTplMir = false;
 
             int mirrorMax = wallSliceSymmetric ? 2 : 1;
             for (int rot = 0; rot < 4; rot++) {
@@ -540,33 +570,60 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
                     double yScore = Math.abs(dyNeed - dyStep);
                     double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
-                    double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz;
+                    // Penalize modules going away from the player
+                    double dot = d[0] * lineDx + d[2] * lineDz;
+                    double dirPenalty = dot < 0 ? 100.0 : 0.0;
+                    double score = (okY ? 0.0 : 1000.0) + dirPenalty + yScore * 10.0 + xz;
+                    if (score < bestTplScore) {
+                        bestTplScore = score;
+                        bestTplRot = rot;
+                        bestTplMir = mir == 1;
+                    }
                     if (score < bestScore) {
                         bestScore = score;
                         best = new ModulePlacement(ti, rot, mir == 1, anchor, end);
                     }
                 }
             }
+            System.out.println("[WallStrategy]   tpl[" + ti + "] delta=(" + dxModule + "," + dyModule + "," + dzModule
+                    + ") bestScore=" + String.format("%.3f", bestTplScore) + " rot=" + bestTplRot + " mir=" + bestTplMir);
         }
 
         // Consider empty corner (gap only) turning left/right by wall thickness
         int t = Math.max(1, wallJoinUSize);
         int lx = wallLastDirX, lz = wallLastDirZ;
         int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
-        for (int[] pv : perps) {
+        System.out.println("[WallStrategy] GAP candidates: lastDir=(" + lx + "," + lz
+                + ") thickness=" + t + " anchor=(" + String.format("%.1f", anchor.x)
+                + "," + String.format("%.1f", anchor.y) + "," + String.format("%.1f", anchor.z) + ")");
+        for (int pi = 0; pi < perps.length; pi++) {
+            int[] pv = perps[pi];
             int dxGap = pv[0] * t;
             int dzGap = pv[1] * t;
             Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
             double dyNeed = playerPos.y - anchor.y;
             double yScore = Math.abs(dyNeed);
             double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
-            double score = yScore * 10.0 + xz + 0.5; // slight penalty vs real module
+            // Penalize gaps going away from the player
+            double dotGap = dxGap * lineDx + dzGap * lineDz;
+            double dirPenalty = dotGap < 0 ? 100.0 : 0.0;
+            double score = dirPenalty + yScore * 10.0 + xz + 0.5; // slight penalty vs real module
+            String label = pi == 0 ? "LEFT" : "RIGHT";
+            System.out.println("[WallStrategy]   gap " + label + " perpDir=(" + pv[0] + "," + pv[1]
+                    + ") d=(" + dxGap + "," + dzGap + ") end=(" + String.format("%.1f", end.x)
+                    + "," + String.format("%.1f", end.z) + ") perpDist=" + String.format("%.2f", xz)
+                    + " yScore=" + String.format("%.2f", yScore) + " score=" + String.format("%.3f", score)
+                    + (score < bestScore ? " *NEW BEST*" : ""));
             if (score < bestScore) {
                 bestScore = score;
                 best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
             }
         }
 
+        if (best != null) {
+            String type = best instanceof GapPlacement ? "Gap" : "Module[" + best.getTplIndex() + "]";
+            System.out.println("[WallStrategy]   WINNER: " + type + " score=" + String.format("%.3f", bestScore));
+        }
         return best;
     }
 
