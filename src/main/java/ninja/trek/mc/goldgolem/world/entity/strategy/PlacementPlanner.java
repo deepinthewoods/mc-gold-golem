@@ -27,7 +27,7 @@ public class PlacementPlanner {
     private static final double MAX_VERTICAL_REACH = 3.0;  // Vertical reach limit
     private static final double PLANNING_REACH_BUFFER = 0.5;
     private static final int MAX_DEFER_ATTEMPTS = 3;
-    private static final int STUCK_THRESHOLD_TICKS = 40;  // Try pathfinding longer before giving up
+    private static final int STUCK_THRESHOLD_TICKS = 60;  // Try pathfinding longer before giving up
     private static final int SUFFOCATION_TELEPORT_RADIUS = 6;
     private static final double MIN_MOVE_DIST_SQ = 0.0004;
     private static final int DEFERRED_RETRY_INTERVAL = 4;
@@ -39,7 +39,7 @@ public class PlacementPlanner {
     private static final int MIN_NAV_FAILURES_FOR_TELEPORT = 2;
     private static final int PATH_FAILURE_WINDOW_TICKS = 20;
     private static final boolean DEBUG_COUNTERS = false;
-    private static final int MAX_CONSECUTIVE_OVERLAP_DEFERRALS = 3;  // Teleport if we defer this many blocks in a row due to overlap
+    private static final int MAX_CONSECUTIVE_OVERLAP_DEFERRALS = 6;  // Teleport if we defer this many blocks in a row due to overlap
 
     // Callback interfaces for organic placement
     @FunctionalInterface
@@ -470,7 +470,7 @@ public class PlacementPlanner {
                 if (!started) {
                     navigationFailures++;
                     // Give navigation a few attempts before teleporting
-                    if (navigationFailures >= 3) {
+                    if (navigationFailures >= 6) {
                         if (currentStandPos != null && !currentStandPos.equals(golem.blockPosition())) {
                             LOGGER.debug("Navigation failed {} times, teleporting: standPos={} target={}",
                                     navigationFailures, currentStandPos, currentTarget);
@@ -541,8 +541,8 @@ public class PlacementPlanner {
 
                 // If we've been deferring due to overlap repeatedly, we're trapped - teleport out
                 if (consecutiveOverlapDeferrals >= MAX_CONSECUTIVE_OVERLAP_DEFERRALS) {
-                    LOGGER.debug("Golem trapped by own builds after {} deferrals, teleporting out", consecutiveOverlapDeferrals);
-                    BlockPos escapePos = findEscapePosition();
+                    LOGGER.debug("Golem trapped by own builds after {} deferrals, short-hop escape", consecutiveOverlapDeferrals);
+                    BlockPos escapePos = findNearestSafeStandPosition(golem.blockPosition(), 4);
                     if (escapePos != null) {
                         teleportToStandPosition(escapePos);
                         consecutiveOverlapDeferrals = 0;
@@ -949,7 +949,6 @@ public class PlacementPlanner {
 
         BlockPos fallback = candidates.get(0); // Best candidate (closest to target Y)
         boolean budgetLimited = false;
-        int notPathableCount = 0;
 
         // Debug: log candidate selection
         if (candidates.size() <= 5) {
@@ -974,18 +973,10 @@ public class PlacementPlanner {
             }
             if (status == PathCheckStatus.UNKNOWN) {
                 budgetLimited = true;
-            } else if (status == PathCheckStatus.NOT_PATHABLE) {
-                notPathableCount++;
             }
         }
 
-        int attempts = deferAttempts.getOrDefault(target, 0);
         int golemY = golem.blockPosition().getY();
-
-        // For tower building: if we found positions close to target Y but can't path to them,
-        // use the fallback (teleport) after just 1 defer attempt, not 2
-        int fallbackYDist = Math.abs(fallback.getY() - targetY);
-        boolean fallbackIsCloseToTarget = fallbackYDist <= 2;
 
         // Key insight: if the fallback is significantly ABOVE the golem, pathfinding will fail
         // because entities can't walk up without stairs/ladders. Teleport immediately.
@@ -1001,27 +992,6 @@ public class PlacementPlanner {
         if (targetAboveGolem >= 2) {
             LOGGER.debug("Target above golem (tower mode), using fallback: fallback={} golemY={} target={}",
                 fallback, golemY, target);
-            return new PlacementSearchResult(fallback, false, true);
-        }
-
-        if (attempts >= MAX_DEFER_ATTEMPTS - 1) {
-            LOGGER.debug("Using fallback after max attempts: fallback={} target={}", fallback, target);
-            return new PlacementSearchResult(fallback, false, true);
-        }
-
-        // If we have a good fallback (close to target Y) and many positions weren't pathable,
-        // use it sooner - this helps with tower building where golem needs to teleport up
-        if (fallbackIsCloseToTarget && notPathableCount >= 3) {
-            LOGGER.debug("Using close fallback for tower: fallback={} target={} notPathable={}",
-                fallback, target, notPathableCount);
-            return new PlacementSearchResult(fallback, false, true);
-        }
-
-        // If we checked several positions and none were pathable, just use the fallback
-        // This prevents getting stuck when pathfinding is unreliable
-        if (notPathableCount >= 5) {
-            LOGGER.debug("Many unpathable positions, using fallback: fallback={} target={} notPathable={}",
-                fallback, target, notPathableCount);
             return new PlacementSearchResult(fallback, false, true);
         }
 
@@ -1057,75 +1027,6 @@ public class PlacementPlanner {
         }
 
         return best;
-    }
-
-    /**
-     * Find a safe escape position when the golem has trapped itself.
-     * Searches for a position where:
-     * 1. The golem can stand (solid ground, air at feet/head)
-     * 2. The position doesn't overlap with any pending blocks to place
-     * 3. Prefers positions further from the build area
-     */
-    private BlockPos findEscapePosition() {
-        BlockPos golemPos = golem.blockPosition();
-        int searchRadius = 8;
-
-        // Collect all pending block positions for overlap checking
-        Set<BlockPos> pendingBlocks = new HashSet<>();
-        pendingBlocks.addAll(remainingBlocks);
-        for (DeferredBlock db : deferredBlocks) {
-            pendingBlocks.add(db.pos);
-        }
-        if (currentTarget != null) {
-            pendingBlocks.add(currentTarget);
-        }
-
-        BlockPos bestEscape = null;
-        double bestScore = Double.NEGATIVE_INFINITY;
-
-        for (int dx = -searchRadius; dx <= searchRadius; dx++) {
-            for (int dy = -searchRadius; dy <= searchRadius; dy++) {
-                for (int dz = -searchRadius; dz <= searchRadius; dz++) {
-                    BlockPos pos = golemPos.offset(dx, dy, dz);
-
-                    if (!canStandAt(pos)) {
-                        continue;
-                    }
-
-                    // Check if this position would overlap with the golem's bounding box if standing here
-                    // (feet position and head position shouldn't be pending blocks)
-                    if (pendingBlocks.contains(pos) || pendingBlocks.contains(pos.above())) {
-                        continue;
-                    }
-
-                    // Score: prefer positions further from pending blocks (escape the build area)
-                    double minDistToPending = Double.MAX_VALUE;
-                    for (BlockPos pending : pendingBlocks) {
-                        double dist = pos.distSqr(pending);
-                        if (dist < minDistToPending) {
-                            minDistToPending = dist;
-                        }
-                    }
-
-                    // Also factor in distance from current position (don't teleport too far if not needed)
-                    double distFromGolem = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-                    // Score: maximize distance from pending blocks, but penalize very far teleports
-                    double score = minDistToPending - (distFromGolem * 0.5);
-
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestEscape = pos;
-                    }
-                }
-            }
-        }
-
-        if (bestEscape != null) {
-            LOGGER.info("Found escape position: {} (score: {})", bestEscape, bestScore);
-        }
-
-        return bestEscape;
     }
 
     /**

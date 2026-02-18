@@ -414,8 +414,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             if (!moduleBlocksLoaded) {
                 List<BlockPos> moduleBlocks = currentModulePlacement.getRemainingBlockPositions(golem, this);
                 if (!moduleBlocks.isEmpty()) {
-                    // Use block checker to skip already-correct blocks
-                    planner.setBlocks(moduleBlocks, pos -> currentModulePlacement.isBlockAlreadyCorrect(golem, pos));
+                    planner.setBlocks(moduleBlocks);
 
                     // Set up exclusion zone filter (inverted pyramid above golem)
                     planner.setBlockFilter(pos -> {
@@ -471,10 +470,15 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     break;
 
                 case COMPLETED:
-                    // Module complete, move to next
-                    currentModulePlacement = null;
-                    moduleBlocksLoaded = false;
-                    sendPreviewLines(golem);
+                    if (currentModulePlacement != null && !currentModulePlacement.done()) {
+                        // Module has remaining blocks — reload them into planner
+                        moduleBlocksLoaded = false;
+                    } else {
+                        // Module truly complete, move to next
+                        currentModulePlacement = null;
+                        moduleBlocksLoaded = false;
+                        sendPreviewLines(golem);
+                    }
                     break;
 
                 case DEFERRED:
