@@ -4,6 +4,8 @@ import java.util.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Extracts wall modules from a chain of gold markers using planar slice cuts.
@@ -41,65 +43,97 @@ public final class WallModuleExtractor {
         // its join slice against a reference. The axis that produces a matching
         // slice is the correct cut axis for that marker.
         int numCuts = numSegments - 1; // interior markers count
-        boolean[] cutIsX = new boolean[numCuts];
-        int[] cutCoord = new int[numCuts];
 
-        // Find a reference slice from a non-summon marker
-        WallJoinSlice refSlice = null;
+        // Infer the block state for the pumpkin position from a non-summon marker
+        BlockState pumpkinOverride = null;
+        if (summonGoldAbs != null) {
+            for (BlockPos g : goldMarkersRel) {
+                BlockPos gAbs = originAbs.offset(g);
+                if (gAbs.equals(summonGoldAbs)) continue;
+                BlockState candidate = world.getBlockState(gAbs.above());
+                if (!candidate.isAir() && !candidate.is(Blocks.SNOW) && !candidate.is(Blocks.GOLD_BLOCK)) {
+                    pumpkinOverride = candidate;
+                    break;
+                }
+            }
+        }
+
+        // Collect all candidate reference slices from every marker (both axes).
+        // With the pumpkin override, summon markers produce complete slices too.
+        List<WallJoinSlice> refCandidates = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             BlockPos g = goldMarkersRel.get(i);
             BlockPos markerAbs = originAbs.offset(g);
-            if (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) continue;
+            boolean isSummonMarker = summonGoldAbs != null && markerAbs.equals(summonGoldAbs);
+            BlockPos overrideAbs = isSummonMarker ? markerAbs.above() : null;
+            BlockState overrideState = isSummonMarker ? pumpkinOverride : null;
             for (WallJoinSlice.Axis axis : WallJoinSlice.Axis.values()) {
-                var s = WallJoinSlice.from(world, originAbs, voxelsRel, g, axis);
-                if (s.isPresent()) { refSlice = s.get(); break; }
-            }
-            if (refSlice != null) break;
-        }
-        // Fallback: use any marker (including summon)
-        if (refSlice == null) {
-            for (int i = 0; i < n; i++) {
-                BlockPos g = goldMarkersRel.get(i);
-                BlockPos markerAbs = originAbs.offset(g);
-                BlockPos ignore = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.above() : null;
-                for (WallJoinSlice.Axis axis : WallJoinSlice.Axis.values()) {
-                    var s = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, axis, ignore);
-                    if (s.isPresent()) { refSlice = s.get(); break; }
-                }
-                if (refSlice != null) break;
+                var s = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, axis, overrideAbs, overrideState);
+                if (s.isPresent()) refCandidates.add(s.get());
             }
         }
-        if (refSlice == null) {
+        if (refCandidates.isEmpty()) {
             return new ExtractResult(null, "Could not find any reference join slice");
         }
 
+        // Precompute slices for all interior cut markers (independent of reference choice)
+        @SuppressWarnings("unchecked")
+        Optional<WallJoinSlice>[] cutSx = new Optional[numCuts];
+        @SuppressWarnings("unchecked")
+        Optional<WallJoinSlice>[] cutSz = new Optional[numCuts];
+        BlockPos[] cutGold = new BlockPos[numCuts];
+
         for (int ci = 0; ci < numCuts; ci++) {
-            BlockPos g = goldMarkersRel.get(chain.get(ci + 1)); // interior marker
+            BlockPos g = goldMarkersRel.get(chain.get(ci + 1));
             BlockPos markerAbs = originAbs.offset(g);
             boolean isSummonMarker = summonGoldAbs != null && markerAbs.equals(summonGoldAbs);
-            BlockPos ignore = isSummonMarker ? markerAbs.above() : null;
+            BlockPos overrideAbs = isSummonMarker ? markerAbs.above() : null;
+            BlockState overrideState = isSummonMarker ? pumpkinOverride : null;
+            cutSx[ci] = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, overrideAbs, overrideState);
+            cutSz[ci] = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, overrideAbs, overrideState);
+            cutGold[ci] = g;
+        }
 
-            var sx = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, ignore);
-            var sz = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, ignore);
+        // Try each reference candidate until one successfully classifies all interior cuts
+        boolean[] cutIsX = null;
+        int[] cutCoord = null;
+        String lastCutError = null;
 
-            boolean xMatch = sx.isPresent() && (isSummonMarker
-                    ? refSlice.matchesFuzzy(sx.get(), 1, 0)
-                    : refSlice.matches(sx.get()));
-            boolean zMatch = sz.isPresent() && (isSummonMarker
-                    ? refSlice.matchesFuzzy(sz.get(), 1, 0)
-                    : refSlice.matches(sz.get()));
+        for (WallJoinSlice ref : refCandidates) {
+            boolean[] tryIsX = new boolean[numCuts];
+            int[] tryCoord = new int[numCuts];
+            boolean allCutsOk = true;
 
-            if (xMatch && zMatch) {
-                return new ExtractResult(null, "Ambiguous cut axis at marker " + g + " — both X and Z slices match the reference");
-            } else if (xMatch) {
-                cutIsX[ci] = true;
-                cutCoord[ci] = g.getX();
-            } else if (zMatch) {
-                cutIsX[ci] = false;
-                cutCoord[ci] = g.getZ();
-            } else {
-                return new ExtractResult(null, "No matching slice found at marker " + g);
+            for (int ci = 0; ci < numCuts; ci++) {
+                boolean xMatch = cutSx[ci].isPresent() && ref.matches(cutSx[ci].get());
+                boolean zMatch = cutSz[ci].isPresent() && ref.matches(cutSz[ci].get());
+
+                if (xMatch && zMatch) {
+                    lastCutError = "Ambiguous cut axis at marker " + cutGold[ci];
+                    allCutsOk = false;
+                    break;
+                } else if (xMatch) {
+                    tryIsX[ci] = true;
+                    tryCoord[ci] = cutGold[ci].getX();
+                } else if (zMatch) {
+                    tryIsX[ci] = false;
+                    tryCoord[ci] = cutGold[ci].getZ();
+                } else {
+                    lastCutError = "No matching slice found at marker " + cutGold[ci];
+                    allCutsOk = false;
+                    break;
+                }
             }
+
+            if (allCutsOk) {
+                cutIsX = tryIsX;
+                cutCoord = tryCoord;
+                break;
+            }
+        }
+
+        if (cutIsX == null) {
+            return new ExtractResult(null, lastCutError != null ? lastCutError : "No reference slice could classify all cuts");
         }
 
         for (int ci = 0; ci < numCuts; ci++) {

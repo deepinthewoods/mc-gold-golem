@@ -33,46 +33,58 @@ public final class WallJoinSlice {
 
     /** Build a slice from the plane through goldRel (relative to originAbs) along the given axis. */
     public static Optional<WallJoinSlice> from(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis) {
-        return fromIgnoring(world, originAbs, voxelsRel, goldRel, axis, null);
+        return fromIgnoring(world, originAbs, voxelsRel, goldRel, axis, null, null);
     }
 
-    public static Optional<WallJoinSlice> fromIgnoring(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis, BlockPos ignoreAbs) {
-        int planeCoord = (axis == Axis.X_THICK) ? goldRel.getX() : goldRel.getZ();
+    /** Backward-compatible delegate: override position used only as BFS bridge, excluded from points. */
+    public static Optional<WallJoinSlice> fromIgnoring(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis, BlockPos overrideAbs) {
+        return fromIgnoring(world, originAbs, voxelsRel, goldRel, axis, overrideAbs, null);
+    }
 
-        // Collect all rel voxels lying in the plane
-        // The ignored position (pumpkin slot) is included in the BFS graph for connectivity
-        // but excluded from the final slice points
+    /**
+     * Build a slice from the plane through goldRel along the given axis.
+     * If overrideAbs and overrideState are both non-null, the override position is included
+     * in the slice with the given state (used to fill in the pumpkin slot with the correct block).
+     * If overrideAbs is non-null but overrideState is null, the position is used only as a BFS
+     * bridge for connectivity but excluded from the final slice points.
+     */
+    public static Optional<WallJoinSlice> fromIgnoring(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis, BlockPos overrideAbs, @org.jetbrains.annotations.Nullable BlockState overrideState) {
+        int planeCoord = (axis == Axis.X_THICK) ? goldRel.getX() : goldRel.getZ();
+        boolean includeOverride = overrideAbs != null && overrideState != null;
+        BlockPos overrideRel = overrideAbs != null ? overrideAbs.subtract(originAbs) : null;
+
         List<BlockPos> plane = new ArrayList<>();
         Set<Long> ignoreKeys = new HashSet<>();
+        boolean overrideInPlane = false;
         for (BlockPos r : voxelsRel) {
             if ((axis == Axis.X_THICK && r.getX() == planeCoord) || (axis == Axis.Z_THICK && r.getZ() == planeCoord)) {
                 BlockPos abs = originAbs.offset(r);
                 var st = world.getBlockState(abs);
-                // exclude snow layers and gold blocks from slice
                 if (st.is(Blocks.SNOW) || st.is(Blocks.GOLD_BLOCK)) continue;
-                if (ignoreAbs != null && abs.equals(ignoreAbs)) {
-                    // Still add to plane for BFS traversal, but mark as ignored
+                if (overrideAbs != null && abs.equals(overrideAbs)) {
                     plane.add(r);
-                    int y = r.getY();
-                    int u = (axis == Axis.X_THICK) ? r.getZ() : r.getX();
-                    long key = (((long) y) << 32) ^ (u & 0xffffffffL);
-                    ignoreKeys.add(key);
+                    overrideInPlane = true;
+                    if (!includeOverride) {
+                        int y = r.getY();
+                        int u = (axis == Axis.X_THICK) ? r.getZ() : r.getX();
+                        long key = (((long) y) << 32) ^ (u & 0xffffffffL);
+                        ignoreKeys.add(key);
+                    }
                     continue;
                 }
                 if (st.isAir()) continue;
                 plane.add(r);
             }
         }
-        // If ignoreAbs is set but wasn't found in voxelsRel (e.g., air before pumpkin placement),
-        // synthetically add it as a BFS-only bridge node so the slice stays connected
-        if (ignoreAbs != null) {
-            BlockPos ignoreRel = ignoreAbs.subtract(originAbs);
-            if ((axis == Axis.X_THICK && ignoreRel.getX() == planeCoord) || (axis == Axis.Z_THICK && ignoreRel.getZ() == planeCoord)) {
-                int y = ignoreRel.getY();
-                int u = (axis == Axis.X_THICK) ? ignoreRel.getZ() : ignoreRel.getX();
-                long key = (((long) y) << 32) ^ (u & 0xffffffffL);
-                if (!ignoreKeys.contains(key)) {
-                    plane.add(ignoreRel);
+        // If override position wasn't found in voxelsRel (e.g., air before pumpkin placement),
+        // synthetically add it so the slice stays connected (and optionally included in points)
+        if (overrideAbs != null && !overrideInPlane && overrideRel != null) {
+            if ((axis == Axis.X_THICK && overrideRel.getX() == planeCoord) || (axis == Axis.Z_THICK && overrideRel.getZ() == planeCoord)) {
+                plane.add(overrideRel);
+                if (!includeOverride) {
+                    int y = overrideRel.getY();
+                    int u = (axis == Axis.X_THICK) ? overrideRel.getZ() : overrideRel.getX();
+                    long key = (((long) y) << 32) ^ (u & 0xffffffffL);
                     ignoreKeys.add(key);
                 }
             }
@@ -136,7 +148,12 @@ public final class WallJoinSlice {
             int du = ((axis == Axis.X_THICK) ? r.getZ() : r.getX()) - minU;
             Point p = new Point(dy, du);
             pts.add(p);
-            var st = world.getBlockState(originAbs.offset(r));
+            BlockState st;
+            if (includeOverride && overrideRel != null && r.equals(overrideRel)) {
+                st = overrideState;
+            } else {
+                st = world.getBlockState(originAbs.offset(r));
+            }
             ids.put(p, BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString());
             states.put(p, st);
         }
@@ -164,53 +181,6 @@ public final class WallJoinSlice {
             for (boolean mirror : new boolean[]{false, true}) {
                 for (int shift = -1; shift <= 1; shift++) {
                     if (equalUnder(A, this.blockIds, aMaxU, B, other.blockIds, bMaxU, mirror, shift)) return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    /** Fuzzy match allowing small shape or id differences (to tolerate summon interior or filtered ground types). */
-    public boolean matchesFuzzy(WallJoinSlice other, int maxShapeDiff, int maxIdMismatch) {
-        for (boolean rotated : new boolean[]{false, true}) {
-            if (!rotated && this.axis != other.axis) continue;
-            if (rotated && this.axis == other.axis) continue;
-
-            var A = this.points;
-            var B = other.points;
-            int aMaxU = A.stream().mapToInt(p -> p.du).max().orElse(0);
-            int bMaxU = B.stream().mapToInt(p -> p.du).max().orElse(0);
-
-            for (boolean mirror : new boolean[]{false, true}) {
-                for (int shift = -1; shift <= 1; shift++) {
-                    // Build transformed B set and compare with tolerance
-                    java.util.HashSet<Point> bset = new java.util.HashSet<>();
-                    for (Point pb : B) {
-                        int bu = mirror ? (bMaxU - pb.du) : pb.du;
-                        bu += shift;
-                        bset.add(new Point(pb.dy, bu));
-                    }
-                    int shapeDiff = 0;
-                    int idMismatch = 0;
-                    // Count A not in B and mismatched ids for A∩B
-                    for (Point pa : A) {
-                        if (!bset.contains(pa)) { shapeDiff++; if (shapeDiff > maxShapeDiff) break; }
-                        else {
-                            String aId = this.blockIds.get(pa);
-                            String bId = other.blockIds.get(new Point(pa.dy, mirror ? (bMaxU - pa.du) + shift : (pa.du + shift)));
-                            if (!java.util.Objects.equals(aId, bId)) { idMismatch++; if (idMismatch > maxIdMismatch) break; }
-                        }
-                    }
-                    if (shapeDiff > maxShapeDiff || idMismatch > maxIdMismatch) continue;
-                    // Count extras in B not in A
-                    java.util.HashSet<Point> aset = new java.util.HashSet<>(A);
-                    for (Point pb : B) {
-                        int bu = mirror ? (bMaxU - pb.du) : pb.du;
-                        bu += shift;
-                        Point q = new Point(pb.dy, bu);
-                        if (!aset.contains(q)) { shapeDiff++; if (shapeDiff > maxShapeDiff) break; }
-                    }
-                    if (shapeDiff <= maxShapeDiff && idMismatch <= maxIdMismatch) return true;
                 }
             }
         }

@@ -416,13 +416,17 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 if (!moduleBlocks.isEmpty()) {
                     planner.setBlocks(moduleBlocks);
 
-                    // Set up exclusion zone filter (inverted pyramid above golem)
+                    // Set up exclusion zone filter (inverted pyramid above golem).
+                    // Uses planner.getFilterPosition() so the pyramid is based on
+                    // where the golem is heading (stand pos / wander target), not
+                    // its live position — prevents the filter from excluding blocks
+                    // that will be reachable once the golem arrives.
                     planner.setBlockFilter(pos -> {
-                        BlockPos golemFeet = golem.blockPosition();
-                        int dy = pos.getY() - golemFeet.getY();
+                        BlockPos feet = planner.getFilterPosition();
+                        int dy = pos.getY() - feet.getY();
                         if (dy <= 0) return false;
-                        int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
-                        int dzAbs = Math.abs(pos.getZ() - golemFeet.getZ());
+                        int dxAbs = Math.abs(pos.getX() - feet.getX());
+                        int dzAbs = Math.abs(pos.getZ() - feet.getZ());
                         int chebyshev = Math.max(dxAbs, dzAbs);
                         return chebyshev <= dy;
                     });
