@@ -17,12 +17,21 @@ public final class WallModuleTemplate {
     public final BlockPos bMarker; // module end (relative to combined origin)
     public final List<Voxel> voxels; // positions relative to aMarker
     public final int minY; // min rel Y within module (for bottom reference)
+    public final WallJoinSlice.Axis aSliceAxis; // axis of the join slice at A side
+    public final WallJoinSlice.Axis bSliceAxis; // axis of the join slice at B side
 
     public WallModuleTemplate(BlockPos aMarker, BlockPos bMarker, List<Voxel> voxels, int minY) {
+        this(aMarker, bMarker, voxels, minY, null, null);
+    }
+
+    public WallModuleTemplate(BlockPos aMarker, BlockPos bMarker, List<Voxel> voxels, int minY,
+                              WallJoinSlice.Axis aSliceAxis, WallJoinSlice.Axis bSliceAxis) {
         this.aMarker = aMarker;
         this.bMarker = bMarker;
         this.voxels = Collections.unmodifiableList(new ArrayList<>(voxels));
         this.minY = minY;
+        this.aSliceAxis = aSliceAxis;
+        this.bSliceAxis = bSliceAxis;
     }
 
     public double horizLen() {

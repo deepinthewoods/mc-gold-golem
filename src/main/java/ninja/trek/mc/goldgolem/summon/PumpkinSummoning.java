@@ -487,7 +487,13 @@ public class PumpkinSummoning {
                 }
             }
 
+            // Compute per-module slice axes from extraction cut data
+            boolean[] cutIsX = extraction.cutIsX();
+            int numSegments = extraction.modules().size();
+            int numCuts = numSegments - 1;
+
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> templates = new java.util.ArrayList<>();
+            int moduleIdx = 0;
             for (var mod : extraction.modules()) {
                 java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel> vox = new java.util.ArrayList<>();
                 int minY = Integer.MAX_VALUE;
@@ -582,7 +588,28 @@ public class PumpkinSummoning {
                     }
                 }
 
-                templates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(mod.aMarker(), mod.bMarker(), vox, minY == Integer.MAX_VALUE ? 0 : minY));
+                // Determine A-side and B-side slice axes
+                ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis aAxis;
+                if (moduleIdx > 0 && moduleIdx - 1 < cutIsX.length) {
+                    aAxis = cutIsX[moduleIdx - 1]
+                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+                } else {
+                    aAxis = inferSliceAxisFromVoxels(mod.aMarker(), mod.voxels());
+                }
+                ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis bAxis;
+                if (moduleIdx < numCuts && moduleIdx < cutIsX.length) {
+                    bAxis = cutIsX[moduleIdx]
+                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+                } else {
+                    bAxis = inferSliceAxisFromVoxels(mod.bMarker(), mod.voxels());
+                }
+
+                templates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(
+                        mod.aMarker(), mod.bMarker(), vox,
+                        minY == Integer.MAX_VALUE ? 0 : minY, aAxis, bAxis));
+                moduleIdx++;
             }
 
             // Summon golem and persist capture metadata
@@ -651,5 +678,27 @@ public class PumpkinSummoning {
             if (!player.isCreative()) stack.shrink(1);
             return InteractionResult.SUCCESS;
         }
+    }
+
+    /**
+     * Infer the join slice axis at a gold marker from the voxel shape.
+     * Counts voxels extending along X vs Z near the marker to determine
+     * which axis the wall runs along (and thus which plane the cross-section is on).
+     */
+    private static ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis inferSliceAxisFromVoxels(
+            BlockPos marker, java.util.Set<BlockPos> voxels) {
+        int xCount = 0, zCount = 0;
+        for (BlockPos v : voxels) {
+            int dx = Math.abs(v.getX() - marker.getX());
+            int dz = Math.abs(v.getZ() - marker.getZ());
+            // Count voxels extending along each axis near the marker
+            if (dx > 0 && dx <= 2 && dz == 0) xCount++;
+            if (dz > 0 && dz <= 2 && dx == 0) zCount++;
+        }
+        // Module extends along X → cross-section is at x=const → X_THICK
+        // Module extends along Z → cross-section is at z=const → Z_THICK
+        return xCount >= zCount
+                ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
     }
 }

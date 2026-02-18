@@ -1,5 +1,6 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy.wall;
 
+import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
 import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
@@ -19,6 +20,7 @@ public class ModulePlacement {
     protected final int tplIndex;
     protected final int rot; // 0..3
     protected final boolean mirror;
+    protected final boolean reversed; // true = module placed B→A instead of A→B
     protected final Vec3 anchor;
     protected final Vec3 end;
     protected List<WallModuleTemplate.Voxel> voxels;
@@ -35,9 +37,14 @@ public class ModulePlacement {
     protected int incomingDirZ = 0;
 
     public ModulePlacement(int tplIndex, int rot, boolean mirror, Vec3 anchor, Vec3 end) {
+        this(tplIndex, rot, mirror, false, anchor, end);
+    }
+
+    public ModulePlacement(int tplIndex, int rot, boolean mirror, boolean reversed, Vec3 anchor, Vec3 end) {
         this.tplIndex = tplIndex;
         this.rot = rot;
         this.mirror = mirror;
+        this.reversed = reversed;
         this.anchor = anchor;
         this.end = end;
     }
@@ -62,6 +69,10 @@ public class ModulePlacement {
         return mirror;
     }
 
+    public boolean isReversed() {
+        return reversed;
+    }
+
     public void begin(GoldGolemEntity golem, WallBuildStrategy strategy) {
         var templates = strategy.getWallTemplates();
         if (tplIndex >= 0 && tplIndex < templates.size()) {
@@ -70,14 +81,36 @@ public class ModulePlacement {
             // Save incoming direction for join slice perpendicular
             this.incomingDirX = strategy.getWallLastDirX();
             this.incomingDirZ = strategy.getWallLastDirZ();
-            // Update last direction
+
+            // Compute the module direction (A→B or B→A when reversed)
             int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
             int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+            if (reversed) { dx = -dx; dz = -dz; }
             int[] d = rotateAndMirror(dx, 0, dz, rot, mirror);
-            if (Math.abs(d[0]) >= Math.abs(d[2])) {
-                strategy.setWallLastDir(Integer.signum(d[0]), 0);
+
+            // Update last direction using the OUTPUT-side slice axis.
+            // For normal placement the output side is B; for reversed it's A.
+            WallJoinSlice.Axis outputAxis = reversed ? tpl.aSliceAxis : tpl.bSliceAxis;
+            // Rotation swaps axes: rot 1,3 flip X_THICK <-> Z_THICK
+            if (outputAxis != null && (rot == 1 || rot == 3)) {
+                outputAxis = (outputAxis == WallJoinSlice.Axis.X_THICK)
+                        ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
+            }
+            if (outputAxis != null) {
+                if (outputAxis == WallJoinSlice.Axis.X_THICK) {
+                    // Output slice perpendicular to X → outgoing direction along X
+                    strategy.setWallLastDir(Integer.signum(d[0]), 0);
+                } else {
+                    // Output slice perpendicular to Z → outgoing direction along Z
+                    strategy.setWallLastDir(0, Integer.signum(d[2]));
+                }
             } else {
-                strategy.setWallLastDir(0, Integer.signum(d[2]));
+                // Fallback: use dominant axis of rotated delta
+                if (Math.abs(d[0]) >= Math.abs(d[2])) {
+                    strategy.setWallLastDir(Integer.signum(d[0]), 0);
+                } else {
+                    strategy.setWallLastDir(0, Integer.signum(d[2]));
+                }
             }
 
             // Cache module height info
@@ -96,17 +129,26 @@ public class ModulePlacement {
     protected void buildBlockStatesMap(GoldGolemEntity golem, WallBuildStrategy strategy, WallModuleTemplate tpl) {
         blockStatesMap = new HashMap<>();
 
+        // Reversal offset: shift voxels from A-relative to B-relative coordinates
+        int revOffX = 0, revOffY = 0, revOffZ = 0;
+        if (reversed) {
+            revOffX = -(tpl.bMarker.getX() - tpl.aMarker.getX());
+            revOffY = -(tpl.bMarker.getY() - tpl.aMarker.getY());
+            revOffZ = -(tpl.bMarker.getZ() - tpl.aMarker.getZ());
+        }
+
         // Add voxel blocks
         for (var v : voxels) {
-            int rx = v.rel.getX();
-            int ry = v.rel.getY();
-            int rz = v.rel.getZ();
+            int origRy = v.rel.getY(); // original Y for gradient sampling
+            int rx = v.rel.getX() + revOffX;
+            int ry = v.rel.getY() + revOffY;
+            int rz = v.rel.getZ() + revOffZ;
             int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
             int wx = Mth.floor(anchor.x) + d[0];
             int wy = Mth.floor(anchor.y) + d[1];
             int wz = Mth.floor(anchor.z) + d[2];
 
-            // Apply gradient sampling
+            // Apply gradient sampling (use original Y for height-based gradients)
             BlockState stateToPlace = v.state;
             String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
@@ -116,7 +158,7 @@ public class ModulePlacement {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
                 int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
-                int relY = ry - moduleMinY;
+                int relY = origRy - moduleMinY;
                 int sampledIndex = golem.sampleWallGradient(slots, window, noiseScale, moduleHeight, relY, new BlockPos(wx, wy, wz));
                 if (sampledIndex >= 0 && sampledIndex < 9) {
                     String sampledId = slots[sampledIndex];
@@ -128,21 +170,16 @@ public class ModulePlacement {
                         } else {
                             BlockState sampledState = golem.getBlockStateFromId(sampledId);
                             if (sampledState != null) {
-                                // Use template state properties on the sampled block
-                                // (copies connection states for walls/fences, orientation for stairs, etc.)
                                 BlockPos worldPos = new BlockPos(wx, wy, wz);
                                 stateToPlace = golem.getPlacementStateForBlock(worldPos, sampledState.getBlock(), v.state, 0, false);
                             } else {
-                                // Sampled slot is empty - skip this block entirely
                                 skipBlock = true;
                             }
                         }
                     } else {
-                        // Sampled slot is empty - skip this block entirely
                         skipBlock = true;
                     }
                 } else {
-                    // No valid sample index (all slots empty) - skip this block entirely
                     skipBlock = true;
                 }
             }
@@ -230,19 +267,25 @@ public class ModulePlacement {
         if (tplIndex < 0 || tplIndex >= templates.size()) return;
 
         var tpl = templates.get(tplIndex);
+        int revOffX = 0, revOffY = 0, revOffZ = 0;
+        if (reversed) {
+            revOffX = -(tpl.bMarker.getX() - tpl.aMarker.getX());
+            revOffY = -(tpl.bMarker.getY() - tpl.aMarker.getY());
+            revOffZ = -(tpl.bMarker.getZ() - tpl.aMarker.getZ());
+        }
         int ops = 0;
 
         while (cursor < voxels.size() && ops < maxOps) {
             var v = voxels.get(cursor++);
-            int rx = v.rel.getX();
-            int ry = v.rel.getY();
-            int rz = v.rel.getZ();
+            int origRy = v.rel.getY();
+            int rx = v.rel.getX() + revOffX;
+            int ry = v.rel.getY() + revOffY;
+            int rz = v.rel.getZ() + revOffZ;
             int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
             int wx = Mth.floor(anchor.x) + d[0];
             int wy = Mth.floor(anchor.y) + d[1];
             int wz = Mth.floor(anchor.z) + d[2];
 
-            // Apply gradient sampling for wall mode
             BlockState stateToPlace = v.state;
             String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
@@ -252,27 +295,22 @@ public class ModulePlacement {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
                 int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
-                // Calculate relative Y position within module (0 at bottom)
-                int relY = ry - moduleMinY;
+                int relY = origRy - moduleMinY;
                 int sampledIndex = golem.sampleWallGradient(slots, window, noiseScale, moduleHeight, relY, new BlockPos(wx, wy, wz));
                 if (sampledIndex >= 0 && sampledIndex < 9) {
                     String sampledId = slots[sampledIndex];
                     if (sampledId != null && !sampledId.isEmpty()) {
                         BlockState sampledState = golem.getBlockStateFromId(sampledId);
                         if (sampledState != null) {
-                            // Use template state properties on the sampled block
                             BlockPos worldPos = new BlockPos(wx, wy, wz);
                             stateToPlace = golem.getPlacementStateForBlock(worldPos, sampledState.getBlock(), v.state, 0, false);
                         } else {
-                            // Sampled slot is empty - skip this block entirely
                             skipBlock = true;
                         }
                     } else {
-                        // Sampled slot is empty - skip this block entirely
                         skipBlock = true;
                     }
                 } else {
-                    // No valid sample index (all slots empty) - skip this block entirely
                     skipBlock = true;
                 }
             }

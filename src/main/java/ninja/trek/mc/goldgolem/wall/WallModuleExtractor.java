@@ -16,18 +16,18 @@ import net.minecraft.world.level.block.state.BlockState;
  */
 public final class WallModuleExtractor {
     public record Module(BlockPos aMarker, BlockPos bMarker, Set<BlockPos> voxels) {}
-    public record ExtractResult(List<Module> modules, String error) {
+    public record ExtractResult(List<Module> modules, boolean[] cutIsX, List<Integer> chain, String error) {
         public boolean ok() { return modules != null && (error == null || error.isEmpty()); }
     }
 
     public static ExtractResult extract(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
         int n = goldMarkersRel.size();
-        if (n < 2) return new ExtractResult(null, "Need at least 2 gold markers");
+        if (n < 2) return new ExtractResult(null, null, null, "Need at least 2 gold markers");
 
         // Step 1: Build chain order via nearest-neighbor walk
         List<Integer> chain = buildChain(goldMarkersRel);
         if (chain.size() != n) {
-            return new ExtractResult(null, "Could not build chain from " + n + " markers (got " + chain.size() + ")");
+            return new ExtractResult(null, null, null, "Could not build chain from " + n + " markers (got " + chain.size() + ")");
         }
 
         int numSegments = chain.size() - 1;
@@ -73,7 +73,7 @@ public final class WallModuleExtractor {
             }
         }
         if (refCandidates.isEmpty()) {
-            return new ExtractResult(null, "Could not find any reference join slice");
+            return new ExtractResult(null, null, null, "Could not find any reference join slice");
         }
 
         // Precompute slices for all interior cut markers (independent of reference choice)
@@ -133,7 +133,7 @@ public final class WallModuleExtractor {
         }
 
         if (cutIsX == null) {
-            return new ExtractResult(null, lastCutError != null ? lastCutError : "No reference slice could classify all cuts");
+            return new ExtractResult(null, null, null, lastCutError != null ? lastCutError : "No reference slice could classify all cuts");
         }
 
         for (int ci = 0; ci < numCuts; ci++) {
@@ -224,15 +224,15 @@ public final class WallModuleExtractor {
             int ib = chain.get(seg + 1);
             Set<BlockPos> voxels = segmentVoxels.get(seg);
             if (voxels.isEmpty()) {
-                return new ExtractResult(null, "Empty module between markers " + ia + " and " + ib);
+                return new ExtractResult(null, null, null, "Empty module between markers " + ia + " and " + ib);
             }
             if (voxels.size() > 4096) {
-                return new ExtractResult(null, "Module between markers " + ia + " and " + ib + " exceeds 4096 blocks (" + voxels.size() + ")");
+                return new ExtractResult(null, null, null, "Module between markers " + ia + " and " + ib + " exceeds 4096 blocks (" + voxels.size() + ")");
             }
             modules.add(new Module(goldMarkersRel.get(ia), goldMarkersRel.get(ib), voxels));
         }
 
-        if (modules.size() > 64) return new ExtractResult(null, "Too many modules (" + modules.size() + ")");
+        if (modules.size() > 64) return new ExtractResult(null, null, null, "Too many modules (" + modules.size() + ")");
 
         System.out.println("[WallExtractor] Chain: " + chain + ", modules: " + modules.size());
         for (int i = 0; i < modules.size(); i++) {
@@ -240,7 +240,7 @@ public final class WallModuleExtractor {
             System.out.println("[WallExtractor]   module " + i + ": a=" + m.aMarker() + " b=" + m.bMarker() + " voxels=" + m.voxels().size());
         }
 
-        return new ExtractResult(modules, null);
+        return new ExtractResult(modules, cutIsX != null ? cutIsX : new boolean[0], chain, null);
     }
 
     private static double sq(double v) { return v * v; }

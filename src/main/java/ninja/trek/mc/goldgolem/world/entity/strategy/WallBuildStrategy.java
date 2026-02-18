@@ -558,43 +558,78 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
         for (int ti = 0; ti < wallTemplates.size(); ti++) {
             var tpl = wallTemplates.get(ti);
-            int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
             int dxModule = tpl.bMarker.getX() - tpl.aMarker.getX();
+            int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
             int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
 
             double bestTplScore = Double.POSITIVE_INFINITY;
             int bestTplRot = -1;
             boolean bestTplMir = false;
+            boolean bestTplRev = false;
 
+            // When slice is symmetric, also consider reversed (B→A) placement
+            boolean[] reverseOptions = wallSliceSymmetric ? new boolean[]{false, true} : new boolean[]{false};
             int mirrorMax = wallSliceSymmetric ? 2 : 1;
-            for (int rot = 0; rot < 4; rot++) {
-                for (int mir = 0; mir < mirrorMax; mir++) {
-                    int[] d = ModulePlacement.rotateAndMirror(dxModule, dyModule, dzModule, rot, mir == 1);
-                    Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
-                    // Y rule: toward player Y and no overshoot
-                    double dyNeed = playerPos.y - anchor.y;
-                    double dyStep = d[1];
-                    boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
-                    if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
-                    double yScore = Math.abs(dyNeed - dyStep);
-                    double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
-                    // Penalize modules going away from the player
-                    double dot = d[0] * lineDx + d[2] * lineDz;
-                    double dirPenalty = dot < 0 ? 100.0 : 0.0;
-                    double score = (okY ? 0.0 : 1000.0) + dirPenalty + yScore * 10.0 + xz;
-                    if (score < bestTplScore) {
-                        bestTplScore = score;
-                        bestTplRot = rot;
-                        bestTplMir = mir == 1;
-                    }
-                    if (score < bestScore) {
-                        bestScore = score;
-                        best = new ModulePlacement(ti, rot, mir == 1, anchor, end);
+
+            for (boolean rev : reverseOptions) {
+                int dx = rev ? -dxModule : dxModule;
+                int dy = rev ? -dyModule : dyModule;
+                int dz = rev ? -dzModule : dzModule;
+
+                for (int rot = 0; rot < 4; rot++) {
+                    for (int mir = 0; mir < mirrorMax; mir++) {
+                        int[] d = ModulePlacement.rotateAndMirror(dx, dy, dz, rot, mir == 1);
+                        Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
+
+                        // Y rule: toward player Y and no overshoot
+                        double dyNeed = playerPos.y - anchor.y;
+                        double dyStep = d[1];
+                        boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
+                        if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
+                        double yScore = Math.abs(dyNeed - dyStep);
+                        double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
+
+                        // Penalize modules going away from the player
+                        double dot = d[0] * lineDx + d[2] * lineDz;
+                        double dirPenalty = dot < 0 ? 100.0 : 0.0;
+
+                        // Incoming direction constraint: input-side axis must match wallLastDir
+                        WallJoinSlice.Axis inputAxis = rev ? tpl.bSliceAxis : tpl.aSliceAxis;
+                        double axisPenalty = 0.0;
+                        if (inputAxis != null) {
+                            WallJoinSlice.Axis rotatedInputAxis = inputAxis;
+                            if (rot == 1 || rot == 3) {
+                                rotatedInputAxis = (inputAxis == WallJoinSlice.Axis.X_THICK)
+                                        ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
+                            }
+                            boolean axisMatch;
+                            if (wallLastDirX != 0 && wallLastDirZ == 0) {
+                                axisMatch = (rotatedInputAxis == WallJoinSlice.Axis.X_THICK);
+                            } else if (wallLastDirZ != 0 && wallLastDirX == 0) {
+                                axisMatch = (rotatedInputAxis == WallJoinSlice.Axis.Z_THICK);
+                            } else {
+                                axisMatch = true; // unknown direction, no penalty
+                            }
+                            if (!axisMatch) axisPenalty = 50.0;
+                        }
+
+                        double score = (okY ? 0.0 : 1000.0) + dirPenalty + axisPenalty + yScore * 10.0 + xz;
+                        if (score < bestTplScore) {
+                            bestTplScore = score;
+                            bestTplRot = rot;
+                            bestTplMir = mir == 1;
+                            bestTplRev = rev;
+                        }
+                        if (score < bestScore) {
+                            bestScore = score;
+                            best = new ModulePlacement(ti, rot, mir == 1, rev, anchor, end);
+                        }
                     }
                 }
             }
             System.out.println("[WallStrategy]   tpl[" + ti + "] delta=(" + dxModule + "," + dyModule + "," + dzModule
-                    + ") bestScore=" + String.format("%.3f", bestTplScore) + " rot=" + bestTplRot + " mir=" + bestTplMir);
+                    + ") bestScore=" + String.format("%.3f", bestTplScore) + " rot=" + bestTplRot
+                    + " mir=" + bestTplMir + " rev=" + bestTplRev);
         }
 
         // Only consider gap (empty corner) placements if no template can turn corners
@@ -622,10 +657,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 double dyNeed = playerPos.y - anchor.y;
                 double yScore = Math.abs(dyNeed);
                 double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
-                // Penalize gaps going away from the player
                 double dotGap = dxGap * lineDx + dzGap * lineDz;
                 double dirPenalty = dotGap < 0 ? 100.0 : 0.0;
-                double score = dirPenalty + yScore * 10.0 + xz + 0.5; // slight penalty vs real module
+                double score = dirPenalty + yScore * 10.0 + xz + 0.5;
                 String label = pi == 0 ? "LEFT" : "RIGHT";
                 System.out.println("[WallStrategy]   gap " + label + " perpDir=(" + pv[0] + "," + pv[1]
                         + ") d=(" + dxGap + "," + dzGap + ") end=(" + String.format("%.1f", end.x)
@@ -640,7 +674,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         }
 
         if (best != null) {
-            String type = best instanceof GapPlacement ? "Gap" : "Module[" + best.getTplIndex() + "]";
+            String type = best instanceof GapPlacement ? "Gap"
+                    : "Module[" + best.getTplIndex() + (best.isReversed() ? " REV" : "") + "]";
             System.out.println("[WallStrategy]   WINNER: " + type + " score=" + String.format("%.3f", bestScore));
         }
         return best;

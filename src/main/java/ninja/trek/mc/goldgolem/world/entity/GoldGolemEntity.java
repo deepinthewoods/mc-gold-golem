@@ -949,6 +949,8 @@ public class GoldGolemEntity extends PathfinderMob {
             t.add("a", serializeVec(tpl.aMarker));
             t.add("b", serializeVec(tpl.bMarker));
             t.addProperty("minY", tpl.minY);
+            if (tpl.aSliceAxis != null) t.addProperty("aSliceAxis", tpl.aSliceAxis.name());
+            if (tpl.bSliceAxis != null) t.addProperty("bSliceAxis", tpl.bSliceAxis.name());
             JsonArray voxels = new JsonArray();
             for (var v : tpl.voxels) {
                 JsonObject vj = new JsonObject();
@@ -1027,7 +1029,17 @@ public class GoldGolemEntity extends PathfinderMob {
                         }
                     }
                 }
-                wallTemplates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(a, b, voxels, minY));
+                ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis aSliceAxis = null;
+                ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis bSliceAxis = null;
+                if (t.has("aSliceAxis")) {
+                    try { aSliceAxis = ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.valueOf(t.get("aSliceAxis").getAsString()); }
+                    catch (IllegalArgumentException ignored) {}
+                }
+                if (t.has("bSliceAxis")) {
+                    try { bSliceAxis = ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.valueOf(t.get("bSliceAxis").getAsString()); }
+                    catch (IllegalArgumentException ignored) {}
+                }
+                wallTemplates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(a, b, voxels, minY, aSliceAxis, bSliceAxis));
             }
         }
 
