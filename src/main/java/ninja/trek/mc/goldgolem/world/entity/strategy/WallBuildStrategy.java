@@ -226,12 +226,15 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void readLegacyNbt(net.minecraft.world.level.storage.ValueInput view) {
-        moduleBlocksLoaded = view.getBooleanOr("WallModuleBlocksLoaded", false);
+        // moduleBlocksLoaded and planner state are transient — they depend on
+        // currentModulePlacement which is not serialized.  After a world reload
+        // the in-progress module is gone, so we must start fresh.
+        moduleBlocksLoaded = false;
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
-            view.child("WallPlanner").ifPresent(planner::readView);
+            planner.clear();
         }
     }
 
@@ -362,6 +365,15 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Ensure planner exists
         if (planner == null) {
             planner = new PlacementPlanner(golem);
+        }
+
+        // Retry template loading if needed (e.g. after world reload where
+        // lazy-load failed because the level wasn't fully ready yet)
+        if ((wallTemplates == null || wallTemplates.isEmpty()) && entity != null) {
+            var reloaded = entity.getWallTemplates();
+            if (reloaded != null && !reloaded.isEmpty()) {
+                wallTemplates = new ArrayList<>(reloaded);
+            }
         }
 
         // Track anchors and enqueue modules based on movement
