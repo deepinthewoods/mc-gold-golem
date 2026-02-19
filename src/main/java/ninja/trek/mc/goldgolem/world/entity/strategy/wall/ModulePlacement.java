@@ -10,6 +10,8 @@ import java.util.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -321,6 +323,28 @@ public class ModulePlacement {
         return blockStatesMap != null && blockStatesMap.isEmpty();
     }
 
+    /**
+     * Remove entries where the world already has the correct block.
+     * Used after reconstruction to skip already-placed blocks.
+     */
+    public void removeCorrectBlocks(GoldGolemEntity golem) {
+        if (blockStatesMap != null) {
+            blockStatesMap.keySet().removeIf(pos -> isBlockAlreadyCorrect(golem, pos));
+        }
+    }
+
+    /**
+     * Retain only the given positions in blockStatesMap and minePositions.
+     * Used after reconstruction to filter out blocks placed before save.
+     */
+    public void retainOnlyPositions(Set<BlockPos> positions) {
+        if (positions == null) return;
+        if (blockStatesMap != null) {
+            blockStatesMap.keySet().retainAll(positions);
+        }
+        minePositions.retainAll(positions);
+    }
+
     public static int[] rotateAndMirror(int x, int y, int z, int rot, boolean mirror) {
         int rx = x, rz = z;
         switch (rot & 3) {
@@ -330,5 +354,45 @@ public class ModulePlacement {
         }
         if (mirror) rx = -rx;
         return new int[]{rx, y, rz};
+    }
+
+    // ========== Serialization helpers ==========
+
+    /**
+     * Write this placement's config to a ValueOutput view.
+     */
+    public void writeTo(ValueOutput view, String prefix) {
+        view.putBoolean(prefix + "isGap", false);
+        view.putInt(prefix + "tpl", tplIndex);
+        view.putInt(prefix + "rot", rot);
+        view.putBoolean(prefix + "mir", mirror);
+        view.putBoolean(prefix + "rev", reversed);
+        view.putDouble(prefix + "ax", anchor.x);
+        view.putDouble(prefix + "ay", anchor.y);
+        view.putDouble(prefix + "az", anchor.z);
+        view.putDouble(prefix + "ex", end.x);
+        view.putDouble(prefix + "ey", end.y);
+        view.putDouble(prefix + "ez", end.z);
+    }
+
+    /**
+     * Read a ModulePlacement or GapPlacement from a ValueInput view.
+     */
+    public static ModulePlacement readFrom(ValueInput view, String prefix) {
+        boolean isGap = view.getBooleanOr(prefix + "isGap", false);
+        if (isGap) {
+            return GapPlacement.readGapFrom(view, prefix);
+        }
+        int tpl = view.getIntOr(prefix + "tpl", -1);
+        int rot = view.getIntOr(prefix + "rot", 0);
+        boolean mir = view.getBooleanOr(prefix + "mir", false);
+        boolean rev = view.getBooleanOr(prefix + "rev", false);
+        double ax = view.getDoubleOr(prefix + "ax", 0);
+        double ay = view.getDoubleOr(prefix + "ay", 0);
+        double az = view.getDoubleOr(prefix + "az", 0);
+        double ex = view.getDoubleOr(prefix + "ex", 0);
+        double ey = view.getDoubleOr(prefix + "ey", 0);
+        double ez = view.getDoubleOr(prefix + "ez", 0);
+        return new ModulePlacement(tpl, rot, mir, rev, new Vec3(ax, ay, az), new Vec3(ex, ey, ez));
     }
 }

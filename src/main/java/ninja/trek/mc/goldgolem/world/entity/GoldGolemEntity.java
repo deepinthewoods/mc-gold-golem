@@ -3066,7 +3066,14 @@ public class GoldGolemEntity extends PathfinderMob {
                         }
                         // Path/Wall/Tower modes need trackStart initialization
                         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
-                            this.trackStart = new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
+                            // For wall mode RESUMED, resume from last module endpoint
+                            Vec3 resumePos = null;
+                            if (result == BuildStrategy.FeedResult.RESUMED
+                                    && activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
+                                resumePos = wall.getResumeTrackStart();
+                            }
+                            this.trackStart = resumePos != null ? resumePos
+                                    : new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
                             var owner = getOwnerPlayer();
                             if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
                                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart), false);
@@ -3216,7 +3223,7 @@ public class GoldGolemEntity extends PathfinderMob {
             activeStrategy.setWaitingForResources(true);
         }
         this.getNavigation().stop();
-        spawnThunderClouds();
+        spawnAngry();
         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
             this.trackStart = null;
             this.pendingLines.clear();

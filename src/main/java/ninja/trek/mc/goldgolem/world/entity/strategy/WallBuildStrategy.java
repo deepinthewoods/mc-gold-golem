@@ -55,6 +55,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
     private BlockPos currentMineTarget = null;  // Track position being mined so planner can mark it done
 
+    // Reconstruction state for current module after world reload
+    private boolean needsReconstruction = false;
+    private Set<BlockPos> savedRemainingPositions = null;
+
+    // Stuck state detection
+    private int noModuleTicks = 0;
+
     @Override
     public BuildMode getMode() {
         return BuildMode.WALL;
@@ -263,19 +270,117 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         if (planner != null) {
             planner.writeView(view.child("WallPlanner"));
         }
+
+        // 3a: Save waitingForResources, direction, output slice
+        view.putBoolean("WallWaiting", waitingForResources);
+        view.putInt("WallDirX", wallLastDirX);
+        view.putInt("WallDirZ", wallLastDirZ);
+        if (currentOutputSlice != null) {
+            view.putString("WallOutSliceAxis", currentOutputSlice.axis.name());
+            List<WallJoinSlice.Point> sorted = new ArrayList<>(currentOutputSlice.points);
+            sorted.sort(Comparator.<WallJoinSlice.Point>comparingInt(WallJoinSlice.Point::dy).thenComparingInt(WallJoinSlice.Point::du));
+            view.putInt("WallOutSliceCnt", sorted.size());
+            for (int i = 0; i < sorted.size(); i++) {
+                var p = sorted.get(i);
+                view.putInt("WallOS_dy" + i, p.dy());
+                view.putInt("WallOS_du" + i, p.du());
+                String id = currentOutputSlice.blockIds.get(p);
+                view.putString("WallOS_id" + i, id != null ? id : "");
+            }
+        } else {
+            view.putInt("WallOutSliceCnt", 0);
+        }
+
+        // 3b: Save pending modules
+        view.putInt("WallPendCount", pendingModules.size());
+        int pi = 0;
+        for (ModulePlacement mod : pendingModules) {
+            mod.writeTo(view, "WallPend" + pi + "_");
+            pi++;
+        }
+
+        // 3c: Save current module placement
+        view.putBoolean("WallCurMod_exists", currentModulePlacement != null);
+        if (currentModulePlacement != null) {
+            currentModulePlacement.writeTo(view, "WallCurMod_");
+            // Save remaining block positions (blockStatesMap keys + minePositions)
+            List<BlockPos> remaining = currentModulePlacement.getRemainingBlockPositions(
+                    entity, this);
+            int[] posArray = new int[remaining.size() * 3];
+            for (int i = 0; i < remaining.size(); i++) {
+                BlockPos bp = remaining.get(i);
+                posArray[i * 3] = bp.getX();
+                posArray[i * 3 + 1] = bp.getY();
+                posArray[i * 3 + 2] = bp.getZ();
+            }
+            view.putIntArray("WallCurMod_rem", posArray);
+        }
     }
 
     @Override
     public void readLegacyNbt(net.minecraft.world.level.storage.ValueInput view) {
-        // moduleBlocksLoaded and planner state are transient — they depend on
-        // currentModulePlacement which is not serialized.  After a world reload
-        // the in-progress module is gone, so we must start fresh.
+        // Planner and moduleBlocksLoaded are reconstructed, not restored directly
         moduleBlocksLoaded = false;
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
             planner.clear();
+        }
+
+        // 3a: Restore waitingForResources, direction, output slice
+        waitingForResources = view.getBooleanOr("WallWaiting", false);
+        wallLastDirX = view.getIntOr("WallDirX", 1);
+        wallLastDirZ = view.getIntOr("WallDirZ", 0);
+        int osCnt = view.getIntOr("WallOutSliceCnt", 0);
+        if (osCnt > 0 && view.contains("WallOutSliceAxis")) {
+            String axisStr = view.getStringOr("WallOutSliceAxis", null);
+            if (axisStr != null) {
+                try {
+                    WallJoinSlice.Axis osAxis = WallJoinSlice.Axis.valueOf(axisStr);
+                    Set<WallJoinSlice.Point> pts = new HashSet<>();
+                    Map<WallJoinSlice.Point, String> ids = new HashMap<>();
+                    for (int i = 0; i < osCnt; i++) {
+                        int dy = view.getIntOr("WallOS_dy" + i, 0);
+                        int du = view.getIntOr("WallOS_du" + i, 0);
+                        String id = view.getStringOr("WallOS_id" + i, "");
+                        WallJoinSlice.Point p = new WallJoinSlice.Point(dy, du);
+                        pts.add(p);
+                        if (!id.isEmpty()) ids.put(p, id);
+                    }
+                    currentOutputSlice = WallJoinSlice.fromData(osAxis, pts, ids);
+                } catch (IllegalArgumentException ignored) {
+                    currentOutputSlice = null;
+                }
+            }
+        } else {
+            currentOutputSlice = null;
+        }
+
+        // 3b: Restore pending modules
+        pendingModules.clear();
+        int pendCount = view.getIntOr("WallPendCount", 0);
+        for (int i = 0; i < pendCount; i++) {
+            ModulePlacement mod = ModulePlacement.readFrom(view, "WallPend" + i + "_");
+            if (mod != null) {
+                pendingModules.addLast(mod);
+            }
+        }
+
+        // 3c: Restore current module (lazy reconstruction)
+        if (view.getBooleanOr("WallCurMod_exists", false)) {
+            currentModulePlacement = ModulePlacement.readFrom(view, "WallCurMod_");
+            if (currentModulePlacement != null) {
+                // Load saved remaining positions for reconstruction filtering
+                int[] posArray = view.getIntArray("WallCurMod_rem").orElseGet(() -> new int[0]);
+                savedRemainingPositions = new HashSet<>();
+                for (int i = 0; i + 2 < posArray.length; i += 3) {
+                    savedRemainingPositions.add(new BlockPos(posArray[i], posArray[i + 1], posArray[i + 2]));
+                }
+                needsReconstruction = true;
+            }
+        } else {
+            currentModulePlacement = null;
         }
     }
 
@@ -361,6 +466,21 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     public void setCurrentOutputSlice(WallJoinSlice slice) { this.currentOutputSlice = slice; }
 
     /**
+     * Get the resume track start position for wall mode.
+     * Returns the end of the last pending module, or the end of the current module,
+     * or null if there's no module state to resume from.
+     */
+    public Vec3 getResumeTrackStart() {
+        if (!pendingModules.isEmpty()) {
+            return pendingModules.peekLast().end();
+        }
+        if (currentModulePlacement != null) {
+            return currentModulePlacement.end();
+        }
+        return null;
+    }
+
+    /**
      * Get the gradient group manager for wall blocks.
      */
     public GradientGroupManager getGroups() {
@@ -421,6 +541,21 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             }
         }
 
+        // Reconstruct current module after world reload (lazy, first tick)
+        if (needsReconstruction && currentModulePlacement != null) {
+            if (wallTemplates != null && !wallTemplates.isEmpty()) {
+                currentModulePlacement.begin(golem, this);
+                // Remove entries where the world already has the correct block
+                currentModulePlacement.removeCorrectBlocks(golem);
+                // Also remove entries not in the saved remaining positions
+                currentModulePlacement.retainOnlyPositions(savedRemainingPositions);
+                moduleBlocksLoaded = false;
+                needsReconstruction = false;
+                savedRemainingPositions = null;
+            }
+            // If templates aren't loaded yet, keep the flag and retry next tick
+        }
+
         // Track anchors and enqueue modules based on movement
         if (owner != null && owner.onGround()) {
             Vec3 p = new Vec3(owner.getX(), owner.getY() + 0.05, owner.getZ());
@@ -467,6 +602,21 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 currentModulePlacement.begin(golem, this);
                 moduleBlocksLoaded = false;
             }
+        }
+
+        // Stuck state detection: if we have no work and have been initialized, count ticks
+        if (currentModulePlacement == null && pendingModules.isEmpty() && trackStart != null) {
+            noModuleTicks++;
+            if (noModuleTicks >= 100) { // ~5 seconds
+                golem.setBuildingPaths(false);
+                if (golem.level() instanceof ServerLevel sw) {
+                    sw.sendParticles(net.minecraft.core.particles.ParticleTypes.CLOUD,
+                            golem.getX(), golem.getY() + 1.0, golem.getZ(), 12, 0.4, 0.2, 0.4, 0.02);
+                }
+                noModuleTicks = 0;
+            }
+        } else {
+            noModuleTicks = 0;
         }
 
         // Process current module with PlacementPlanner

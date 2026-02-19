@@ -8,6 +8,8 @@ import ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy;
 import java.util.Collections;
 import java.util.List;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -65,5 +67,39 @@ public final class GapPlacement extends ModulePlacement {
     @Override
     public WallJoinSlice computeOutputSlice(java.util.List<WallModuleTemplate> templates) {
         return null; // Gap has no profile to enforce
+    }
+
+    // ========== Serialization helpers ==========
+
+    @Override
+    public void writeTo(ValueOutput view, String prefix) {
+        view.putBoolean(prefix + "isGap", true);
+        view.putInt(prefix + "gdx", dx);
+        view.putInt(prefix + "gdz", dz);
+        view.putInt(prefix + "gdrx", dirx);
+        view.putInt(prefix + "gdrz", dirz);
+        view.putDouble(prefix + "ax", anchor.x);
+        view.putDouble(prefix + "ay", anchor.y);
+        view.putDouble(prefix + "az", anchor.z);
+        view.putDouble(prefix + "ex", end.x);
+        view.putDouble(prefix + "ey", end.y);
+        view.putDouble(prefix + "ez", end.z);
+    }
+
+    /**
+     * Read a GapPlacement from a ValueInput view.
+     */
+    public static GapPlacement readGapFrom(ValueInput view, String prefix) {
+        int gdx = view.getIntOr(prefix + "gdx", 0);
+        int gdz = view.getIntOr(prefix + "gdz", 0);
+        int gdrx = view.getIntOr(prefix + "gdrx", 1);
+        int gdrz = view.getIntOr(prefix + "gdrz", 0);
+        double ax = view.getDoubleOr(prefix + "ax", 0);
+        double ay = view.getDoubleOr(prefix + "ay", 0);
+        double az = view.getDoubleOr(prefix + "az", 0);
+        double ex = view.getDoubleOr(prefix + "ex", 0);
+        double ey = view.getDoubleOr(prefix + "ey", 0);
+        double ez = view.getDoubleOr(prefix + "ez", 0);
+        return new GapPlacement(gdx, gdz, new Vec3(ax, ay, az), new Vec3(ex, ey, ez), gdrx, gdrz);
     }
 }
