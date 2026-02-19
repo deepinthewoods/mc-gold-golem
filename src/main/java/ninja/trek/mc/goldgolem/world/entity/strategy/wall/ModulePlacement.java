@@ -24,9 +24,6 @@ public class ModulePlacement {
     protected final Vec3 anchor;
     protected final Vec3 end;
     protected List<WallModuleTemplate.Voxel> voxels;
-    protected int cursor = 0;
-    protected boolean joinPlaced = false;
-
     // Cached block positions and states for PlacementPlanner integration
     protected Map<BlockPos, BlockState> blockStatesMap = null;
     // Positions where gradient sampled a mine action (instead of placing a block)
@@ -73,6 +70,55 @@ public class ModulePlacement {
         return reversed;
     }
 
+    /**
+     * Compute the output-side join slice this placement would produce, with
+     * the placement transform (rot, mirror) applied. Returns null if the
+     * template has no slice on the output side.
+     */
+    public WallJoinSlice computeOutputSlice(java.util.List<WallModuleTemplate> templates) {
+        if (tplIndex < 0 || tplIndex >= templates.size()) return null;
+        var tpl = templates.get(tplIndex);
+        WallJoinSlice outputSlice = reversed ? tpl.getASlice() : tpl.getBSlice();
+        if (outputSlice == null) return null;
+        return outputSlice.transformedDu(rot, mirror);
+    }
+
+    /**
+     * Compute the output direction this placement would set on wallLastDir,
+     * without actually calling begin(). Used to simulate wallLastDir through
+     * the pending queue so chooseNextModule sees the correct effective direction.
+     * @return {dirX, dirZ} or null if template lookup fails
+     */
+    public int[] computeOutputDir(java.util.List<WallModuleTemplate> templates) {
+        if (tplIndex < 0 || tplIndex >= templates.size()) return null;
+        var tpl = templates.get(tplIndex);
+        int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
+        int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+        if (reversed) { dx = -dx; dz = -dz; }
+        int[] d = rotateAndMirror(dx, 0, dz, rot, mirror);
+        WallJoinSlice.Axis outputAxis = reversed ? tpl.aSliceAxis : tpl.bSliceAxis;
+        if (outputAxis != null && (rot == 1 || rot == 3)) {
+            outputAxis = (outputAxis == WallJoinSlice.Axis.X_THICK)
+                    ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
+        }
+        if (outputAxis != null) {
+            // Use axis-aligned component, but fall through to dominant-axis
+            // fallback if the expected component is zero (e.g. corner module
+            // where delta has no component along the output axis)
+            if (outputAxis == WallJoinSlice.Axis.X_THICK && d[0] != 0) {
+                return new int[]{Integer.signum(d[0]), 0};
+            } else if (outputAxis == WallJoinSlice.Axis.Z_THICK && d[2] != 0) {
+                return new int[]{0, Integer.signum(d[2])};
+            }
+        }
+        // Fallback: use dominant axis of rotated delta
+        if (Math.abs(d[0]) >= Math.abs(d[2])) {
+            return new int[]{Integer.signum(d[0]), 0};
+        } else {
+            return new int[]{0, Integer.signum(d[2])};
+        }
+    }
+
     public void begin(GoldGolemEntity golem, WallBuildStrategy strategy) {
         var templates = strategy.getWallTemplates();
         if (tplIndex >= 0 && tplIndex < templates.size()) {
@@ -97,20 +143,33 @@ public class ModulePlacement {
                         ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
             }
             if (outputAxis != null) {
-                if (outputAxis == WallJoinSlice.Axis.X_THICK) {
-                    // Output slice perpendicular to X → outgoing direction along X
+                // Use axis-aligned component, but fall through to dominant-axis
+                // fallback if the expected component is zero (e.g. corner module)
+                if (outputAxis == WallJoinSlice.Axis.X_THICK && d[0] != 0) {
                     strategy.setWallLastDir(Integer.signum(d[0]), 0);
-                } else {
-                    // Output slice perpendicular to Z → outgoing direction along Z
+                } else if (outputAxis == WallJoinSlice.Axis.Z_THICK && d[2] != 0) {
                     strategy.setWallLastDir(0, Integer.signum(d[2]));
+                } else {
+                    // Fallback: use dominant axis of rotated delta
+                    if (Math.abs(d[0]) >= Math.abs(d[2])) {
+                        strategy.setWallLastDir(Integer.signum(d[0]), 0);
+                    } else {
+                        strategy.setWallLastDir(0, Integer.signum(d[2]));
+                    }
                 }
             } else {
-                // Fallback: use dominant axis of rotated delta
+                // No axis info: use dominant axis of rotated delta
                 if (Math.abs(d[0]) >= Math.abs(d[2])) {
                     strategy.setWallLastDir(Integer.signum(d[0]), 0);
                 } else {
                     strategy.setWallLastDir(0, Integer.signum(d[2]));
                 }
+            }
+
+            // Set current output slice profile on the strategy
+            WallJoinSlice outputSlice = reversed ? tpl.getASlice() : tpl.getBSlice();
+            if (outputSlice != null) {
+                strategy.setCurrentOutputSlice(outputSlice.transformedDu(rot, mirror));
             }
 
             // Cache module height info
@@ -211,6 +270,13 @@ public class ModulePlacement {
     }
 
     /**
+     * Remove a mine position after it has been successfully mined.
+     */
+    public void removeMinePosition(BlockPos pos) {
+        minePositions.remove(pos);
+    }
+
+    /**
      * Check if the correct block is already at the given position.
      * Used to skip blocks when resuming a build.
      */
@@ -250,89 +316,9 @@ public class ModulePlacement {
         return true;
     }
 
-    /**
-     * Increment the progress counter.
-     */
-    public void incrementProgress() {
-        cursor++;
-    }
-
-    public void placeSome(GoldGolemEntity golem, WallBuildStrategy strategy, int maxOps) {
-        if (!joinPlaced) {
-            placeJoinSliceAtAnchor(golem, strategy);
-            joinPlaced = true;
-        }
-
-        var templates = strategy.getWallTemplates();
-        if (tplIndex < 0 || tplIndex >= templates.size()) return;
-
-        var tpl = templates.get(tplIndex);
-        int revOffX = 0, revOffY = 0, revOffZ = 0;
-        if (reversed) {
-            revOffX = -(tpl.bMarker.getX() - tpl.aMarker.getX());
-            revOffY = -(tpl.bMarker.getY() - tpl.aMarker.getY());
-            revOffZ = -(tpl.bMarker.getZ() - tpl.aMarker.getZ());
-        }
-        int ops = 0;
-
-        while (cursor < voxels.size() && ops < maxOps) {
-            var v = voxels.get(cursor++);
-            int origRy = v.rel.getY();
-            int rx = v.rel.getX() + revOffX;
-            int ry = v.rel.getY() + revOffY;
-            int rz = v.rel.getZ() + revOffZ;
-            int[] d = rotateAndMirror(rx, ry, rz, rot, mirror);
-            int wx = Mth.floor(anchor.x) + d[0];
-            int wy = Mth.floor(anchor.y) + d[1];
-            int wz = Mth.floor(anchor.z) + d[2];
-
-            BlockState stateToPlace = v.state;
-            String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(v.state.getBlock()).toString();
-            Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
-            boolean hasGradientGroup = groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size();
-            boolean skipBlock = false;
-            if (hasGradientGroup) {
-                String[] slots = strategy.getWallGroupSlots().get(groupIdx);
-                float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
-                int noiseScale = (groupIdx < strategy.getWallGroupNoiseScales().size()) ? strategy.getWallGroupNoiseScales().get(groupIdx) : 1;
-                int relY = origRy - moduleMinY;
-                int sampledIndex = golem.sampleWallGradient(slots, window, noiseScale, moduleHeight, relY, new BlockPos(wx, wy, wz));
-                if (sampledIndex >= 0 && sampledIndex < 9) {
-                    String sampledId = slots[sampledIndex];
-                    if (sampledId != null && !sampledId.isEmpty()) {
-                        BlockState sampledState = golem.getBlockStateFromId(sampledId);
-                        if (sampledState != null) {
-                            BlockPos worldPos = new BlockPos(wx, wy, wz);
-                            stateToPlace = golem.getPlacementStateForBlock(worldPos, sampledState.getBlock(), v.state, 0, false);
-                        } else {
-                            skipBlock = true;
-                        }
-                    } else {
-                        skipBlock = true;
-                    }
-                } else {
-                    skipBlock = true;
-                }
-            }
-
-            if (!skipBlock) {
-                strategy.placeBlockStateAt(golem, wx, wy, wz, stateToPlace, rot, mirror, null);
-            }
-            ops++;
-        }
-    }
-
     public boolean done() {
-        // Done when either cursor reaches voxels size OR blockStatesMap is empty
-        if (blockStatesMap != null && blockStatesMap.isEmpty()) {
-            return true;
-        }
-        return cursor >= (voxels == null ? 0 : voxels.size());
-    }
-
-    protected void placeJoinSliceAtAnchor(GoldGolemEntity golem, WallBuildStrategy strategy) {
-        // Join template placement removed — gold marker positions are now included
-        // directly in each module's voxel list, filling the 1-block gaps at boundaries.
+        if (!minePositions.isEmpty()) return false;
+        return blockStatesMap != null && blockStatesMap.isEmpty();
     }
 
     public static int[] rotateAndMirror(int x, int y, int z, int rot, boolean mirror) {

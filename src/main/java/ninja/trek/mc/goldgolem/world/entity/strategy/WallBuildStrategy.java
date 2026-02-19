@@ -41,6 +41,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private List<JoinEntry> wallJoinTemplate = Collections.emptyList();
     private int wallLastDirX = 1;
     private int wallLastDirZ = 0;
+    private WallJoinSlice currentOutputSlice = null;
 
     // Runtime state
     private ModulePlacement currentModulePlacement = null;
@@ -134,6 +135,21 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("LastDirX", wallLastDirX);
         nbt.putInt("LastDirZ", wallLastDirZ);
 
+        // Save current output slice
+        if (currentOutputSlice != null) {
+            nbt.putString("OutSliceAxis", currentOutputSlice.axis.name());
+            List<WallJoinSlice.Point> sorted = new ArrayList<>(currentOutputSlice.points);
+            sorted.sort(Comparator.<WallJoinSlice.Point>comparingInt(WallJoinSlice.Point::dy).thenComparingInt(WallJoinSlice.Point::du));
+            nbt.putInt("OutSliceCount", sorted.size());
+            for (int i = 0; i < sorted.size(); i++) {
+                var p = sorted.get(i);
+                nbt.putInt("OS_dy" + i, p.dy());
+                nbt.putInt("OS_du" + i, p.du());
+                String id = currentOutputSlice.blockIds.get(p);
+                nbt.putString("OS_id" + i, id != null ? id : "");
+            }
+        }
+
         // Save planner state
         if (planner != null) {
             CompoundTag plannerNbt = new CompoundTag();
@@ -208,6 +224,31 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Load direction
         wallLastDirX = nbt.getIntOr("LastDirX", 1);
         wallLastDirZ = nbt.getIntOr("LastDirZ", 0);
+
+        // Load current output slice
+        String outSliceAxisStr = nbt.contains("OutSliceAxis") ? nbt.getStringOr("OutSliceAxis", null) : null;
+        if (outSliceAxisStr != null) {
+            try {
+                WallJoinSlice.Axis osAxis = WallJoinSlice.Axis.valueOf(outSliceAxisStr);
+                int count = nbt.getIntOr("OutSliceCount", 0);
+                Set<WallJoinSlice.Point> pts = new HashSet<>();
+                Map<WallJoinSlice.Point, String> ids = new HashMap<>();
+                for (int i = 0; i < count; i++) {
+                    int dy = nbt.getIntOr("OS_dy" + i, 0);
+                    int du = nbt.getIntOr("OS_du" + i, 0);
+                    String id = nbt.getStringOr("OS_id" + i, "");
+                    WallJoinSlice.Point p = new WallJoinSlice.Point(dy, du);
+                    pts.add(p);
+                    if (!id.isEmpty()) ids.put(p, id);
+                }
+                currentOutputSlice = WallJoinSlice.fromData(osAxis, pts, ids);
+            } catch (IllegalArgumentException ignored) {
+                currentOutputSlice = null;
+            }
+        } else {
+            currentOutputSlice = null;
+        }
+
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
         }
@@ -287,6 +328,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         pendingModules.clear();
         moduleBlocksLoaded = false;
         currentMineTarget = null;
+        currentOutputSlice = null;
         if (planner != null) {
             planner.clear();
         }
@@ -314,6 +356,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         this.wallLastDirX = x;
         this.wallLastDirZ = z;
     }
+
+    public WallJoinSlice getCurrentOutputSlice() { return currentOutputSlice; }
+    public void setCurrentOutputSlice(WallJoinSlice slice) { this.currentOutputSlice = slice; }
 
     /**
      * Get the gradient group manager for wall blocks.
@@ -400,11 +445,45 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     }
                     var cand = chooseNextModule(trackStart, p);
                     if (cand != null) {
-                        pendingModules.addLast(cand);
-                        // Update anchor to end
-                        golem.setTrackStart(cand.end());
-                        trackStart = cand.end();
-                        // Send accumulated preview lines
+                        // Check if the chosen module diverges from the anchor→player line
+                        double anchorLineDist = distToSegmentXZ(trackStart.x, trackStart.z,
+                                trackStart.x, trackStart.z, p.x, p.z);
+                        double endLineDist = distToSegmentXZ(cand.end().x, cand.end().z,
+                                trackStart.x, trackStart.z, p.x, p.z);
+
+                        boolean recovered = false;
+                        if (endLineDist > anchorLineDist + 1.0) {
+                            // Module leads away from the line — try recovery
+                            int effDirX = wallLastDirX;
+                            int effDirZ = wallLastDirZ;
+                            WallJoinSlice effSlice = currentOutputSlice;
+                            for (ModulePlacement pending : pendingModules) {
+                                int[] outDir = pending.computeOutputDir(wallTemplates);
+                                if (outDir != null) { effDirX = outDir[0]; effDirZ = outDir[1]; }
+                                WallJoinSlice s = pending.computeOutputSlice(wallTemplates);
+                                if (s != null) effSlice = s;
+                            }
+
+                            List<ModulePlacement> recovery = planRecoverySequence(
+                                    trackStart, p, effDirX, effDirZ, effSlice, 6, endLineDist);
+
+                            if (!recovery.isEmpty()) {
+                                for (ModulePlacement mod : recovery) {
+                                    pendingModules.addLast(mod);
+                                }
+                                Vec3 lastEnd = recovery.get(recovery.size() - 1).end();
+                                golem.setTrackStart(lastEnd);
+                                trackStart = lastEnd;
+                                recovered = true;
+                            }
+                        }
+
+                        if (!recovered) {
+                            // Normal case: enqueue single module
+                            pendingModules.addLast(cand);
+                            golem.setTrackStart(cand.end());
+                            trackStart = cand.end();
+                        }
                         sendPreviewLines(golem);
                     }
                 }
@@ -466,6 +545,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     // Mark the mined position as done in the planner so it doesn't retry it
                     if (currentMineTarget != null && planner != null) {
                         planner.markBlockDone(currentMineTarget);
+                        // Also remove from module's mine positions so done() tracks correctly
+                        if (currentModulePlacement != null) {
+                            currentModulePlacement.removeMinePosition(currentMineTarget);
+                        }
                         currentMineTarget = null;
                     }
                 }
@@ -482,7 +565,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             switch (result) {
                 case PLACED_BLOCK:
                     alternateHand();
-                    currentModulePlacement.incrementProgress();
                     break;
 
                 case COMPLETED:
@@ -546,38 +628,79 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
      * with direction (ldx, ldz) of length lLen. Falls back to point distance
      * from origin if the line has zero length.
      */
-    private static double perpDistToLine(double px, double pz, double ldx, double ldz, double lLen) {
-        if (lLen < 1e-9) return Math.hypot(px, pz);
-        // 2D cross product gives signed perpendicular distance * lLen
-        double cross = px * ldz - pz * ldx;
-        return Math.abs(cross) / lLen;
+    /**
+     * Distance from point P to the line SEGMENT from A to B in XZ.
+     * If the projection falls outside [0,1], clamps to the nearest endpoint.
+     */
+    private static double distToSegmentXZ(double px, double pz,
+                                           double ax, double az,
+                                           double bx, double bz) {
+        double abx = bx - ax, abz = bz - az;
+        double len2 = abx * abx + abz * abz;
+        if (len2 < 1e-18) return Math.hypot(px - ax, pz - az);
+        double t = ((px - ax) * abx + (pz - az) * abz) / len2;
+        t = Math.max(0, Math.min(1, t));
+        double cx = ax + t * abx, cz = az + t * abz;
+        return Math.hypot(px - cx, pz - cz);
     }
 
-    private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
-        if (wallTemplates == null || wallTemplates.isEmpty()) return null;
+    /**
+     * Build a reference join slice from the wallJoinTemplate for a given axis.
+     * This is the canonical wall cross-section profile used for profile matching.
+     */
+    private WallJoinSlice buildReferenceSlice(WallJoinSlice.Axis axis) {
+        if (wallJoinTemplate.isEmpty() || axis == null) return null;
+        Set<WallJoinSlice.Point> pts = new HashSet<>();
+        Map<WallJoinSlice.Point, String> ids = new HashMap<>();
+        for (JoinEntry e : wallJoinTemplate) {
+            WallJoinSlice.Point p = new WallJoinSlice.Point(e.dy, e.du);
+            pts.add(p);
+            if (e.id != null && !e.id.isEmpty()) {
+                // Strip property suffix (e.g. "minecraft:oak_stairs[facing=north]" -> "minecraft:oak_stairs")
+                // because template slices store plain block IDs from the registry
+                String id = e.id;
+                int bracket = id.indexOf('[');
+                if (bracket >= 0) id = id.substring(0, bracket);
+                ids.put(p, id);
+            }
+        }
+        return WallJoinSlice.fromData(axis, pts, ids);
+    }
 
-        // Anchor→player line direction in XZ plane
-        double lineDx = playerPos.x - anchor.x;
-        double lineDz = playerPos.z - anchor.z;
-        double lineLen = Math.hypot(lineDx, lineDz);
+    /**
+     * A scored candidate from the module selection process.
+     * Stores the placement, its score, and the output direction/slice it would produce.
+     */
+    private static class ScoredCandidate {
+        final ModulePlacement placement;
+        final double score;
+        final int outDirX, outDirZ;
+        final WallJoinSlice outSlice;
 
-        System.out.println("[WallStrategy] chooseNextModule: " + wallTemplates.size() + " templates, lineDir=("
-                + String.format("%.2f", lineDx) + ", " + String.format("%.2f", lineDz) + ") len="
-                + String.format("%.2f", lineLen) + " lastDir=(" + wallLastDirX + "," + wallLastDirZ + ")");
+        ScoredCandidate(ModulePlacement placement, double score, int outDirX, int outDirZ, WallJoinSlice outSlice) {
+            this.placement = placement;
+            this.score = score;
+            this.outDirX = outDirX;
+            this.outDirZ = outDirZ;
+            this.outSlice = outSlice;
+        }
+    }
 
-        double bestScore = Double.POSITIVE_INFINITY;
-        ModulePlacement best = null;
+    /**
+     * Score all valid module candidates for a given anchor/playerPos/direction/slice.
+     * Returns a list of ScoredCandidates sorted by score (best first).
+     * @param log if true, prints [WallChoose] debug lines
+     */
+    private List<ScoredCandidate> scoreCandidates(Vec3 anchor, Vec3 playerPos,
+                                                   int effectiveDirX, int effectiveDirZ,
+                                                   WallJoinSlice effectiveSlice, boolean log) {
+        List<ScoredCandidate> candidates = new ArrayList<>();
 
         for (int ti = 0; ti < wallTemplates.size(); ti++) {
             var tpl = wallTemplates.get(ti);
             int dxModule = tpl.bMarker.getX() - tpl.aMarker.getX();
             int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
             int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-
-            double bestTplScore = Double.POSITIVE_INFINITY;
-            int bestTplRot = -1;
-            boolean bestTplMir = false;
-            boolean bestTplRev = false;
 
             // When slice is symmetric, also consider reversed (B→A) placement
             boolean[] reverseOptions = wallSliceSymmetric ? new boolean[]{false, true} : new boolean[]{false};
@@ -599,15 +722,14 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
                         if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
                         double yScore = Math.abs(dyNeed - dyStep);
-                        double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
+                        // Distance from endpoint to the anchor → player segment
+                        double xz = distToSegmentXZ(end.x, end.z,
+                                anchor.x, anchor.z, playerPos.x, playerPos.z);
 
-                        // Penalize modules going away from the player
-                        double dot = d[0] * lineDx + d[2] * lineDz;
-                        double dirPenalty = dot < 0 ? 100.0 : 0.0;
+                        String candidateTag = "tpl=" + ti + " rot=" + rot + " mir=" + mir + " rev=" + rev;
 
-                        // Incoming direction constraint: input-side axis must match wallLastDir
+                        // Incoming direction constraint: input-side axis must match effective wallLastDir
                         WallJoinSlice.Axis inputAxis = rev ? tpl.bSliceAxis : tpl.aSliceAxis;
-                        double axisPenalty = 0.0;
                         if (inputAxis != null) {
                             WallJoinSlice.Axis rotatedInputAxis = inputAxis;
                             if (rot == 1 || rot == 3) {
@@ -615,33 +737,234 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                                         ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
                             }
                             boolean axisMatch;
-                            if (wallLastDirX != 0 && wallLastDirZ == 0) {
+                            if (effectiveDirX != 0 && effectiveDirZ == 0) {
                                 axisMatch = (rotatedInputAxis == WallJoinSlice.Axis.X_THICK);
-                            } else if (wallLastDirZ != 0 && wallLastDirX == 0) {
+                            } else if (effectiveDirZ != 0 && effectiveDirX == 0) {
                                 axisMatch = (rotatedInputAxis == WallJoinSlice.Axis.Z_THICK);
                             } else {
-                                axisMatch = true; // unknown direction, no penalty
+                                axisMatch = true;
                             }
-                            if (!axisMatch) axisPenalty = 50.0;
+                            if (!axisMatch) {
+                                if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(axisMatch)");
+                                continue;
+                            }
                         }
 
-                        double score = (okY ? 0.0 : 1000.0) + dirPenalty + axisPenalty + yScore * 10.0 + xz;
-                        if (score < bestTplScore) {
-                            bestTplScore = score;
-                            bestTplRot = rot;
-                            bestTplMir = mir == 1;
-                            bestTplRev = rev;
+                        // Slice profile constraint
+                        if (!wallJoinTemplate.isEmpty()) {
+                            WallJoinSlice inputSlice = rev ? tpl.getBSlice() : tpl.getASlice();
+                            if (inputSlice != null) {
+                                WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
+                                WallJoinSlice reference = buildReferenceSlice(transformedInput.axis);
+                                if (reference != null && !reference.profileEquals(transformedInput)) {
+                                    boolean subsetMatch = true;
+                                    for (WallJoinSlice.Point p : transformedInput.points) {
+                                        if (!reference.points.contains(p)) { subsetMatch = false; break; }
+                                        String inId = transformedInput.blockIds.get(p);
+                                        String refId = reference.blockIds.get(p);
+                                        if (!java.util.Objects.equals(refId, inId)) { subsetMatch = false; break; }
+                                    }
+                                    if (!subsetMatch) {
+                                        if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceProfile)");
+                                        continue;
+                                    }
+                                }
+                            }
+                        } else if (effectiveSlice != null) {
+                            WallJoinSlice inputSlice = rev ? tpl.getBSlice() : tpl.getASlice();
+                            if (inputSlice != null) {
+                                WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
+                                if (!effectiveSlice.profileEquals(transformedInput)) {
+                                    if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceFallback)");
+                                    continue;
+                                }
+                            }
                         }
-                        if (score < bestScore) {
-                            bestScore = score;
-                            best = new ModulePlacement(ti, rot, mir == 1, rev, anchor, end);
+
+                        // Forward direction constraint: module must not go backward
+                        int fwdDot = d[0] * effectiveDirX + d[2] * effectiveDirZ;
+                        if (fwdDot < 0) {
+                            if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(backward)");
+                            continue;
                         }
+
+                        // Compute output direction
+                        int outDirX, outDirZ;
+                        WallJoinSlice.Axis outputAxis = rev ? tpl.aSliceAxis : tpl.bSliceAxis;
+                        if (outputAxis != null && (rot == 1 || rot == 3)) {
+                            outputAxis = (outputAxis == WallJoinSlice.Axis.X_THICK)
+                                    ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
+                        }
+                        if (outputAxis == WallJoinSlice.Axis.X_THICK && d[0] != 0) {
+                            outDirX = Integer.signum(d[0]); outDirZ = 0;
+                        } else if (outputAxis == WallJoinSlice.Axis.Z_THICK && d[2] != 0) {
+                            outDirX = 0; outDirZ = Integer.signum(d[2]);
+                        } else if (Math.abs(d[0]) >= Math.abs(d[2])) {
+                            outDirX = Integer.signum(d[0]); outDirZ = 0;
+                        } else {
+                            outDirX = 0; outDirZ = Integer.signum(d[2]);
+                        }
+                        double continuityPenalty = (outDirX == effectiveDirX && outDirZ == effectiveDirZ) ? 0.0 : 0.5;
+
+                        double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz + continuityPenalty;
+                        if (log) {
+                            System.out.println("[WallChoose] " + candidateTag
+                                    + " → score=" + String.format("%.2f", score)
+                                    + " (okY=" + okY + " yS=" + String.format("%.1f", yScore)
+                                    + " xz=" + String.format("%.2f", xz)
+                                    + " cont=" + String.format("%.1f", continuityPenalty)
+                                    + " outDir=(" + outDirX + "," + outDirZ + "))");
+                        }
+
+                        // Compute output slice
+                        WallJoinSlice outSlice = rev ? tpl.getASlice() : tpl.getBSlice();
+                        if (outSlice != null) outSlice = outSlice.transformedDu(rot, mir == 1);
+
+                        candidates.add(new ScoredCandidate(
+                                new ModulePlacement(ti, rot, mir == 1, rev, anchor, end),
+                                score, outDirX, outDirZ, outSlice));
                     }
                 }
             }
-            System.out.println("[WallStrategy]   tpl[" + ti + "] delta=(" + dxModule + "," + dyModule + "," + dzModule
-                    + ") bestScore=" + String.format("%.3f", bestTplScore) + " rot=" + bestTplRot
-                    + " mir=" + bestTplMir + " rev=" + bestTplRev);
+        }
+
+        // Sort by score (best first)
+        candidates.sort(Comparator.comparingDouble(c -> c.score));
+        return candidates;
+    }
+
+    /**
+     * State of a partial recovery sequence being explored.
+     */
+    private static class RecoveryState {
+        final Vec3 endpoint;
+        final int dirX, dirZ;
+        final WallJoinSlice slice;
+        final List<ModulePlacement> sequence;
+
+        RecoveryState(Vec3 endpoint, int dirX, int dirZ, WallJoinSlice slice, List<ModulePlacement> sequence) {
+            this.endpoint = endpoint;
+            this.dirX = dirX;
+            this.dirZ = dirZ;
+            this.slice = slice;
+            this.sequence = sequence;
+        }
+    }
+
+    /**
+     * Plan a multi-module recovery sequence when the greedy best choice diverges
+     * from the player. Uses iterative deepening: tries all combinations at depth 2,
+     * then depth 3, etc., stopping as soon as any sequence's final endpoint is
+     * closer to the anchor→player line segment than the diverging module's endpoint.
+     *
+     * @param divergingEndDist distToSegmentXZ of the diverging single-module endpoint
+     * @return the best recovery sequence, or empty if none found
+     */
+    private List<ModulePlacement> planRecoverySequence(Vec3 anchor, Vec3 playerPos,
+                                                       int effDirX, int effDirZ,
+                                                       WallJoinSlice effSlice,
+                                                       int maxDepth,
+                                                       double divergingEndDist) {
+        // Seed: all single-step candidates
+        List<ScoredCandidate> firstSteps = scoreCandidates(anchor, playerPos, effDirX, effDirZ, effSlice, false);
+        if (firstSteps.isEmpty()) return Collections.emptyList();
+
+        List<RecoveryState> currentLevel = new ArrayList<>();
+        for (ScoredCandidate c : firstSteps) {
+            currentLevel.add(new RecoveryState(
+                    c.placement.end(), c.outDirX, c.outDirZ, c.outSlice,
+                    List.of(c.placement)));
+        }
+
+        for (int depth = 2; depth <= maxDepth; depth++) {
+            List<RecoveryState> nextLevel = new ArrayList<>();
+            for (RecoveryState state : currentLevel) {
+                List<ScoredCandidate> candidates = scoreCandidates(
+                        state.endpoint, playerPos, state.dirX, state.dirZ, state.slice, false);
+                for (ScoredCandidate c : candidates) {
+                    List<ModulePlacement> newSeq = new ArrayList<>(state.sequence);
+                    newSeq.add(c.placement);
+                    nextLevel.add(new RecoveryState(
+                            c.placement.end(), c.outDirX, c.outDirZ, c.outSlice, newSeq));
+                }
+            }
+
+            if (nextLevel.isEmpty()) break;
+
+            // Check if any sequence at this depth gets closer to the line than the diverging choice
+            RecoveryState bestAtDepth = null;
+            double bestDist = Double.POSITIVE_INFINITY;
+            for (RecoveryState s : nextLevel) {
+                double d = distToSegmentXZ(s.endpoint.x, s.endpoint.z,
+                        anchor.x, anchor.z, playerPos.x, playerPos.z);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestAtDepth = s;
+                }
+            }
+
+            if (bestDist < divergingEndDist) {
+                System.out.println("[WallRecovery] Found recovery at depth " + depth
+                        + " (" + nextLevel.size() + " combos explored)"
+                        + ", lineDist=" + String.format("%.2f", bestDist)
+                        + " (was " + String.format("%.2f", divergingEndDist) + ")");
+                return bestAtDepth.sequence;
+            }
+
+            System.out.println("[WallRecovery] Depth " + depth + ": " + nextLevel.size()
+                    + " combos, bestDist=" + String.format("%.2f", bestDist)
+                    + " (need < " + String.format("%.2f", divergingEndDist) + ")");
+            currentLevel = nextLevel;
+        }
+
+        // No recovery found — fall back to best sequence at max depth
+        RecoveryState fallback = null;
+        double fallbackDist = Double.POSITIVE_INFINITY;
+        for (RecoveryState s : currentLevel) {
+            double d = distToSegmentXZ(s.endpoint.x, s.endpoint.z,
+                    anchor.x, anchor.z, playerPos.x, playerPos.z);
+            if (d < fallbackDist) {
+                fallbackDist = d;
+                fallback = s;
+            }
+        }
+        if (fallback != null && fallbackDist < divergingEndDist) {
+            System.out.println("[WallRecovery] Fallback at max depth, lineDist="
+                    + String.format("%.2f", fallbackDist));
+            return fallback.sequence;
+        }
+
+        System.out.println("[WallRecovery] No recovery found after depth " + maxDepth);
+        return Collections.emptyList();
+    }
+
+    private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
+        if (wallTemplates == null || wallTemplates.isEmpty()) {
+            System.out.println("[WallChoose] No templates available");
+            return null;
+        }
+
+        // Simulate wallLastDir forward through pending queue so we score
+        // against the direction the wall will actually be going when this
+        // module starts, not the direction of the last *begun* module.
+        int effectiveDirX = wallLastDirX;
+        int effectiveDirZ = wallLastDirZ;
+        WallJoinSlice effectiveSlice = currentOutputSlice;
+        for (ModulePlacement pending : pendingModules) {
+            int[] outDir = pending.computeOutputDir(wallTemplates);
+            if (outDir != null) { effectiveDirX = outDir[0]; effectiveDirZ = outDir[1]; }
+            WallJoinSlice s = pending.computeOutputSlice(wallTemplates);
+            if (s != null) effectiveSlice = s;
+        }
+
+        // Get scored candidates
+        List<ScoredCandidate> candidates = scoreCandidates(anchor, playerPos, effectiveDirX, effectiveDirZ, effectiveSlice, true);
+
+        double bestScore = Double.POSITIVE_INFINITY;
+        ModulePlacement best = null;
+        if (!candidates.isEmpty()) {
+            bestScore = candidates.get(0).score;
+            best = candidates.get(0).placement;
         }
 
         // Only consider gap (empty corner) placements if no template can turn corners
@@ -656,11 +979,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Skip gap placements when a corner module exists (it handles turns natively)
         if (!hasCornerModule) {
             int t = Math.max(1, wallJoinUSize);
-            int lx = wallLastDirX, lz = wallLastDirZ;
+            int lx = effectiveDirX, lz = effectiveDirZ;
             int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
-            System.out.println("[WallStrategy] GAP candidates: lastDir=(" + lx + "," + lz
-                    + ") thickness=" + t + " anchor=(" + String.format("%.1f", anchor.x)
-                    + "," + String.format("%.1f", anchor.y) + "," + String.format("%.1f", anchor.z) + ")");
             for (int pi = 0; pi < perps.length; pi++) {
                 int[] pv = perps[pi];
                 int dxGap = pv[0] * t;
@@ -668,16 +988,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
                 double dyNeed = playerPos.y - anchor.y;
                 double yScore = Math.abs(dyNeed);
-                double xz = perpDistToLine(end.x - anchor.x, end.z - anchor.z, lineDx, lineDz, lineLen);
-                double dotGap = dxGap * lineDx + dzGap * lineDz;
-                double dirPenalty = dotGap < 0 ? 100.0 : 0.0;
-                double score = dirPenalty + yScore * 10.0 + xz + 0.5;
-                String label = pi == 0 ? "LEFT" : "RIGHT";
-                System.out.println("[WallStrategy]   gap " + label + " perpDir=(" + pv[0] + "," + pv[1]
-                        + ") d=(" + dxGap + "," + dzGap + ") end=(" + String.format("%.1f", end.x)
-                        + "," + String.format("%.1f", end.z) + ") perpDist=" + String.format("%.2f", xz)
-                        + " yScore=" + String.format("%.2f", yScore) + " score=" + String.format("%.3f", score)
-                        + (score < bestScore ? " *NEW BEST*" : ""));
+                double xz = distToSegmentXZ(end.x, end.z,
+                        anchor.x, anchor.z, playerPos.x, playerPos.z);
+                double score = yScore * 10.0 + xz + 0.5;
                 if (score < bestScore) {
                     bestScore = score;
                     best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
@@ -686,9 +999,17 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         }
 
         if (best != null) {
-            String type = best instanceof GapPlacement ? "Gap"
-                    : "Module[" + best.getTplIndex() + (best.isReversed() ? " REV" : "") + "]";
-            System.out.println("[WallStrategy]   WINNER: " + type + " score=" + String.format("%.3f", bestScore));
+            System.out.println("[WallChoose] Selected: tpl=" + best.getTplIndex()
+                    + " rot=" + best.getRot() + " mir=" + best.isMirror()
+                    + " rev=" + best.isReversed() + " score=" + String.format("%.1f", bestScore)
+                    + " anchor=" + String.format("(%.1f,%.1f,%.1f)", anchor.x, anchor.y, anchor.z)
+                    + " end=" + String.format("(%.1f,%.1f,%.1f)", best.end().x, best.end().y, best.end().z)
+                    + " effDir=(" + effectiveDirX + "," + effectiveDirZ + ")");
+        } else {
+            System.out.println("[WallChoose] No module found. templates=" + wallTemplates.size()
+                    + " effDir=(" + effectiveDirX + "," + effectiveDirZ + ")"
+                    + " anchor=" + String.format("(%.1f,%.1f,%.1f)", anchor.x, anchor.y, anchor.z)
+                    + " player=" + String.format("(%.1f,%.1f,%.1f)", playerPos.x, playerPos.y, playerPos.z));
         }
         return best;
     }

@@ -1,5 +1,7 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy.wall;
 
+import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
+import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy;
 
@@ -32,6 +34,7 @@ public final class GapPlacement extends ModulePlacement {
         int prevDirX = strategy.getWallLastDirX();
         int prevDirZ = strategy.getWallLastDirZ();
         strategy.setWallLastDir(dirx, dirz);
+        strategy.setCurrentOutputSlice(null); // Gap has no profile to enforce
         System.out.println("[WallGap] begin: anchor=(" + String.format("%.1f", anchor.x)
                 + "," + String.format("%.1f", anchor.y) + "," + String.format("%.1f", anchor.z)
                 + ") end=(" + String.format("%.1f", end.x) + "," + String.format("%.1f", end.y)
@@ -50,12 +53,17 @@ public final class GapPlacement extends ModulePlacement {
     }
 
     @Override
-    public void placeSome(GoldGolemEntity golem, WallBuildStrategy strategy, int maxOps) {
-        // Gap placements don't place any blocks
+    public boolean done() {
+        return true;
     }
 
     @Override
-    public boolean done() {
-        return true;
+    public int[] computeOutputDir(List<WallModuleTemplate> templates) {
+        return new int[]{dirx, dirz};
+    }
+
+    @Override
+    public WallJoinSlice computeOutputSlice(java.util.List<WallModuleTemplate> templates) {
+        return null; // Gap has no profile to enforce
     }
 }

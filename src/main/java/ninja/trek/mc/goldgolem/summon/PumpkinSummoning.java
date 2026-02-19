@@ -589,26 +589,93 @@ public class PumpkinSummoning {
                 }
 
                 // Determine A-side and B-side slice axes
+                // Interior cuts: axis comes directly from cutIsX[]
+                // Chain endpoints: derive from the adjacent cut's axis + corner detection,
+                // since the voxel heuristic is unreliable for L-shaped corner modules
+                boolean isCorner = mod.aMarker().getX() != mod.bMarker().getX()
+                        && mod.aMarker().getZ() != mod.bMarker().getZ();
+
                 ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis aAxis;
                 if (moduleIdx > 0 && moduleIdx - 1 < cutIsX.length) {
+                    // Interior: A-side axis from the cut before this module
                     aAxis = cutIsX[moduleIdx - 1]
                             ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
                             : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+                } else if (moduleIdx < numCuts && moduleIdx < cutIsX.length) {
+                    // Chain start endpoint: derive from the B-side cut
+                    var bAxisFromCut = cutIsX[moduleIdx]
+                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+                    aAxis = isCorner
+                            ? (bAxisFromCut == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                                ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK
+                                : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK)
+                            : bAxisFromCut;
                 } else {
+                    // Single-module chain (no cuts): fall back to voxel heuristic
                     aAxis = inferSliceAxisFromVoxels(mod.aMarker(), mod.voxels());
                 }
+
                 ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis bAxis;
                 if (moduleIdx < numCuts && moduleIdx < cutIsX.length) {
+                    // Interior: B-side axis from the cut after this module
                     bAxis = cutIsX[moduleIdx]
                             ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
                             : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+                } else if (moduleIdx > 0 && moduleIdx - 1 < cutIsX.length) {
+                    // Chain end endpoint: derive from the A-side cut
+                    var aAxisFromCut = cutIsX[moduleIdx - 1]
+                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
+                    bAxis = isCorner
+                            ? (aAxisFromCut == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
+                                ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK
+                                : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK)
+                            : aAxisFromCut;
                 } else {
+                    // Single-module chain (no cuts): fall back to voxel heuristic
                     bAxis = inferSliceAxisFromVoxels(mod.bMarker(), mod.voxels());
                 }
 
-                templates.add(new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(
+                var builtTemplate = new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(
                         mod.aMarker(), mod.bMarker(), vox,
-                        minY == Integer.MAX_VALUE ? 0 : minY, aAxis, bAxis));
+                        minY == Integer.MAX_VALUE ? 0 : minY, aAxis, bAxis);
+                templates.add(builtTemplate);
+
+                // Diagnostic: log slice computation for each module
+                var aSlice = builtTemplate.getASlice();
+                var bSlice = builtTemplate.getBSlice();
+                System.out.println("[WallSummon] module[" + moduleIdx + "]"
+                        + " a=" + mod.aMarker() + " b=" + mod.bMarker()
+                        + " delta=(" + (mod.bMarker().getX() - mod.aMarker().getX())
+                        + "," + (mod.bMarker().getY() - mod.aMarker().getY())
+                        + "," + (mod.bMarker().getZ() - mod.aMarker().getZ()) + ")"
+                        + " isCorner=" + isCorner
+                        + " voxels=" + vox.size());
+                System.out.println("[WallSummon]   aAxis=" + aAxis
+                        + " aSlice=" + (aSlice != null ? aSlice.signature() : "null")
+                        + " (" + (aSlice != null ? aSlice.points.size() : 0) + " pts)");
+                System.out.println("[WallSummon]   bAxis=" + bAxis
+                        + " bSlice=" + (bSlice != null ? bSlice.signature() : "null")
+                        + " (" + (bSlice != null ? bSlice.points.size() : 0) + " pts)");
+                // Log which voxels are in the A-side plane to diagnose unexpected slice sizes
+                {
+                    int aPlane = (aAxis == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK)
+                            ? 0 : 0; // markerRel is always ZERO for A side
+                    int countInPlane = 0;
+                    StringBuilder planeVoxels = new StringBuilder();
+                    for (var vv : vox) {
+                        int coord = (aAxis == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK)
+                                ? vv.rel.getX() : vv.rel.getZ();
+                        if (coord == aPlane) {
+                            countInPlane++;
+                            if (planeVoxels.length() > 0) planeVoxels.append(", ");
+                            planeVoxels.append(vv.rel.toShortString());
+                        }
+                    }
+                    System.out.println("[WallSummon]   A-plane voxels (" + countInPlane + "): " + planeVoxels);
+                }
+
                 moduleIdx++;
             }
 
@@ -628,6 +695,10 @@ public class PumpkinSummoning {
                     if (best == null || (!isSummonMarker && s.points.size() >= best.points.size())) best = s;
                 }
             }
+            System.out.println("[WallSummon] Join template reference: axis=" + validation.axis()
+                    + " bestSlice=" + (best != null ? best.signature() : "null")
+                    + " (" + (best != null ? best.points.size() : 0) + " pts)"
+                    + " symmetric=" + validation.symmetric());
             if (best != null) {
                 // Pack entries as (dy,du,idIndex) with a small LUT using full state strings
                 java.util.ArrayList<String> lut = new java.util.ArrayList<>();

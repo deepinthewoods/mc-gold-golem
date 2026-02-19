@@ -7,6 +7,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
+import ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel;
 
 /**
  * Represents a 1-wide vertical join slice lying in a plane of thickness 1 along X or Z.
@@ -288,5 +289,169 @@ public final class WallJoinSlice {
     private static <T extends Comparable<T>> BlockState applyProperty(BlockState state, Property<T> prop, String valueName) {
         Optional<T> val = prop.getValue(valueName);
         return val.map(v -> state.setValue(prop, v)).orElse(state);
+    }
+
+    /** Build a slice from template voxels at a given marker's plane along the given axis. */
+    public static Optional<WallJoinSlice> fromTemplateVoxels(List<Voxel> voxels, BlockPos markerRel, Axis axis) {
+        int planeCoord = (axis == Axis.X_THICK) ? markerRel.getX() : markerRel.getZ();
+
+        // Build map from position to state
+        Map<BlockPos, BlockState> stateMap = new HashMap<>();
+        for (var v : voxels) {
+            stateMap.put(v.rel, v.state);
+        }
+
+        // Filter voxels in the plane
+        List<BlockPos> plane = new ArrayList<>();
+        for (var v : voxels) {
+            BlockPos r = v.rel;
+            if ((axis == Axis.X_THICK && r.getX() == planeCoord) || (axis == Axis.Z_THICK && r.getZ() == planeCoord)) {
+                if (v.state.is(Blocks.SNOW) || v.state.is(Blocks.GOLD_BLOCK)) continue;
+                if (v.state.isAir()) continue;
+                plane.add(r);
+            }
+        }
+        if (plane.isEmpty()) return Optional.empty();
+
+        // Build 2D grid for BFS: (y, u)
+        int gy = markerRel.getY();
+        int gu = (axis == Axis.X_THICK) ? markerRel.getZ() : markerRel.getX();
+        Map<Long, BlockPos> index = new HashMap<>();
+        for (BlockPos r : plane) {
+            int y = r.getY();
+            int u = (axis == Axis.X_THICK) ? r.getZ() : r.getX();
+            long key = (((long) y) << 32) ^ (u & 0xffffffffL);
+            index.put(key, r);
+        }
+
+        // BFS from marker position (marker itself likely not in voxels — it's the gold block)
+        ArrayDeque<int[]> q = new ArrayDeque<>();
+        Set<Long> seen = new HashSet<>();
+        long startKey = (((long) gy) << 32) ^ (gu & 0xffffffffL);
+        if (!index.containsKey(startKey)) {
+            boolean seeded = false;
+            for (int[] d : new int[][]{{0,1},{0,-1},{1,0},{-1,0}}) {
+                long nk = (((long)(gy + d[0])) << 32) ^ ((gu + d[1]) & 0xffffffffL);
+                if (index.containsKey(nk)) { startKey = nk; seeded = true; break; }
+            }
+            if (!seeded) return Optional.empty();
+        }
+        q.add(new int[]{(int)(startKey >> 32), (int)startKey});
+        seen.add(startKey);
+        List<BlockPos> component = new ArrayList<>();
+        while (!q.isEmpty()) {
+            int[] cur = q.removeFirst();
+            long ck = (((long) cur[0]) << 32) ^ (cur[1] & 0xffffffffL);
+            BlockPos r = index.get(ck);
+            if (r != null) component.add(r);
+            for (int[] d : new int[][]{{0,1},{0,-1},{1,0},{-1,0}}) {
+                int ny = cur[0] + d[0];
+                int nu = cur[1] + d[1];
+                long nk = (((long) ny) << 32) ^ (nu & 0xffffffffL);
+                if (index.containsKey(nk) && seen.add(nk)) q.add(new int[]{ny, nu});
+            }
+        }
+        if (component.isEmpty()) return Optional.empty();
+
+        // Normalize to (dy, du)
+        int minY = Integer.MAX_VALUE, minU = Integer.MAX_VALUE;
+        for (BlockPos r : component) {
+            minY = Math.min(minY, r.getY());
+            int u = (axis == Axis.X_THICK) ? r.getZ() : r.getX();
+            minU = Math.min(minU, u);
+        }
+        Set<Point> pts = new HashSet<>();
+        Map<Point, String> ids = new HashMap<>();
+        Map<Point, BlockState> states = new HashMap<>();
+        for (BlockPos r : component) {
+            int dy = r.getY() - minY;
+            int du = ((axis == Axis.X_THICK) ? r.getZ() : r.getX()) - minU;
+            Point p = new Point(dy, du);
+            pts.add(p);
+            BlockState st = stateMap.get(r);
+            if (st != null) {
+                ids.put(p, BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString());
+                states.put(p, st);
+            }
+        }
+        return Optional.of(new WallJoinSlice(axis, pts, ids, states));
+    }
+
+    /**
+     * Return a new slice with axis rotated (for rot 1,3) and du values mirrored
+     * if the placement transform flips the du direction.
+     */
+    public WallJoinSlice transformedDu(int rot, boolean mirror) {
+        Axis newAxis = this.axis;
+        if (rot == 1 || rot == 3) {
+            newAxis = (this.axis == Axis.X_THICK) ? Axis.Z_THICK : Axis.X_THICK;
+        }
+
+        boolean duMirrored = isDuMirrored(this.axis, rot, mirror);
+
+        if (!duMirrored && newAxis == this.axis) {
+            return this;
+        }
+
+        if (!duMirrored) {
+            return new WallJoinSlice(newAxis, this.points, this.blockIds, this.blockStates);
+        }
+
+        // Mirror du values: du' = maxDu - du
+        int maxDu = this.points.stream().mapToInt(p -> p.du).max().orElse(0);
+        Set<Point> newPts = new HashSet<>();
+        Map<Point, String> newIds = new HashMap<>();
+        Map<Point, BlockState> newStates = new HashMap<>();
+        for (Point p : this.points) {
+            Point np = new Point(p.dy, maxDu - p.du);
+            newPts.add(np);
+            String id = this.blockIds.get(p);
+            if (id != null) newIds.put(np, id);
+            BlockState st = this.blockStates.get(p);
+            if (st != null) newStates.put(np, st);
+        }
+        return new WallJoinSlice(newAxis, newPts, newIds, newStates);
+    }
+
+    /**
+     * Check if a placement transform (rot, mirror) flips the du direction of a slice.
+     */
+    public static boolean isDuMirrored(Axis origAxis, int rot, boolean mirror) {
+        // du unit vector in 3D: X_THICK → du along Z → (0,0,1), Z_THICK → du along X → (1,0,0)
+        int dx = (origAxis == Axis.Z_THICK) ? 1 : 0;
+        int dz = (origAxis == Axis.X_THICK) ? 1 : 0;
+        // Apply rotation (same logic as ModulePlacement.rotateAndMirror)
+        int rx = dx, rz = dz;
+        switch (rot & 3) {
+            case 1 -> { int ox = rx; rx = -rz; rz = ox; }
+            case 2 -> { rx = -rx; rz = -rz; }
+            case 3 -> { int ox = rx; rx = rz; rz = -ox; }
+        }
+        if (mirror) rx = -rx;
+        Axis newAxis = origAxis;
+        if (rot == 1 || rot == 3) {
+            newAxis = (origAxis == Axis.X_THICK) ? Axis.Z_THICK : Axis.X_THICK;
+        }
+        // Check du component in new axis frame: Z_THICK → du is X, X_THICK → du is Z
+        int comp = (newAxis == Axis.Z_THICK) ? rx : rz;
+        return comp < 0;
+    }
+
+    /** Exact match of axis, points set, and blockIds at each point. */
+    public boolean profileEquals(WallJoinSlice other) {
+        if (other == null) return false;
+        if (this.axis != other.axis) return false;
+        if (!this.points.equals(other.points)) return false;
+        for (Point p : this.points) {
+            String thisId = this.blockIds.get(p);
+            String otherId = other.blockIds.get(p);
+            if (!Objects.equals(thisId, otherId)) return false;
+        }
+        return true;
+    }
+
+    /** Construct a slice from deserialized data (no blockStates needed, only for profile comparison). */
+    public static WallJoinSlice fromData(Axis axis, Set<Point> points, Map<Point, String> blockIds) {
+        return new WallJoinSlice(axis, points, blockIds, Collections.emptyMap());
     }
 }
