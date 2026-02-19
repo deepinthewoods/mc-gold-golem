@@ -3069,7 +3069,7 @@ public class GoldGolemEntity extends PathfinderMob {
                             this.trackStart = new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
                             var owner = getOwnerPlayer();
                             if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
-                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart));
+                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart), false);
                             }
                             clearPlacementTracking();
                         }
@@ -3136,7 +3136,7 @@ public class GoldGolemEntity extends PathfinderMob {
             this.currentLine = null;
             // Clear client lines
             if (attacker instanceof net.minecraft.server.level.ServerPlayer spOwner) {
-                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
+                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty(), false);
             }
 
             spawnAngry();
@@ -3223,7 +3223,7 @@ public class GoldGolemEntity extends PathfinderMob {
             this.currentLine = null;
             Player owner = getOwnerPlayer();
             if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
-                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty());
+                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty(), false);
             }
         }
     }

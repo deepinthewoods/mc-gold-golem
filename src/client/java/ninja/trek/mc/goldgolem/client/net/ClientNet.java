@@ -26,7 +26,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(LinesS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                ClientState.setLines(payload.entityId(), payload.points(), payload.anchor());
+                ClientState.setLines(payload.entityId(), payload.points(), payload.anchor(), payload.noValid());
             });
         });
 

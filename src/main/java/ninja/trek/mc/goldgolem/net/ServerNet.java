@@ -8,7 +8,7 @@ import java.util.List;
 public final class ServerNet {
     private ServerNet() {}
 
-    public static void sendLines(ServerPlayer player, int entityId, List<Vec3> points, java.util.Optional<Vec3> anchor) {
-        ServerPlayNetworking.send(player, new LinesS2CPayload(entityId, points, anchor));
+    public static void sendLines(ServerPlayer player, int entityId, List<Vec3> points, java.util.Optional<Vec3> anchor, boolean noValid) {
+        ServerPlayNetworking.send(player, new LinesS2CPayload(entityId, points, anchor, noValid));
     }
 }

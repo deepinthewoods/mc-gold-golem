@@ -445,46 +445,16 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                     }
                     var cand = chooseNextModule(trackStart, p);
                     if (cand != null) {
-                        // Check if the chosen module diverges from the anchor→player line
-                        double anchorLineDist = distToSegmentXZ(trackStart.x, trackStart.z,
-                                trackStart.x, trackStart.z, p.x, p.z);
-                        double endLineDist = distToSegmentXZ(cand.end().x, cand.end().z,
-                                trackStart.x, trackStart.z, p.x, p.z);
-
-                        boolean recovered = false;
-                        if (endLineDist > anchorLineDist + 1.0) {
-                            // Module leads away from the line — try recovery
-                            int effDirX = wallLastDirX;
-                            int effDirZ = wallLastDirZ;
-                            WallJoinSlice effSlice = currentOutputSlice;
-                            for (ModulePlacement pending : pendingModules) {
-                                int[] outDir = pending.computeOutputDir(wallTemplates);
-                                if (outDir != null) { effDirX = outDir[0]; effDirZ = outDir[1]; }
-                                WallJoinSlice s = pending.computeOutputSlice(wallTemplates);
-                                if (s != null) effSlice = s;
-                            }
-
-                            List<ModulePlacement> recovery = planRecoverySequence(
-                                    trackStart, p, effDirX, effDirZ, effSlice, 6, endLineDist);
-
-                            if (!recovery.isEmpty()) {
-                                for (ModulePlacement mod : recovery) {
-                                    pendingModules.addLast(mod);
-                                }
-                                Vec3 lastEnd = recovery.get(recovery.size() - 1).end();
-                                golem.setTrackStart(lastEnd);
-                                trackStart = lastEnd;
-                                recovered = true;
-                            }
-                        }
-
-                        if (!recovered) {
-                            // Normal case: enqueue single module
-                            pendingModules.addLast(cand);
-                            golem.setTrackStart(cand.end());
-                            trackStart = cand.end();
-                        }
+                        // Module stays on the guide line — enqueue it
+                        pendingModules.addLast(cand);
+                        golem.setTrackStart(cand.end());
+                        trackStart = cand.end();
                         sendPreviewLines(golem);
+                    } else {
+                        // No valid module: all candidates diverge from the
+                        // guide line. Send red preview so the player knows
+                        // to reposition.
+                        sendPreviewLines(golem, true);
                     }
                 }
             }
@@ -599,6 +569,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     private void sendPreviewLines(GoldGolemEntity golem) {
+        sendPreviewLines(golem, false);
+    }
+
+    private void sendPreviewLines(GoldGolemEntity golem, boolean noValid) {
         if (!(golem.level() instanceof ServerLevel)) return;
         var owner = golem.getOwnerPlayer();
         if (!(owner instanceof net.minecraft.server.level.ServerPlayer sp)) return;
@@ -612,7 +586,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             list.add(mod.end());
         }
         java.util.Optional<Vec3> anchor = java.util.Optional.ofNullable(golem.getTrackStart());
-        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, golem.getId(), list, anchor);
+        ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, golem.getId(), list, anchor, noValid);
     }
 
     private double getWallLongestHoriz() {
@@ -804,15 +778,12 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         } else {
                             outDirX = 0; outDirZ = Integer.signum(d[2]);
                         }
-                        double continuityPenalty = (outDirX == effectiveDirX && outDirZ == effectiveDirZ) ? 0.0 : 0.5;
-
-                        double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz + continuityPenalty;
+                        double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz;
                         if (log) {
                             System.out.println("[WallChoose] " + candidateTag
                                     + " → score=" + String.format("%.2f", score)
                                     + " (okY=" + okY + " yS=" + String.format("%.1f", yScore)
                                     + " xz=" + String.format("%.2f", xz)
-                                    + " cont=" + String.format("%.1f", continuityPenalty)
                                     + " outDir=(" + outDirX + "," + outDirZ + "))");
                         }
 
@@ -833,110 +804,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return candidates;
     }
 
-    /**
-     * State of a partial recovery sequence being explored.
-     */
-    private static class RecoveryState {
-        final Vec3 endpoint;
-        final int dirX, dirZ;
-        final WallJoinSlice slice;
-        final List<ModulePlacement> sequence;
-
-        RecoveryState(Vec3 endpoint, int dirX, int dirZ, WallJoinSlice slice, List<ModulePlacement> sequence) {
-            this.endpoint = endpoint;
-            this.dirX = dirX;
-            this.dirZ = dirZ;
-            this.slice = slice;
-            this.sequence = sequence;
-        }
-    }
-
-    /**
-     * Plan a multi-module recovery sequence when the greedy best choice diverges
-     * from the player. Uses iterative deepening: tries all combinations at depth 2,
-     * then depth 3, etc., stopping as soon as any sequence's final endpoint is
-     * closer to the anchor→player line segment than the diverging module's endpoint.
-     *
-     * @param divergingEndDist distToSegmentXZ of the diverging single-module endpoint
-     * @return the best recovery sequence, or empty if none found
-     */
-    private List<ModulePlacement> planRecoverySequence(Vec3 anchor, Vec3 playerPos,
-                                                       int effDirX, int effDirZ,
-                                                       WallJoinSlice effSlice,
-                                                       int maxDepth,
-                                                       double divergingEndDist) {
-        // Seed: all single-step candidates
-        List<ScoredCandidate> firstSteps = scoreCandidates(anchor, playerPos, effDirX, effDirZ, effSlice, false);
-        if (firstSteps.isEmpty()) return Collections.emptyList();
-
-        List<RecoveryState> currentLevel = new ArrayList<>();
-        for (ScoredCandidate c : firstSteps) {
-            currentLevel.add(new RecoveryState(
-                    c.placement.end(), c.outDirX, c.outDirZ, c.outSlice,
-                    List.of(c.placement)));
-        }
-
-        for (int depth = 2; depth <= maxDepth; depth++) {
-            List<RecoveryState> nextLevel = new ArrayList<>();
-            for (RecoveryState state : currentLevel) {
-                List<ScoredCandidate> candidates = scoreCandidates(
-                        state.endpoint, playerPos, state.dirX, state.dirZ, state.slice, false);
-                for (ScoredCandidate c : candidates) {
-                    List<ModulePlacement> newSeq = new ArrayList<>(state.sequence);
-                    newSeq.add(c.placement);
-                    nextLevel.add(new RecoveryState(
-                            c.placement.end(), c.outDirX, c.outDirZ, c.outSlice, newSeq));
-                }
-            }
-
-            if (nextLevel.isEmpty()) break;
-
-            // Check if any sequence at this depth gets closer to the line than the diverging choice
-            RecoveryState bestAtDepth = null;
-            double bestDist = Double.POSITIVE_INFINITY;
-            for (RecoveryState s : nextLevel) {
-                double d = distToSegmentXZ(s.endpoint.x, s.endpoint.z,
-                        anchor.x, anchor.z, playerPos.x, playerPos.z);
-                if (d < bestDist) {
-                    bestDist = d;
-                    bestAtDepth = s;
-                }
-            }
-
-            if (bestDist < divergingEndDist) {
-                System.out.println("[WallRecovery] Found recovery at depth " + depth
-                        + " (" + nextLevel.size() + " combos explored)"
-                        + ", lineDist=" + String.format("%.2f", bestDist)
-                        + " (was " + String.format("%.2f", divergingEndDist) + ")");
-                return bestAtDepth.sequence;
-            }
-
-            System.out.println("[WallRecovery] Depth " + depth + ": " + nextLevel.size()
-                    + " combos, bestDist=" + String.format("%.2f", bestDist)
-                    + " (need < " + String.format("%.2f", divergingEndDist) + ")");
-            currentLevel = nextLevel;
-        }
-
-        // No recovery found — fall back to best sequence at max depth
-        RecoveryState fallback = null;
-        double fallbackDist = Double.POSITIVE_INFINITY;
-        for (RecoveryState s : currentLevel) {
-            double d = distToSegmentXZ(s.endpoint.x, s.endpoint.z,
-                    anchor.x, anchor.z, playerPos.x, playerPos.z);
-            if (d < fallbackDist) {
-                fallbackDist = d;
-                fallback = s;
-            }
-        }
-        if (fallback != null && fallbackDist < divergingEndDist) {
-            System.out.println("[WallRecovery] Fallback at max depth, lineDist="
-                    + String.format("%.2f", fallbackDist));
-            return fallback.sequence;
-        }
-
-        System.out.println("[WallRecovery] No recovery found after depth " + maxDepth);
-        return Collections.emptyList();
-    }
+    /** Maximum allowed distance from a module endpoint to the guide line segment. */
+    private static final double DIVERGE_TOLERANCE = 1.5;
 
     private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
         if (wallTemplates == null || wallTemplates.isEmpty()) {
@@ -957,43 +826,50 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             if (s != null) effectiveSlice = s;
         }
 
-        // Get scored candidates
+        // Score all candidates sorted by score (best first)
         List<ScoredCandidate> candidates = scoreCandidates(anchor, playerPos, effectiveDirX, effectiveDirZ, effectiveSlice, true);
 
-        double bestScore = Double.POSITIVE_INFINITY;
+        // Greedy pick: take the best-scoring candidate that doesn't diverge
+        // from the anchor→player guide line beyond the tolerance.
         ModulePlacement best = null;
-        if (!candidates.isEmpty()) {
-            bestScore = candidates.get(0).score;
-            best = candidates.get(0).placement;
+        double bestScore = Double.POSITIVE_INFINITY;
+        double bestEndDist = Double.POSITIVE_INFINITY;
+
+        for (ScoredCandidate c : candidates) {
+            if (c.score > 100.0) continue; // skip Y-invalid candidates
+            double endDist = distToSegmentXZ(c.placement.end().x, c.placement.end().z,
+                    anchor.x, anchor.z, playerPos.x, playerPos.z);
+            if (endDist <= DIVERGE_TOLERANCE) {
+                best = c.placement;
+                bestScore = c.score;
+                bestEndDist = endDist;
+                break; // already sorted by score, first passing one wins
+            }
         }
 
         // Only consider gap (empty corner) placements if no template can turn corners
-        boolean hasCornerModule = false;
-        for (var tpl : wallTemplates) {
-            int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
-            int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-            if (dx != 0 && dz != 0) { hasCornerModule = true; break; }
-        }
-
-        // Consider empty corner (gap only) turning left/right by wall thickness
-        // Skip gap placements when a corner module exists (it handles turns natively)
-        if (!hasCornerModule) {
-            int t = Math.max(1, wallJoinUSize);
-            int lx = effectiveDirX, lz = effectiveDirZ;
-            int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
-            for (int pi = 0; pi < perps.length; pi++) {
-                int[] pv = perps[pi];
-                int dxGap = pv[0] * t;
-                int dzGap = pv[1] * t;
-                Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
-                double dyNeed = playerPos.y - anchor.y;
-                double yScore = Math.abs(dyNeed);
-                double xz = distToSegmentXZ(end.x, end.z,
-                        anchor.x, anchor.z, playerPos.x, playerPos.z);
-                double score = yScore * 10.0 + xz + 0.5;
-                if (score < bestScore) {
-                    bestScore = score;
-                    best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
+        // and no template candidate was accepted above
+        if (best == null) {
+            boolean hasCornerModule = false;
+            for (var tpl : wallTemplates) {
+                int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
+                int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+                if (dx != 0 && dz != 0) { hasCornerModule = true; break; }
+            }
+            if (!hasCornerModule) {
+                int t = Math.max(1, wallJoinUSize);
+                int lx = effectiveDirX, lz = effectiveDirZ;
+                int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
+                for (int[] pv : perps) {
+                    int dxGap = pv[0] * t;
+                    int dzGap = pv[1] * t;
+                    Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
+                    double gapDist = distToSegmentXZ(end.x, end.z,
+                            anchor.x, anchor.z, playerPos.x, playerPos.z);
+                    if (gapDist <= DIVERGE_TOLERANCE && gapDist < bestEndDist) {
+                        bestEndDist = gapDist;
+                        best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
+                    }
                 }
             }
         }
@@ -1001,12 +877,14 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         if (best != null) {
             System.out.println("[WallChoose] Selected: tpl=" + best.getTplIndex()
                     + " rot=" + best.getRot() + " mir=" + best.isMirror()
-                    + " rev=" + best.isReversed() + " score=" + String.format("%.1f", bestScore)
+                    + " rev=" + best.isReversed()
+                    + " score=" + String.format("%.1f", bestScore)
+                    + " endDist=" + String.format("%.2f", bestEndDist)
                     + " anchor=" + String.format("(%.1f,%.1f,%.1f)", anchor.x, anchor.y, anchor.z)
                     + " end=" + String.format("(%.1f,%.1f,%.1f)", best.end().x, best.end().y, best.end().z)
                     + " effDir=(" + effectiveDirX + "," + effectiveDirZ + ")");
         } else {
-            System.out.println("[WallChoose] No module found. templates=" + wallTemplates.size()
+            System.out.println("[WallChoose] No valid module (all diverge). templates=" + wallTemplates.size()
                     + " effDir=(" + effectiveDirX + "," + effectiveDirZ + ")"
                     + " anchor=" + String.format("(%.1f,%.1f,%.1f)", anchor.x, anchor.y, anchor.z)
                     + " player=" + String.format("(%.1f,%.1f,%.1f)", playerPos.x, playerPos.y, playerPos.z));

@@ -432,7 +432,7 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
                     list.add(s.b);
                 }
                 Optional<Vec3> anchor = Optional.ofNullable(golem.getTrackStart());
-                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, golem.getId(), list, anchor);
+                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, golem.getId(), list, anchor, false);
             }
         }
     }

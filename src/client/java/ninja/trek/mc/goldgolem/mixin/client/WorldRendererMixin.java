@@ -380,7 +380,10 @@ public abstract class WorldRendererMixin {
                             cum[j] = totalLen;
                         }
                         var batchingPrev = queue.order(1000);
-                        final int baseR = pR, baseG = pG, baseB = pB;
+                        // Red when no valid module, gray otherwise
+                        final int baseR = data.noValid ? 220 : pR;
+                        final int baseG = data.noValid ? 40 : pG;
+                        final int baseB = data.noValid ? 40 : pB;
                         for (int j = 0; j + 1 < poly.size(); j++) {
                             Vec3 p0 = poly.get(j);
                             Vec3 p1 = poly.get(j + 1);

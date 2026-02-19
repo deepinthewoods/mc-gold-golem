@@ -9,9 +9,11 @@ public final class ClientState {
     public static final class LineData {
         public final List<Vec3> points;
         public final java.util.Optional<Vec3> anchor;
-        public LineData(List<Vec3> pts, java.util.Optional<Vec3> anc) {
+        public final boolean noValid;
+        public LineData(List<Vec3> pts, java.util.Optional<Vec3> anc, boolean noValid) {
             this.points = pts;
             this.anchor = anc == null ? java.util.Optional.empty() : anc;
+            this.noValid = noValid;
         }
     }
 
@@ -19,13 +21,13 @@ public final class ClientState {
 
     private ClientState() {}
 
-    public static void setLines(int entityId, List<Vec3> points, java.util.Optional<Vec3> anchor) {
+    public static void setLines(int entityId, List<Vec3> points, java.util.Optional<Vec3> anchor, boolean noValid) {
         if (points == null) {
             LINES.remove(entityId);
             return;
         }
         // Store even empty lists so the renderer can draw previews
-        LINES.put(entityId, new LineData(points, anchor));
+        LINES.put(entityId, new LineData(points, anchor, noValid));
     }
 
     public static LineData getLineData(int entityId) {
