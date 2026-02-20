@@ -21,10 +21,10 @@ public final class WallModuleTemplate {
     public final WallJoinSlice.Axis bSliceAxis; // axis of the join slice at B side
 
     // Lazy-computed full join slice profiles
-    private WallJoinSlice aSlice;
-    private WallJoinSlice bSlice;
-    private boolean aSliceComputed;
-    private boolean bSliceComputed;
+    private volatile WallJoinSlice aSlice;
+    private volatile WallJoinSlice bSlice;
+    private volatile boolean aSliceComputed;
+    private volatile boolean bSliceComputed;
 
     public WallModuleTemplate(BlockPos aMarker, BlockPos bMarker, List<Voxel> voxels, int minY) {
         this(aMarker, bMarker, voxels, minY, null, null);

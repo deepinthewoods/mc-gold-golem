@@ -5,7 +5,6 @@ import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
-import ninja.trek.mc.goldgolem.world.entity.strategy.wall.GapPlacement;
 import ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry;
 import ninja.trek.mc.goldgolem.world.entity.strategy.wall.ModulePlacement;
 
@@ -434,6 +433,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         moduleBlocksLoaded = false;
         currentMineTarget = null;
         currentOutputSlice = null;
+        noModuleTicks = 0;
+        if (entity != null) gradientMiner.reset(entity);
         if (planner != null) {
             planner.clear();
         }
@@ -601,6 +602,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             if (currentModulePlacement != null) {
                 currentModulePlacement.begin(golem, this);
                 moduleBlocksLoaded = false;
+                golem.setBuildingPaths(true);
             }
         }
 
@@ -881,17 +883,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                                 WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
                                 WallJoinSlice reference = buildReferenceSlice(transformedInput.axis);
                                 if (reference != null && !reference.profileEquals(transformedInput)) {
-                                    boolean subsetMatch = true;
-                                    for (WallJoinSlice.Point p : transformedInput.points) {
-                                        if (!reference.points.contains(p)) { subsetMatch = false; break; }
-                                        String inId = transformedInput.blockIds.get(p);
-                                        String refId = reference.blockIds.get(p);
-                                        if (!java.util.Objects.equals(refId, inId)) { subsetMatch = false; break; }
-                                    }
-                                    if (!subsetMatch) {
-                                        if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceProfile)");
-                                        continue;
-                                    }
+                                    if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceProfile)");
+                                    continue;
                                 }
                             }
                         } else if (effectiveSlice != null) {
@@ -997,33 +990,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             }
         }
 
-        // Only consider gap (empty corner) placements if no template can turn corners
-        // and no template candidate was accepted above
-        if (best == null) {
-            boolean hasCornerModule = false;
-            for (var tpl : wallTemplates) {
-                int dx = tpl.bMarker.getX() - tpl.aMarker.getX();
-                int dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
-                if (dx != 0 && dz != 0) { hasCornerModule = true; break; }
-            }
-            if (!hasCornerModule) {
-                int t = Math.max(1, wallJoinUSize);
-                int lx = effectiveDirX, lz = effectiveDirZ;
-                int[][] perps = new int[][]{ new int[]{-lz, lx}, new int[]{lz, -lx} };
-                for (int[] pv : perps) {
-                    int dxGap = pv[0] * t;
-                    int dzGap = pv[1] * t;
-                    Vec3 end = new Vec3(anchor.x + dxGap, anchor.y, anchor.z + dzGap);
-                    double gapDist = distToSegmentXZ(end.x, end.z,
-                            anchor.x, anchor.z, playerPos.x, playerPos.z);
-                    if (gapDist <= DIVERGE_TOLERANCE && gapDist < bestEndDist) {
-                        bestEndDist = gapDist;
-                        best = new GapPlacement(dxGap, dzGap, anchor, end, pv[0], pv[1]);
-                    }
-                }
-            }
-        }
-
         if (best != null) {
             System.out.println("[WallChoose] Selected: tpl=" + best.getTplIndex()
                     + " rot=" + best.getRot() + " mir=" + best.isMirror()
@@ -1081,13 +1047,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         };
         net.minecraft.world.level.block.Mirror mir = mirror ? net.minecraft.world.level.block.Mirror.LEFT_RIGHT : net.minecraft.world.level.block.Mirror.NONE;
         BlockState place = baseState;
-        try { place = place.rotate(rotation); } catch (Throwable ignored) {}
-        try { place = place.mirror(mir); } catch (Throwable ignored) {}
+        try { place = place.rotate(rotation); } catch (Exception ignored) {}
+        try { place = place.mirror(mir); } catch (Exception ignored) {}
         try {
             if (place.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
                 place = place.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE);
             }
-        } catch (Throwable ignored) {}
+        } catch (Exception ignored) {}
 
         String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString();
         if (!golem.consumeBlockFromInventory(blockId)) {

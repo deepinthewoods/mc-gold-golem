@@ -176,19 +176,18 @@ public final class WallJoinSlice {
             var B = other.points;
 
             // Compute bounds for mirror
-            int aMaxU = A.stream().mapToInt(p -> p.du).max().orElse(0);
             int bMaxU = B.stream().mapToInt(p -> p.du).max().orElse(0);
 
             for (boolean mirror : new boolean[]{false, true}) {
                 for (int shift = -1; shift <= 1; shift++) {
-                    if (equalUnder(A, this.blockIds, aMaxU, B, other.blockIds, bMaxU, mirror, shift)) return true;
+                    if (equalUnder(A, this.blockIds, B, other.blockIds, bMaxU, mirror, shift)) return true;
                 }
             }
         }
         return false;
     }
 
-    private static boolean equalUnder(Set<Point> A, Map<Point, String> idA, int aMaxU,
+    private static boolean equalUnder(Set<Point> A, Map<Point, String> idA,
                                       Set<Point> B, Map<Point, String> idB, int bMaxU,
                                       boolean mirror, int shift) {
         if (A.size() != B.size()) return false;

@@ -84,7 +84,7 @@ public final class WallScanner {
                 max = new BlockPos(Math.max(max.getX(), n.getX()), Math.max(max.getY(), n.getY()), Math.max(max.getZ(), n.getZ()));
 
                 if (visited.size() > MAX_VOXELS) {
-                    return new Result(null, "Wall scan exceeded 4096 blocks");
+                    return new Result(null, "Wall scan exceeded " + MAX_VOXELS + " blocks");
                 }
                 if ((max.getX() - min.getX() + 1) > MAX_EXTENT ||
                         (max.getY() - min.getY() + 1) > MAX_EXTENT ||

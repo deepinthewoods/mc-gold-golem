@@ -30,6 +30,7 @@ public class ModulePlacement {
     protected Map<BlockPos, BlockState> blockStatesMap = null;
     // Positions where gradient sampled a mine action (instead of placing a block)
     protected Set<BlockPos> minePositions = new HashSet<>();
+    protected Set<BlockPos> preRotatedPositions = new HashSet<>();
     protected int moduleMinY = 0;
     protected int moduleHeight = 1;
     protected int incomingDirX = 1;
@@ -189,6 +190,7 @@ public class ModulePlacement {
      */
     protected void buildBlockStatesMap(GoldGolemEntity golem, WallBuildStrategy strategy, WallModuleTemplate tpl) {
         blockStatesMap = new HashMap<>();
+        preRotatedPositions = new HashSet<>();
 
         // Reversal offset: shift voxels from A-relative to B-relative coordinates
         int revOffX = 0, revOffY = 0, revOffZ = 0;
@@ -215,6 +217,7 @@ public class ModulePlacement {
             Integer groupIdx = strategy.getWallBlockGroup().get(blockId);
             boolean hasGradientGroup = groupIdx != null && groupIdx >= 0 && groupIdx < strategy.getWallGroupSlots().size();
             boolean skipBlock = false;
+            boolean gradientSampled = false;
             if (hasGradientGroup) {
                 String[] slots = strategy.getWallGroupSlots().get(groupIdx);
                 float window = (groupIdx < strategy.getWallGroupWindows().size()) ? strategy.getWallGroupWindows().get(groupIdx) : 1.0f;
@@ -233,6 +236,7 @@ public class ModulePlacement {
                             if (sampledState != null) {
                                 BlockPos worldPos = new BlockPos(wx, wy, wz);
                                 stateToPlace = golem.getPlacementStateForBlock(worldPos, sampledState.getBlock(), v.state, 0, false);
+                                gradientSampled = true;
                             } else {
                                 skipBlock = true;
                             }
@@ -246,7 +250,9 @@ public class ModulePlacement {
             }
 
             if (!skipBlock) {
-                blockStatesMap.put(new BlockPos(wx, wy, wz), stateToPlace);
+                BlockPos wp = new BlockPos(wx, wy, wz);
+                blockStatesMap.put(wp, stateToPlace);
+                if (gradientSampled) preRotatedPositions.add(wp);
             }
         }
     }
@@ -308,13 +314,16 @@ public class ModulePlacement {
         BlockState stateToPlace = blockStatesMap.get(pos);
         if (stateToPlace == null) return false;
 
-        boolean placed = strategy.placeBlockStateAt(golem, pos.getX(), pos.getY(), pos.getZ(), stateToPlace, rot, mirror, nextPos);
+        boolean skipRotation = preRotatedPositions.contains(pos);
+        boolean placed = strategy.placeBlockStateAt(golem, pos.getX(), pos.getY(), pos.getZ(),
+                stateToPlace, skipRotation ? 0 : rot, skipRotation ? false : mirror, nextPos);
         if (!placed) {
             return false;
         }
 
         // Remove from map so we don't place again
         blockStatesMap.remove(pos);
+        preRotatedPositions.remove(pos);
         return true;
     }
 
@@ -330,6 +339,7 @@ public class ModulePlacement {
     public void removeCorrectBlocks(GoldGolemEntity golem) {
         if (blockStatesMap != null) {
             blockStatesMap.keySet().removeIf(pos -> isBlockAlreadyCorrect(golem, pos));
+            preRotatedPositions.retainAll(blockStatesMap.keySet());
         }
     }
 
@@ -343,6 +353,7 @@ public class ModulePlacement {
             blockStatesMap.keySet().retainAll(positions);
         }
         minePositions.retainAll(positions);
+        preRotatedPositions.retainAll(positions);
     }
 
     public static int[] rotateAndMirror(int x, int y, int z, int rot, boolean mirror) {
@@ -362,7 +373,6 @@ public class ModulePlacement {
      * Write this placement's config to a ValueOutput view.
      */
     public void writeTo(ValueOutput view, String prefix) {
-        view.putBoolean(prefix + "isGap", false);
         view.putInt(prefix + "tpl", tplIndex);
         view.putInt(prefix + "rot", rot);
         view.putBoolean(prefix + "mir", mirror);
@@ -376,12 +386,12 @@ public class ModulePlacement {
     }
 
     /**
-     * Read a ModulePlacement or GapPlacement from a ValueInput view.
+     * Read a ModulePlacement from a ValueInput view.
      */
     public static ModulePlacement readFrom(ValueInput view, String prefix) {
         boolean isGap = view.getBooleanOr(prefix + "isGap", false);
         if (isGap) {
-            return GapPlacement.readGapFrom(view, prefix);
+            return null; // GapPlacement removed; skip legacy gap entries
         }
         int tpl = view.getIntOr(prefix + "tpl", -1);
         int rot = view.getIntOr(prefix + "rot", 0);
