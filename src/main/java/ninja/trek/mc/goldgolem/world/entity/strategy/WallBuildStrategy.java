@@ -796,13 +796,15 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         final double score;
         final int outDirX, outDirZ;
         final WallJoinSlice outSlice;
+        final long endpointKey;
 
-        ScoredCandidate(ModulePlacement placement, double score, int outDirX, int outDirZ, WallJoinSlice outSlice) {
+        ScoredCandidate(ModulePlacement placement, double score, int outDirX, int outDirZ, WallJoinSlice outSlice, long endpointKey) {
             this.placement = placement;
             this.score = score;
             this.outDirX = outDirX;
             this.outDirZ = outDirZ;
             this.outSlice = outSlice;
+            this.endpointKey = endpointKey;
         }
     }
 
@@ -845,9 +847,16 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
                         if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
                         double yScore = Math.abs(dyNeed - dyStep);
-                        // Distance from endpoint to the anchor → player segment
-                        double xz = distToSegmentXZ(end.x, end.z,
+                        // Lateral distance from endpoint to the effective direction ray
+                        double lateralDist = Math.abs((double)d[2] * effectiveDirX - (double)d[0] * effectiveDirZ);
+
+                        // Divergence rejection: reject candidates whose endpoint is too far from the anchor→player segment
+                        double segDist = distToSegmentXZ(end.x, end.z,
                                 anchor.x, anchor.z, playerPos.x, playerPos.z);
+                        if (segDist > 3.0) {
+                            if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(divergence segDist=" + String.format("%.2f", segDist) + ")");
+                            continue;
+                        }
 
                         // Incoming direction constraint: input-side axis must match effective wallLastDir
                         // Skip for the first module — there's no previous module to chain from,
@@ -893,7 +902,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
                         // Forward direction constraint: module must not go backward
                         int fwdDot = d[0] * effectiveDirX + d[2] * effectiveDirZ;
-                        if (fwdDot < 0) {
+                        if (fwdDot <= 0) {
                             if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(backward)");
                             continue;
                         }
@@ -914,12 +923,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         } else {
                             outDirX = 0; outDirZ = Integer.signum(d[2]);
                         }
-                        double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + xz;
+                        double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + lateralDist;
                         if (log) {
                             System.out.println("[WallChoose] " + candidateTag
                                     + " → score=" + String.format("%.2f", score)
                                     + " (okY=" + okY + " yS=" + String.format("%.1f", yScore)
-                                    + " xz=" + String.format("%.2f", xz)
+                                    + " lat=" + String.format("%.2f", lateralDist)
+                                    + " seg=" + String.format("%.2f", segDist)
                                     + " outDir=(" + outDirX + "," + outDirZ + "))");
                         }
 
@@ -927,16 +937,29 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         WallJoinSlice outSlice = rev ? tpl.getASlice() : tpl.getBSlice();
                         if (outSlice != null) outSlice = outSlice.transformedDu(rot, mir == 1);
 
+                        long epKey = BlockPos.asLong(d[0], d[1], d[2]);
                         candidates.add(new ScoredCandidate(
                                 new ModulePlacement(ti, rot, mir == 1, rev, anchor, end),
-                                score, outDirX, outDirZ, outSlice));
+                                score, outDirX, outDirZ, outSlice, epKey));
                     }
                 }
             }
         }
 
-        // Sort by score (best first)
-        candidates.sort(Comparator.comparingDouble(c -> c.score));
+        // Sort by score (best first), with direction-match tiebreaker
+        candidates.sort((a, b) -> {
+            int cmp = Double.compare(a.score, b.score);
+            if (cmp != 0) return cmp;
+            boolean aMatch = (a.outDirX == effectiveDirX && a.outDirZ == effectiveDirZ);
+            boolean bMatch = (b.outDirX == effectiveDirX && b.outDirZ == effectiveDirZ);
+            return Boolean.compare(bMatch, aMatch); // direction-matching first
+        });
+
+        // Deduplicate by endpoint: among candidates with the same integer delta,
+        // keep the first (best-scoring, direction-preferred) one.
+        Set<Long> seen = new HashSet<>();
+        candidates.removeIf(c -> !seen.add(c.endpointKey));
+
         return candidates;
     }
 
