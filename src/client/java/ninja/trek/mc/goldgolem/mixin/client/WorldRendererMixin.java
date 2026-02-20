@@ -208,36 +208,30 @@ public abstract class WorldRendererMixin {
                 Vec3 av = pts.get(i);
                 Vec3 bv = pts.get(i + 1);
                 if (cworld == null) continue;
-                java.util.List<Vec3> poly = goldgolem$buildSteppedPath((ClientLevel) cworld, av, bv);
-                if (poly.size() < 2) continue;
                 final boolean isCurrent = (i == currentIdx);
                 final int rr = isCurrent ? cR : qR;
                 final int gg = isCurrent ? cG : qG;
                 final int bb = isCurrent ? cB : qB;
                 final int aa = isCurrent ? cA : qA;
                 final RenderType layer = lineLayer;
+                // Straight line between module endpoints (gold block positions)
                 var batching = queue.order(1000);
-                // emit each segment in the polyline
-                for (int k = 0; k + 1 < poly.size(); k++) {
-                    Vec3 p0 = poly.get(k);
-                    Vec3 p1 = poly.get(k + 1);
-                    final float ax = (float) p0.x;
-                    final float ay = (float) p0.y;
-                    final float az = (float) p0.z;
-                    final float bx = (float) p1.x;
-                    final float by = (float) p1.y;
-                    final float bz = (float) p1.z;
-                    batching.submitCustomGeometry(matrices, layer, (entry, vc) -> {
-                        vc.addVertex(entry, ax - cx, ay - cy, az - cz)
-                          .setColor(rr, gg, bb, aa)
-                          .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLineWidth(1.0f);
-                        vc.addVertex(entry, bx - cx, by - cy, bz - cz)
-                          .setColor(rr, gg, bb, aa)
-                          .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                          .setLineWidth(1.0f);
-                    });
-                }
+                final float ax = (float) av.x;
+                final float ay = (float) av.y;
+                final float az = (float) av.z;
+                final float bx = (float) bv.x;
+                final float by = (float) bv.y;
+                final float bz = (float) bv.z;
+                batching.submitCustomGeometry(matrices, layer, (entry, vc) -> {
+                    vc.addVertex(entry, ax - cx, ay - cy, az - cz)
+                      .setColor(rr, gg, bb, aa)
+                      .setNormal(entry, 0.0f, 1.0f, 0.0f)
+                      .setLineWidth(1.0f);
+                    vc.addVertex(entry, bx - cx, by - cy, bz - cz)
+                      .setColor(rr, gg, bb, aa)
+                      .setNormal(entry, 0.0f, 1.0f, 0.0f)
+                      .setLineWidth(1.0f);
+                });
 
                 // If this is the current segment, also outline the blocks across its full path width
                 if (isCurrent) {
@@ -366,55 +360,24 @@ public abstract class WorldRendererMixin {
                         szw = pzw;
                     }
                 }
-                if (cworld != null) {
-                    java.util.List<Vec3> poly = goldgolem$buildSteppedPath((ClientLevel) cworld,
-                            new Vec3(sxw, syw, szw), new Vec3(pxw, pyw, pzw));
-                    if (poly.size() >= 2) {
-                        // Compute cumulative lengths for per-vertex fade in the last 1m
-                        double totalLen = 0.0;
-                        double[] cum = new double[poly.size()];
-                        cum[0] = 0.0;
-                        for (int j = 1; j < poly.size(); j++) {
-                            double d = poly.get(j).distanceTo(poly.get(j - 1));
-                            totalLen += d;
-                            cum[j] = totalLen;
-                        }
-                        var batchingPrev = queue.order(1000);
-                        // Red when no valid module, gray otherwise
-                        final int baseR = data.noValid ? 220 : pR;
-                        final int baseG = data.noValid ? 40 : pG;
-                        final int baseB = data.noValid ? 40 : pB;
-                        for (int j = 0; j + 1 < poly.size(); j++) {
-                            Vec3 p0 = poly.get(j);
-                            Vec3 p1 = poly.get(j + 1);
-                            double f0 = Math.max(0.0, Math.min(1.0, (cum[j] - Math.max(0.0, totalLen - 1.0)) / 1.0));
-                            double f1 = Math.max(0.0, Math.min(1.0, (cum[j + 1] - Math.max(0.0, totalLen - 1.0)) / 1.0));
-                            int c0r = (int) Math.round(baseR + (255 - baseR) * f0);
-                            int c0g = (int) Math.round(baseG + (255 - baseG) * f0);
-                            int c0b = (int) Math.round(baseB + (255 - baseB) * f0);
-                            int c1r = (int) Math.round(baseR + (255 - baseR) * f1);
-                            int c1g = (int) Math.round(baseG + (255 - baseG) * f1);
-                            int c1b = (int) Math.round(baseB + (255 - baseB) * f1);
-                            final float ax = (float) p0.x;
-                            final float ay = (float) p0.y;
-                            final float az = (float) p0.z;
-                            final float bx = (float) p1.x;
-                            final float by = (float) p1.y;
-                            final float bz = (float) p1.z;
-                            final int cr0r = c0r, cr0g = c0g, cr0b = c0b;
-                            final int cr1r = c1r, cr1g = c1g, cr1b = c1b;
-                            batchingPrev.submitCustomGeometry(matrices, lineLayer, (entry, vc) -> {
-                                vc.addVertex(entry, ax - cx, ay - cy, az - cz)
-                                  .setColor(cr0r, cr0g, cr0b, pA)
-                                  .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                                  .setLineWidth(1.0f);
-                                vc.addVertex(entry, bx - cx, by - cy, bz - cz)
-                                  .setColor(cr1r, cr1g, cr1b, pA)
-                                  .setNormal(entry, 0.0f, 1.0f, 0.0f)
-                                  .setLineWidth(1.0f);
-                            });
-                        }
-                    }
+                // Straight preview line from last module end to player
+                {
+                    final int baseR = data.noValid ? 220 : pR;
+                    final int baseG = data.noValid ? 40 : pG;
+                    final int baseB = data.noValid ? 40 : pB;
+                    var batchingPrev = queue.order(1000);
+                    final float fsx = sxw, fsy = syw, fsz = szw;
+                    final float fpx = pxw, fpy = pyw, fpz = pzw;
+                    batchingPrev.submitCustomGeometry(matrices, lineLayer, (entry, vc) -> {
+                        vc.addVertex(entry, fsx - cx, fsy - cy, fsz - cz)
+                          .setColor(baseR, baseG, baseB, pA)
+                          .setNormal(entry, 0.0f, 1.0f, 0.0f)
+                          .setLineWidth(1.0f);
+                        vc.addVertex(entry, fpx - cx, fpy - cy, fpz - cz)
+                          .setColor(255, 255, 255, pA)
+                          .setNormal(entry, 0.0f, 1.0f, 0.0f)
+                          .setLineWidth(1.0f);
+                    });
                 }
             }
 

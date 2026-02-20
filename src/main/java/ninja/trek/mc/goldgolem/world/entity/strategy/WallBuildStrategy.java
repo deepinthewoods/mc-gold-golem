@@ -35,6 +35,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     private int wallJoinUSize = 1;
     private int wallModuleCount = 0;
     private int wallLongestModule = 0;
+    private double wallMaxSliceDist = 0.0; // max euclidean A→B distance across all modules
     private boolean wallSliceSymmetric = true;
     private List<WallModuleTemplate> wallTemplates = Collections.emptyList();
     private List<JoinEntry> wallJoinTemplate = Collections.emptyList();
@@ -126,6 +127,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         nbt.putInt("JoinUSize", wallJoinUSize);
         nbt.putInt("ModCount", wallModuleCount);
         nbt.putInt("ModLongest", wallLongestModule);
+        nbt.putDouble("MaxSliceDist", wallMaxSliceDist);
         nbt.putBoolean("SliceSym", wallSliceSymmetric);
 
         // Save join template
@@ -210,6 +212,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         wallJoinUSize = Math.max(1, nbt.getIntOr("JoinUSize", 1));
         wallModuleCount = nbt.getIntOr("ModCount", 0);
         wallLongestModule = nbt.getIntOr("ModLongest", 0);
+        wallMaxSliceDist = nbt.getDoubleOr("MaxSliceDist", 0.0);
         wallSliceSymmetric = nbt.getBooleanOr("SliceSym", true);
 
         // Load join template
@@ -422,6 +425,16 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         this.wallSliceSymmetric = sliceSymmetric;
         this.wallTemplates = templates != null ? new ArrayList<>(templates) : Collections.emptyList();
         this.wallJoinTemplate = joinTemplate != null ? new ArrayList<>(joinTemplate) : Collections.emptyList();
+
+        // Precompute max euclidean A→B distance across all modules
+        double maxDist = 0.0;
+        for (var tpl : this.wallTemplates) {
+            double dx = tpl.bMarker.getX() - tpl.aMarker.getX();
+            double dy = tpl.bMarker.getY() - tpl.aMarker.getY();
+            double dz = tpl.bMarker.getZ() - tpl.aMarker.getZ();
+            maxDist = Math.max(maxDist, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        }
+        this.wallMaxSliceDist = maxDist;
     }
 
     /**
@@ -565,7 +578,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 golem.setTrackStart(p);
                 trackStart = p;
             } else {
-                double threshold = Math.max(2.0, getWallLongestHoriz() + 1.0);
+                // Threshold: max euclidean slice-to-slice distance + 1, precomputed at summoning
+                double threshold = wallMaxSliceDist + 1.0;
                 double dist = Math.sqrt((p.x - trackStart.x) * (p.x - trackStart.x) + (p.z - trackStart.z) * (p.z - trackStart.z));
                 if (dist >= threshold) {
                     // Initialize lastDir from walking direction for first module
@@ -729,14 +743,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         ninja.trek.mc.goldgolem.net.ServerNet.sendLines(sp, golem.getId(), list, anchor, noValid);
     }
 
-    private double getWallLongestHoriz() {
-        double longest = 0.0;
-        for (var t : wallTemplates) {
-            longest = Math.max(longest, t.horizLen());
-        }
-        return longest;
-    }
-
     /**
      * Perpendicular distance from point (px, pz) to the line through the origin
      * with direction (ldx, ldz) of length lLen. Falls back to point distance
@@ -831,6 +837,8 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         int[] d = ModulePlacement.rotateAndMirror(dx, dy, dz, rot, mir == 1);
                         Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
 
+                        String candidateTag = "tpl=" + ti + " rot=" + rot + " mir=" + mir + " rev=" + rev;
+
                         // Y rule: toward player Y and no overshoot
                         double dyNeed = playerPos.y - anchor.y;
                         double dyStep = d[1];
@@ -840,8 +848,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         // Distance from endpoint to the anchor → player segment
                         double xz = distToSegmentXZ(end.x, end.z,
                                 anchor.x, anchor.z, playerPos.x, playerPos.z);
-
-                        String candidateTag = "tpl=" + ti + " rot=" + rot + " mir=" + mir + " rev=" + rev;
 
                         // Incoming direction constraint: input-side axis must match effective wallLastDir
                         // Skip for the first module — there's no previous module to chain from,
@@ -869,26 +875,18 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                             }
                         }
 
-                        // Slice profile constraint — skip for first module (no predecessor to match)
-                        if (!isFirstModule) {
-                            if (!wallJoinTemplate.isEmpty()) {
-                                WallJoinSlice inputSlice = rev ? tpl.getBSlice() : tpl.getASlice();
-                                if (inputSlice != null) {
-                                    WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
-                                    WallJoinSlice reference = buildReferenceSlice(transformedInput.axis);
-                                    if (reference != null && !reference.profileEquals(transformedInput)) {
-                                        if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceProfile)");
-                                        continue;
-                                    }
-                                }
-                            } else if (effectiveSlice != null) {
-                                WallJoinSlice inputSlice = rev ? tpl.getBSlice() : tpl.getASlice();
-                                if (inputSlice != null) {
-                                    WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
-                                    if (!effectiveSlice.profileEquals(transformedInput)) {
-                                        if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceFallback)");
-                                        continue;
-                                    }
+                        // Slice shape constraint — skip for first module (no predecessor to match).
+                        // Compare against effectiveSlice (previous module's output slice) which
+                        // is computed from template voxels. The wallJoinTemplate reference is not
+                        // used because it excludes gold marker positions while template slices
+                        // include them (with fill blocks), causing a point count mismatch.
+                        if (!isFirstModule && effectiveSlice != null) {
+                            WallJoinSlice inputSlice = rev ? tpl.getBSlice() : tpl.getASlice();
+                            if (inputSlice != null) {
+                                WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
+                                if (!effectiveSlice.shapeEquals(transformedInput)) {
+                                    if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceShape)");
+                                    continue;
                                 }
                             }
                         }
@@ -942,9 +940,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         return candidates;
     }
 
-    /** Maximum allowed distance from a module endpoint to the guide line segment. */
-    private static final double DIVERGE_TOLERANCE = 1.5;
-
     private ModulePlacement chooseNextModule(Vec3 anchor, Vec3 playerPos) {
         if (wallTemplates == null || wallTemplates.isEmpty()) {
             System.out.println("[WallChoose] No templates available");
@@ -979,24 +974,20 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 + " joinTpl=" + wallJoinTemplate.size()
                 + " outSlice=" + (currentOutputSlice != null));
 
-        // Greedy pick: take the best-scoring candidate that doesn't diverge
-        // from the anchor→player guide line beyond the tolerance.
+        // Pick the best-scoring candidate. Candidates are already sorted by score
+        // (proximity to preview line + Y fitness). Per-candidate distance gating in
+        // scoreCandidates already filtered out modules the player hasn't walked to yet.
         ModulePlacement best = null;
         double bestScore = Double.POSITIVE_INFINITY;
         double bestEndDist = Double.POSITIVE_INFINITY;
 
         for (ScoredCandidate c : candidates) {
             if (c.score > 100.0) continue; // skip Y-invalid candidates
-            double endDist = distToSegmentXZ(c.placement.end().x, c.placement.end().z,
+            best = c.placement;
+            bestScore = c.score;
+            bestEndDist = distToSegmentXZ(c.placement.end().x, c.placement.end().z,
                     anchor.x, anchor.z, playerPos.x, playerPos.z);
-            // First module: skip diverge check — the player's walking path doesn't
-            // necessarily align with the wall axis yet. Forward-dot + scoring suffice.
-            if (isFirstModule || endDist <= DIVERGE_TOLERANCE) {
-                best = c.placement;
-                bestScore = c.score;
-                bestEndDist = endDist;
-                break; // already sorted by score, first passing one wins
-            }
+            break; // already sorted by score, first valid one wins
         }
 
         if (best != null) {

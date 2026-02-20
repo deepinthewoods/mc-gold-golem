@@ -436,6 +436,14 @@ public final class WallJoinSlice {
         return comp < 0;
     }
 
+    /** Shape-only match: axis and (dy,du) point set, ignoring block IDs.
+     *  Trusts summoning-time validation that all templates have compatible join slices. */
+    public boolean shapeEquals(WallJoinSlice other) {
+        if (other == null) return false;
+        if (this.axis != other.axis) return false;
+        return this.points.equals(other.points);
+    }
+
     /** Exact match of axis, points set, and blockIds at each point. */
     public boolean profileEquals(WallJoinSlice other) {
         if (other == null) return false;
