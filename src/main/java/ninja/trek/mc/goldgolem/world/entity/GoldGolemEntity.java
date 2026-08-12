@@ -135,6 +135,8 @@ public class GoldGolemEntity extends PathfinderMob {
 
     // Strategy pattern for build modes
     private BuildStrategy activeStrategy = null;
+    private BlockPos buildStartPosition = null;
+    private BlockPos resourceWaitAnchor = null;
 
     // Wall-mode captured data (scaffold)
     private java.util.List<String> wallUniqueBlockIds = java.util.Collections.emptyList();
@@ -416,12 +418,15 @@ public class GoldGolemEntity extends PathfinderMob {
             activeStrategy.stop(this);
         }
         this.getNavigation().stop();
+        clearBuildReturnState();
     }
 
     /**
      * Start building with the current strategy.
      */
     public void startBuilding() {
+        this.buildStartPosition = this.blockPosition();
+        this.resourceWaitAnchor = null;
         this.buildingPaths = true;
         this.entityData.set(BUILDING_PATHS, true);
         initializeStrategyForCurrentMode();
@@ -433,6 +438,19 @@ public class GoldGolemEntity extends PathfinderMob {
     public void setBuildingPaths(boolean building) {
         this.buildingPaths = building;
         this.entityData.set(BUILDING_PATHS, building);
+    }
+
+    public boolean isWaitingForResources() {
+        return activeStrategy != null && activeStrategy.isWaitingForResources();
+    }
+
+    public BlockPos getResourceWaitAnchor() {
+        return resourceWaitAnchor;
+    }
+
+    private void clearBuildReturnState() {
+        buildStartPosition = null;
+        resourceWaitAnchor = null;
     }
 
     public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.core.BlockPos origin, String jsonPath) {
@@ -566,7 +584,12 @@ public class GoldGolemEntity extends PathfinderMob {
     public java.util.List<String> getTowerUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.towerUniqueBlockIds); }
     public java.util.Map<String, Integer> getTowerBlockCounts() { return java.util.Collections.unmodifiableMap(this.towerBlockCounts); }
     public int getTowerHeight() { return towerHeight; }
-    public void setTowerHeight(int height) { this.towerHeight = Math.max(1, Math.min(256, height)); }
+    public void setTowerHeight(int height) {
+        int clampedHeight = Math.max(1, Math.min(256, height));
+        if (this.towerHeight == clampedHeight) return;
+        this.towerHeight = clampedHeight;
+        notifyTowerConfigurationChanged("towerHeight");
+    }
     public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() {
         // Lazy load from JSON file if template is null but file path is set
         if (towerTemplate == null && towerJsonFile != null && !towerJsonFile.isEmpty()) {
@@ -612,10 +635,9 @@ public class GoldGolemEntity extends PathfinderMob {
     public java.util.Map<String, Integer> getTowerBlockGroup() { return towerBlockGroup; }
     public BlockPos getTowerOrigin() { return towerOrigin; }
     public void setTowerOrigin(BlockPos origin) {
+        if (Objects.equals(this.towerOrigin, origin)) return;
         this.towerOrigin = origin;
-        if (activeStrategy != null) {
-            activeStrategy.onConfigurationChanged("towerOrigin");
-        }
+        notifyTowerConfigurationChanged("towerOrigin");
     }
     public java.util.List<String> getTowerGroupFlatSlots() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>(towerGroupSlots.size() * 9);
@@ -634,20 +656,36 @@ public class GoldGolemEntity extends PathfinderMob {
             return;
         }
         towerBlockGroup.put(blockId, group);
+        notifyTowerConfigurationChanged("towerGradient");
     }
     public void setTowerGroupWindow(int group, float window) {
         if (group < 0 || group >= towerGroupWindows.size()) return;
-        towerGroupWindows.set(group, Math.max(0.0f, Math.min(9.0f, window)));
+        float clampedWindow = Math.max(0.0f, Math.min(9.0f, window));
+        if (Float.compare(towerGroupWindows.get(group), clampedWindow) == 0) return;
+        towerGroupWindows.set(group, clampedWindow);
+        notifyTowerConfigurationChanged("towerGradient");
     }
     public void setTowerGroupNoiseScale(int group, int scale) {
         if (group < 0 || group >= towerGroupNoiseScales.size()) return;
-        towerGroupNoiseScales.set(group, Math.max(1, Math.min(16, scale)));
+        int clampedScale = Math.max(1, Math.min(16, scale));
+        if (towerGroupNoiseScales.get(group) == clampedScale) return;
+        towerGroupNoiseScales.set(group, clampedScale);
+        notifyTowerConfigurationChanged("towerGradient");
     }
     public void setTowerGroupSlot(int group, int slot, String id) {
         if (group < 0 || group >= towerGroupSlots.size()) return;
         if (slot < 0 || slot >= 9) return;
         String[] arr = towerGroupSlots.get(group);
-        arr[slot] = (id == null) ? "" : id;
+        String normalizedId = (id == null) ? "" : id;
+        if (Objects.equals(arr[slot], normalizedId)) return;
+        arr[slot] = normalizedId;
+        notifyTowerConfigurationChanged("towerGradient");
+    }
+
+    private void notifyTowerConfigurationChanged(String configKey) {
+        if (activeStrategy != null) {
+            activeStrategy.onConfigurationChanged(configKey);
+        }
     }
 
     // Tree mode configuration
@@ -1575,6 +1613,7 @@ public class GoldGolemEntity extends PathfinderMob {
         }
 
         if (this.level().isClientSide()) return;
+        tickResourceWaitReturn();
         if (buildingPaths) {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
@@ -1603,6 +1642,21 @@ public class GoldGolemEntity extends PathfinderMob {
         }
 
         advanceHandAnimationTicks();
+    }
+
+    private void tickResourceWaitReturn() {
+        if (buildingPaths || !isWaitingForResources() || resourceWaitAnchor == null) return;
+
+        double targetX = resourceWaitAnchor.getX() + 0.5;
+        double targetZ = resourceWaitAnchor.getZ() + 0.5;
+        double dx = this.getX() - targetX;
+        double dz = this.getZ() - targetZ;
+        if (dx * dx + dz * dz <= 16.0 || !this.getNavigation().isDone()) return;
+
+        // Retry periodically if terrain changes or the first path search fails.
+        if (this.tickCount % 20 == 0) {
+            this.getNavigation().moveTo(targetX, resourceWaitAnchor.getY(), targetZ, 0.8);
+        }
     }
 
     private void updateRandomEyeMovement() {
@@ -2022,22 +2076,33 @@ public class GoldGolemEntity extends PathfinderMob {
     public boolean placeBlockFromInventoryWithTemplate(BlockPos pos, BlockState templateState, BlockState gradientState, BlockPos nextPos, boolean isLeft) {
         // Determine the final block state to place based on template and gradient
         BlockState finalState = getPlacementStateForBlock(pos, gradientState.getBlock(), templateState, 0, false);
+        BlockState replacedState = this.level().getBlockState(pos);
 
         // Check if block already exists at position
-        if (this.level().getBlockState(pos).equals(finalState)) return true;
+        if (replacedState.equals(finalState)) return true;
 
         // Prevent placing blocks inside self to avoid suffocation damage
         if (wouldBlockOverlapSelf(pos)) return false;
 
-        // Try to consume block from inventory
-        String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(finalState.getBlock()).toString();
-        if (!consumeBlockFromInventory(blockId)) {
-            LOGGER.warn("GoldGolem placement failed: missing blockId={} at pos={}", blockId, pos);
-            handleMissingBuildingBlock();
-            return false;
+        boolean replacingDifferentBlock = replacedState.getBlock() != finalState.getBlock();
+        if (replacingDifferentBlock) {
+            // Consume only when the material changes. Correcting the state of an existing block
+            // (for example a connected wall) must not waste an identical inventory block.
+            String blockId = BuiltInRegistries.BLOCK.getKey(finalState.getBlock()).toString();
+            if (!consumeBlockFromInventory(blockId)) {
+                LOGGER.warn("GoldGolem placement failed: missing blockId={} at pos={}", blockId, pos);
+                handleMissingBuildingBlock();
+                return false;
+            }
         }
 
         this.level().setBlockAndUpdate(pos, finalState);
+
+        if (replacingDifferentBlock && !replacedState.isAir()) {
+            // Consuming the replacement first may free the slot needed for the old block.
+            // If no room exists, the old material is intentionally discarded.
+            tryAddToInventory(new ItemStack(replacedState.getBlock().asItem()));
+        }
 
         // Explicitly update the block state to ensure proper connections (e.g. walls/fences)
         // This fixes issues where simulatePlayerPlacement might miss connections or when replacing blocks
@@ -2061,6 +2126,32 @@ public class GoldGolemEntity extends PathfinderMob {
         // Set hand animation with current and next block positions
         beginHandAnimation(isLeft, pos, nextPos);
         return true;
+    }
+
+    private boolean tryAddToInventory(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack slot = inventory.getItem(i);
+            if (slot.isEmpty() || !ItemStack.isSameItemSameComponents(stack, slot)) continue;
+
+            int space = slot.getMaxStackSize() - slot.getCount();
+            if (space <= 0) continue;
+
+            int toAdd = Math.min(space, stack.getCount());
+            slot.setCount(slot.getCount() + toAdd);
+            stack.shrink(toAdd);
+            inventory.setItem(i, slot);
+            if (stack.isEmpty()) return true;
+        }
+
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (!inventory.getItem(i).isEmpty()) continue;
+            inventory.setItem(i, stack.copy());
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -2292,6 +2383,17 @@ public class GoldGolemEntity extends PathfinderMob {
     protected void addAdditionalSaveData(ValueOutput view) {
         view.putString("Mode", getBuildMode().name());
         view.putBoolean("BuildingPaths", isBuildingPaths());
+        view.putBoolean("WaitingForResources", isWaitingForResources());
+        if (buildStartPosition != null) {
+            view.putInt("BuildStartX", buildStartPosition.getX());
+            view.putInt("BuildStartY", buildStartPosition.getY());
+            view.putInt("BuildStartZ", buildStartPosition.getZ());
+        }
+        if (resourceWaitAnchor != null) {
+            view.putInt("ResourceWaitX", resourceWaitAnchor.getX());
+            view.putInt("ResourceWaitY", resourceWaitAnchor.getY());
+            view.putInt("ResourceWaitZ", resourceWaitAnchor.getZ());
+        }
         view.putInt("PathWidth", this.pathWidth);
         view.putFloat("GradWindow", this.gradientWindow);
         view.putFloat("StepWindow", this.stepGradientWindow);
@@ -2506,6 +2608,23 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         // Restore building state (after mode is set)
         boolean wasBuildingPaths = view.getBooleanOr("BuildingPaths", false);
+        boolean wasWaitingForResources = view.getBooleanOr("WaitingForResources", false);
+        if (view.contains("BuildStartX")) {
+            this.buildStartPosition = new BlockPos(
+                    view.getIntOr("BuildStartX", 0),
+                    view.getIntOr("BuildStartY", 0),
+                    view.getIntOr("BuildStartZ", 0));
+        } else {
+            this.buildStartPosition = null;
+        }
+        if (view.contains("ResourceWaitX")) {
+            this.resourceWaitAnchor = new BlockPos(
+                    view.getIntOr("ResourceWaitX", 0),
+                    view.getIntOr("ResourceWaitY", 0),
+                    view.getIntOr("ResourceWaitZ", 0));
+        } else {
+            this.resourceWaitAnchor = null;
+        }
         this.pathWidth = Math.max(1, Math.min(9, view.getIntOr("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("GradWindow", this.gradientWindow)));
         this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("StepWindow", this.stepGradientWindow)));
@@ -2637,6 +2756,7 @@ public class GoldGolemEntity extends PathfinderMob {
         initializeStrategyForCurrentMode();
         if (activeStrategy != null) {
             activeStrategy.readLegacyNbt(view);
+            activeStrategy.setWaitingForResources(wasWaitingForResources);
         }
 
         // Terraforming-mode UI settings (remain in entity)
@@ -3057,6 +3177,10 @@ public class GoldGolemEntity extends PathfinderMob {
 
                 switch (result) {
                     case STARTED, RESUMED -> {
+                        if (result == BuildStrategy.FeedResult.STARTED || buildStartPosition == null) {
+                            buildStartPosition = this.blockPosition();
+                        }
+                        resourceWaitAnchor = null;
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.shrink(1);
@@ -3087,6 +3211,8 @@ public class GoldGolemEntity extends PathfinderMob {
                     }
                     case NOT_HANDLED -> {
                         // Default behavior: just start building
+                        buildStartPosition = this.blockPosition();
+                        resourceWaitAnchor = null;
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.shrink(1);
@@ -3138,6 +3264,7 @@ public class GoldGolemEntity extends PathfinderMob {
             }
 
             // Common cleanup for path-tracking modes
+            clearBuildReturnState();
             this.trackStart = null;
             this.pendingLines.clear();
             this.currentLine = null;
@@ -3223,6 +3350,15 @@ public class GoldGolemEntity extends PathfinderMob {
             activeStrategy.setWaitingForResources(true);
         }
         this.getNavigation().stop();
+        if (buildStartPosition == null) {
+            buildStartPosition = this.blockPosition();
+        }
+        resourceWaitAnchor = buildStartPosition;
+        this.getNavigation().moveTo(
+                resourceWaitAnchor.getX() + 0.5,
+                resourceWaitAnchor.getY(),
+                resourceWaitAnchor.getZ() + 0.5,
+                0.8);
         spawnAngry();
         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
             this.trackStart = null;
@@ -3750,9 +3886,9 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
     public boolean canUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
-        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
-        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never wander in excavation mode
-        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never wander in tunnel mode
+        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.MINING) return false;
+        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.EXCAVATION) return false;
+        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.TUNNEL) return false;
         return super.canUse();
     }
 
@@ -3760,9 +3896,9 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
     public boolean canContinueToUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
-        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
-        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never wander in excavation mode
-        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never wander in tunnel mode
+        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.MINING) return false;
+        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.EXCAVATION) return false;
+        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.TUNNEL) return false;
         return super.canContinueToUse();
     }
 
@@ -3770,21 +3906,29 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
     protected Vec3 getPosition() {
         Vec3 base = super.getPosition();
 
-        // Anchor to a player: prefer owner; otherwise nearest player
-        Player anchor = getAnchorPlayer();
-        if (anchor == null) return base;
+        BlockPos waitAnchor = golem.isWaitingForResources() ? golem.getResourceWaitAnchor() : null;
+        Player playerAnchor = waitAnchor == null ? getAnchorPlayer() : null;
+        if (waitAnchor == null && playerAnchor == null) return base;
 
-        double cx = anchor.getX();
-        double cy = anchor.getY();
-        double cz = anchor.getZ();
-        double max = 12.0;
+        double cx = waitAnchor != null ? waitAnchor.getX() + 0.5 : playerAnchor.getX();
+        double cy = waitAnchor != null ? waitAnchor.getY() : playerAnchor.getY();
+        double cz = waitAnchor != null ? waitAnchor.getZ() + 0.5 : playerAnchor.getZ();
+        double max = waitAnchor != null ? 4.0 : 12.0;
         double maxSq = max * max;
 
+        if (waitAnchor != null) {
+            double golemDx = golem.getX() - cx;
+            double golemDz = golem.getZ() - cz;
+            if (golemDx * golemDx + golemDz * golemDz > maxSq) {
+                return new Vec3(cx, cy, cz);
+            }
+        }
+
         if (base == null) {
-            // No base target; pick a random point within the radius around the player
+            // No base target; pick a random point within the applicable anchor radius.
             java.util.Random rnd = new java.util.Random(golem.getRandom().nextLong());
             double angle = rnd.nextDouble() * Math.PI * 2.0;
-            double r = 6.0 + rnd.nextDouble() * 6.0; // 6..12
+            double r = waitAnchor != null ? rnd.nextDouble() * max : 6.0 + rnd.nextDouble() * 6.0;
             return new Vec3(cx + Math.cos(angle) * r, cy, cz + Math.sin(angle) * r);
         }
 
@@ -3797,7 +3941,7 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
         double dist = Math.sqrt(distSq);
         if (dist < 1e-4) return new Vec3(cx, cy, cz);
         double scale = max / dist;
-        // Clamp to the 12-block sphere around the anchor player; keep base Y for smoother nav
+        // Clamp to the applicable anchor radius; keep base Y for smoother navigation.
         return new Vec3(cx + dx * scale, base.y, cz + dz * scale);
     }
 

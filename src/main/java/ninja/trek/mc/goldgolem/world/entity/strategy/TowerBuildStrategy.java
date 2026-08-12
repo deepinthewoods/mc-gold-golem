@@ -173,8 +173,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void onConfigurationChanged(String configKey) {
-        if ("towerOrigin".equals(configKey)) {
+        if ("towerOrigin".equals(configKey)
+                || "towerHeight".equals(configKey)
+                || "towerGradient".equals(configKey)) {
             clearState();
+            if (entity != null) {
+                totalHeight = entity.getTowerHeight();
+            }
         }
     }
 
@@ -426,7 +431,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         String[] slots = golem.getTowerGroupSlots().get(groupIdx);
         float window = (groupIdx < golem.getTowerGroupWindows().size()) ? golem.getTowerGroupWindows().get(groupIdx) : 1.0f;
         int noiseScale = (groupIdx < golem.getTowerGroupNoiseScales().size()) ? golem.getTowerGroupNoiseScales().get(groupIdx) : 1;
-        int sampledIndex = sampleTowerGradient(golem, slots, window, noiseScale, pos);
+        int sampledIndex = sampleTowerGradient(golem, template, origin, slots, window, noiseScale, pos);
 
         if (sampledIndex >= 0 && sampledIndex < 9) {
             String sampledId = slots[sampledIndex];
@@ -512,7 +517,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         String[] slots = golem.getTowerGroupSlots().get(groupIdx);
         float window = (groupIdx < golem.getTowerGroupWindows().size()) ? golem.getTowerGroupWindows().get(groupIdx) : 1.0f;
         int noiseScale = (groupIdx < golem.getTowerGroupNoiseScales().size()) ? golem.getTowerGroupNoiseScales().get(groupIdx) : 1;
-        int sampledIndex = sampleTowerGradient(golem, slots, window, noiseScale, pos);
+        int sampledIndex = sampleTowerGradient(golem, template, origin, slots, window, noiseScale, pos);
 
         if (sampledIndex >= 0 && sampledIndex < 9) {
             String sampledId = slots[sampledIndex];
@@ -530,7 +535,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         return null;
     }
 
-    private int sampleTowerGradient(GoldGolemEntity golem, String[] slots, float window, int noiseScale, BlockPos pos) {
+    private int sampleTowerGradient(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin,
+                                    String[] slots, float window, int noiseScale, BlockPos pos) {
         int height = golem.getTowerHeight();
         if (height == 0) return -1;
 
@@ -544,8 +550,14 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         }
         if (G == 0) return -1;
 
-        // Map Y position in tower to gradient space [0, G-1]
-        double s = ((double) currentLayerY / (double) height) * (G - 1);
+        // Derive the layer from the position itself. The planner holds several layers at once,
+        // so using the moving currentLayerY cursor made a queued block's expected material change.
+        int layerY = pos.getY() - origin.getY() - template.minY;
+        layerY = Math.max(0, Math.min(height - 1, layerY));
+
+        // Map the full tower height to gradient space [0, G-1].
+        double heightFraction = height == 1 ? 0.0 : (double) layerY / (double) (height - 1);
+        double s = heightFraction * (G - 1);
 
         // Apply windowing
         float W = Math.min(window, G);
