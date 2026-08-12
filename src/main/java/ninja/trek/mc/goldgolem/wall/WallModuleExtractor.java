@@ -142,8 +142,11 @@ public final class WallModuleExtractor {
                     + " (marker=" + g + ")");
         }
 
-        // Step 4: Remove all voxels at cut planes from the working set
-        Set<BlockPos> cutVoxels = new HashSet<>();
+        // Step 4: Remove all voxels at cut planes from the working set.
+        // Track voxels per cut so we can duplicate them into both adjacent segments.
+        List<Set<BlockPos>> cutVoxelsPerCut = new ArrayList<>(numCuts);
+        for (int ci = 0; ci < numCuts; ci++) cutVoxelsPerCut.add(new HashSet<>());
+        Set<BlockPos> allCutVoxels = new HashSet<>();
         Set<BlockPos> working = new HashSet<>(allNonGold);
         for (int ci = 0; ci < numCuts; ci++) {
             boolean isX = cutIsX[ci];
@@ -152,7 +155,8 @@ public final class WallModuleExtractor {
             while (it.hasNext()) {
                 BlockPos v = it.next();
                 if ((isX ? v.getX() : v.getZ()) == coord) {
-                    cutVoxels.add(v);
+                    cutVoxelsPerCut.get(ci).add(v);
+                    allCutVoxels.add(v);
                     it.remove();
                 }
             }
@@ -180,7 +184,7 @@ public final class WallModuleExtractor {
             components.add(comp);
         }
 
-        System.out.println("[WallExtractor] After cuts: " + components.size() + " components, " + cutVoxels.size() + " cut voxels, expected " + numSegments + " segments");
+        System.out.println("[WallExtractor] After cuts: " + components.size() + " components, " + allCutVoxels.size() + " cut voxels, expected " + numSegments + " segments");
 
         // Step 6: Assign each component to its nearest segment, then re-add cut voxels
         List<Set<BlockPos>> segmentVoxels = new ArrayList<>(numSegments);
@@ -204,17 +208,14 @@ public final class WallModuleExtractor {
             segmentVoxels.get(bestSeg).addAll(comp);
         }
 
-        // Re-add cut voxels: each goes to the nearest segment
-        for (BlockPos cv : cutVoxels) {
-            double bestCost = Double.MAX_VALUE;
-            int bestSeg = 0;
-            for (int seg = 0; seg < numSegments; seg++) {
-                BlockPos a = goldMarkersRel.get(chain.get(seg));
-                BlockPos b = goldMarkersRel.get(chain.get(seg + 1));
-                double cost = dist(cv, a) + dist(cv, b);
-                if (cost < bestCost) { bestCost = cost; bestSeg = seg; }
+        // Re-add cut voxels: duplicate into BOTH adjacent segments so each
+        // module template has the complete join plane on both its A and B sides.
+        // Cut ci separates segment ci from segment ci+1.
+        for (int ci = 0; ci < numCuts; ci++) {
+            for (BlockPos cv : cutVoxelsPerCut.get(ci)) {
+                segmentVoxels.get(ci).add(cv);
+                segmentVoxels.get(ci + 1).add(cv);
             }
-            segmentVoxels.get(bestSeg).add(cv);
         }
 
         // Step 7: Build modules
