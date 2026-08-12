@@ -760,7 +760,7 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
             ItemContainerContents container = stack.get(DataComponents.CONTAINER);
             if (container == null) continue;
 
-            for (ItemStack inner : container.stream().toList()) {
+            for (ItemStack inner : container.allItemsCopyStream().toList()) {
                 if (inner.isEmpty() || !(inner.getItem() instanceof BlockItem innerBi)) continue;
 
                 var block = innerBi.getBlock();

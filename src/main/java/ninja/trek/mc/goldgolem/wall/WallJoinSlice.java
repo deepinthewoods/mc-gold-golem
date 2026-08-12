@@ -236,24 +236,18 @@ public final class WallJoinSlice {
     /** Serialize a BlockState to a string with properties, e.g. "minecraft:oak_stairs[facing=north,half=bottom]". */
     public static String serializeState(BlockState state) {
         String id = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
-        if (state.getValues().isEmpty()) return id;
+        var values = state.getValues().toList();
+        if (values.isEmpty()) return id;
         StringBuilder sb = new StringBuilder(id);
         sb.append('[');
         boolean first = true;
-        for (var entry : state.getValues().entrySet()) {
+        for (var value : values) {
             if (!first) sb.append(',');
-            sb.append(entry.getKey().getName()).append('=').append(propertyValueName(entry.getKey(), entry.getValue()));
+            sb.append(value.property().getName()).append('=').append(value.valueName());
             first = false;
         }
         sb.append(']');
         return sb.toString();
-    }
-
-    @SuppressWarnings("unchecked")
-    private static <T extends Comparable<T>> String propertyValueName(Property<?> rawProp, Comparable<?> rawVal) {
-        Property<T> prop = (Property<T>) rawProp;
-        T val = (T) rawVal;
-        return prop.getName(val);
     }
 
     /** Parse a block state string back to a BlockState. Handles both "id[props]" and plain "id" formats. */

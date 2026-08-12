@@ -139,7 +139,7 @@ public abstract class WorldRendererMixin {
 
     @Inject(method = "submitEntities", at = @At("TAIL"))
     private void goldgolem$renderLines(PoseStack matrices,
-                                       net.minecraft.client.renderer.state.LevelRenderState renderStates,
+                                       net.minecraft.client.renderer.state.level.LevelRenderState renderStates,
                                        net.minecraft.client.renderer.SubmitNodeCollector queue,
                                        CallbackInfo ci) {
         Minecraft mc = Minecraft.getInstance();

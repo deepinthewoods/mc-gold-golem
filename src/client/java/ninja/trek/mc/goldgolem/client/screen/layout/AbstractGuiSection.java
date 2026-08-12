@@ -1,6 +1,6 @@
 package ninja.trek.mc.goldgolem.client.screen.layout;
 
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
  * Base implementation of GuiSection providing common functionality.
@@ -36,12 +36,12 @@ public abstract class AbstractGuiSection implements GuiSection {
     }
 
     @Override
-    public void renderBackground(GuiGraphics context, int guiX, int guiY) {
+    public void renderBackground(GuiGraphicsExtractor context, int guiX, int guiY) {
         // Default: no background rendering
     }
 
     @Override
-    public void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY) {
+    public void renderForeground(GuiGraphicsExtractor context, int guiX, int guiY, int mouseX, int mouseY) {
         // Default: no foreground rendering
     }
 

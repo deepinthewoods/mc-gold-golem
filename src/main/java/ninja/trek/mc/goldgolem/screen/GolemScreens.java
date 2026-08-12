@@ -1,6 +1,6 @@
 package ninja.trek.mc.goldgolem.screen;
 
-import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerFactory;
+import net.fabricmc.fabric.api.menu.v1.ExtendedMenuProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
@@ -59,7 +59,7 @@ public final class GolemScreens {
         }
         var openData = new GolemOpenData(entityId, gradientRows, golemSlots, slider, jsonName);
 
-        player.openMenu(new ExtendedScreenHandlerFactory<GolemOpenData>() {
+        player.openMenu(new ExtendedMenuProvider<GolemOpenData>() {
             @Override
             public GolemOpenData getScreenOpeningData(ServerPlayer player) {
                 return openData;

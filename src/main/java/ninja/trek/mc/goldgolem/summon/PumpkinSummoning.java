@@ -82,10 +82,10 @@ public class PumpkinSummoning {
         // Debug: Log chest count and detected blocks
         if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
             if (chestCount > 0) {
-                sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Debug] Found " + chestCount + " storage block(s) at: " +
+                sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Debug] Found " + chestCount + " storage block(s) at: " +
                     (chestDirection1 != null ? chestDirection1.getSerializedName() : "none") +
                     (chestDirection2 != null ? ", " + chestDirection2.getSerializedName() : "") +
-                    (chestDirection3 != null ? ", " + chestDirection3.getSerializedName() : "")), false);
+                    (chestDirection3 != null ? ", " + chestDirection3.getSerializedName() : "")));
             } else {
                 // Show what blocks are around the gold block
                 StringBuilder blockInfo = new StringBuilder("[Debug] No chests detected. Adjacent blocks: ");
@@ -99,7 +99,7 @@ public class PumpkinSummoning {
                     var st = world.getBlockState(np);
                     blockInfo.append(dir.getSerializedName()).append("=").append(st.getBlock().getName().getString()).append(" ");
                 }
-                sp.displayClientMessage(net.minecraft.network.chat.Component.literal(blockInfo.toString()), false);
+                sp.sendSystemMessage(net.minecraft.network.chat.Component.literal(blockInfo.toString()));
             }
         }
 
@@ -244,7 +244,7 @@ public class PumpkinSummoning {
             var res = ninja.trek.mc.goldgolem.terraforming.TerraformingScanner.scan(world, below, player);
             if (!res.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Terraforming mode summon failed: " + res.error()), true);
+                    sp.sendOverlayMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Terraforming mode summon failed: " + res.error()));
                 }
                 return InteractionResult.FAIL;
             }
@@ -275,7 +275,7 @@ public class PumpkinSummoning {
             var res = ninja.trek.mc.goldgolem.tree.TreeScanner.scan(world, secondGoldPos, player);
             if (!res.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Tree mode summon failed: " + res.error()), true);
+                    sp.sendOverlayMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Tree mode summon failed: " + res.error()));
                 }
                 return InteractionResult.FAIL;
             }
@@ -341,7 +341,7 @@ public class PumpkinSummoning {
 
             if (towerHeight == 0) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Tower mode: No gold blocks found for height"), true);
+                    sp.sendOverlayMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Tower mode: No gold blocks found for height"));
                 }
                 return InteractionResult.FAIL;
             }
@@ -358,7 +358,7 @@ public class PumpkinSummoning {
             var res = ninja.trek.mc.goldgolem.tower.TowerScanner.scan(world, goldBlockPositions, bottomGold, player);
             if (!res.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Tower mode summon failed: " + res.error()), true);
+                    sp.sendOverlayMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Tower mode summon failed: " + res.error()));
                 }
                 return InteractionResult.FAIL;
             }
@@ -416,17 +416,17 @@ public class PumpkinSummoning {
         } else if (wallMode) {
             // Scan combined module per spec
             if (player instanceof net.minecraft.server.level.ServerPlayer sp0) {
-                sp0.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode detected, scanning..."), false);
+                sp0.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode detected, scanning..."));
             }
             var res = ninja.trek.mc.goldgolem.wall.WallScanner.scan(world, below, player);
             if (player instanceof net.minecraft.server.level.ServerPlayer sp0) {
                 if (res.ok()) {
-                    sp0.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Scan OK: " + res.def().voxels.size() + " voxels, " + res.def().goldMarkers.size() + " gold markers"), false);
+                    sp0.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Scan OK: " + res.def().voxels.size() + " voxels, " + res.def().goldMarkers.size() + " gold markers"));
                 }
             }
             if (!res.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode summon failed: " + res.error()), false);
+                    sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall mode summon failed: " + res.error()));
                 }
                 return InteractionResult.FAIL;
             }
@@ -436,7 +436,7 @@ public class PumpkinSummoning {
             var validation = ninja.trek.mc.goldgolem.wall.WallModuleValidator.validate(world, def.origin, def.voxels, def.goldMarkers, below);
             if (!validation.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall validation failed: " + validation.error()), false);
+                    sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall validation failed: " + validation.error()));
                 }
                 return InteractionResult.FAIL;
             }
@@ -463,7 +463,7 @@ public class PumpkinSummoning {
             var extraction = ninja.trek.mc.goldgolem.wall.WallModuleExtractor.extract(world, def.origin, def.voxels, def.goldMarkers, below);
             if (!extraction.ok()) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall module extraction failed: " + extraction.error()), false);
+                    sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall module extraction failed: " + extraction.error()));
                 }
                 return InteractionResult.FAIL;
             }
@@ -471,7 +471,7 @@ public class PumpkinSummoning {
             try {
             // Build module templates with per-voxel block ids relative to each module's A marker
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Extraction OK: " + extraction.modules().size() + " modules"), false);
+                sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Extraction OK: " + extraction.modules().size() + " modules"));
             }
             // Find the correct block state for the pumpkin position from a non-summon gold marker
             BlockPos pumpkinAbs = below.above();
@@ -727,12 +727,12 @@ public class PumpkinSummoning {
             sw.addFreshEntity(golem);
             if (!player.isCreative()) stack.shrink(1);
             if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall golem spawned!"), false);
+                sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall golem spawned!"));
             }
             return InteractionResult.SUCCESS;
             } catch (Exception ex) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.displayClientMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall spawn exception: " + ex.getMessage()), false);
+                    sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall spawn exception: " + ex.getMessage()));
                 }
                 ex.printStackTrace();
                 return InteractionResult.FAIL;

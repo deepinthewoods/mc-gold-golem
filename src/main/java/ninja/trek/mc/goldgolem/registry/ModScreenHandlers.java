@@ -1,6 +1,6 @@
 package ninja.trek.mc.goldgolem.registry;
 
-import net.fabricmc.fabric.api.screenhandler.v1.ExtendedScreenHandlerType;
+import net.fabricmc.fabric.api.menu.v1.ExtendedMenuType;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.inventory.MenuType;
@@ -16,7 +16,7 @@ public final class ModScreenHandlers {
         GOLEM_SCREEN_HANDLER = Registry.register(
                 BuiltInRegistries.MENU,
                 GoldGolem.id("golem_inventory"),
-                new ExtendedScreenHandlerType<>((syncId, playerInv, data) ->
+                new ExtendedMenuType<>((syncId, playerInv, data) ->
                         new GolemInventoryScreenHandler(syncId, playerInv, data),
                         ninja.trek.mc.goldgolem.screen.GolemOpenData.CODEC)
         );

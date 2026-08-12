@@ -1,7 +1,7 @@
 package ninja.trek.mc.goldgolem.client.screen.layout.sections;
 
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import ninja.trek.mc.goldgolem.client.screen.layout.AbstractGuiSection;
@@ -46,7 +46,7 @@ public class InventoriesSection extends AbstractGuiSection {
     }
 
     @Override
-    public void renderBackground(GuiGraphics context, int guiX, int guiY) {
+    public void renderBackground(GuiGraphicsExtractor context, int guiX, int guiY) {
         int left = guiX;
         int top = guiY + y; // y is the section position from top of GUI
         int bodyH = golemRows * 18; // golem inventory height
@@ -74,10 +74,10 @@ public class InventoriesSection extends AbstractGuiSection {
     }
 
     @Override
-    public void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY) {
+    public void renderForeground(GuiGraphicsExtractor context, int guiX, int guiY, int mouseX, int mouseY) {
         // Player inventory label (foreground coordinates are relative to GUI top-left)
         // Position is relative to this section's Y position
         int labelY = y + golemRows * 18 + 2; // 2px below golem inventory
-        context.drawString(textRenderer, playerInventoryTitle, 8, labelY, 0xFF404040, false);
+        context.text(textRenderer, playerInventoryTitle, 8, labelY, 0xFF404040, false);
     }
 }

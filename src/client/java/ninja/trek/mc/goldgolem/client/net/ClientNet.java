@@ -16,7 +16,7 @@ public final class ClientNet {
                 String[] mainArr = payload.blocksMain().toArray(new String[0]);
                 String[] stepArr = payload.blocksStep().toArray(new String[0]);
                 String[] surfaceArr = payload.blocksSurface().toArray(new String[0]);
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.applyServerSync(payload.width(), payload.noiseScaleMain(), payload.noiseScaleStep(), payload.noiseScaleSurface(), payload.windowMain(), payload.windowStep(), payload.windowSurface(), mainArr, stepArr, surfaceArr);
                 }
             });
@@ -33,7 +33,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(UniqueBlocksS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     // Only set the unique blocks for the specific mode
                     switch (payload.mode()) {
                         case WALL -> screen.syncWallUniqueBlocks(payload.blockIds());
@@ -50,7 +50,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(GroupModeStateS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     switch (payload.mode()) {
                         case WALL -> screen.syncWallGroupsState(payload.windows(), payload.noiseScales(), payload.flatSlots());
                         case TOWER -> {
@@ -72,7 +72,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(GroupModeBlockGroupsS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     switch (payload.mode()) {
                         case WALL -> screen.syncWallBlockGroups(payload.groups());
                         case TOWER -> screen.syncTowerBlockGroups(payload.groups());
@@ -87,7 +87,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(SyncExcavationS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.syncExcavationState(payload.height(), payload.depth(), payload.oreMiningMode());
                 }
             });
@@ -97,7 +97,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(SyncMiningS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.syncMiningState(payload.branchDepth(), payload.branchSpacing(), payload.tunnelHeight(), payload.oreMiningMode());
                 }
             });
@@ -107,7 +107,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(SyncTunnelS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.syncTunnelState(payload.width(), payload.height(), payload.oreMiningMode());
                 }
             });
@@ -117,7 +117,7 @@ public final class ClientNet {
         ClientPlayNetworking.registerGlobalReceiver(SyncTerraformingS2CPayload.ID, (payload, context) -> {
             var mc = net.minecraft.client.Minecraft.getInstance();
             mc.execute(() -> {
-                if (mc.screen instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
+                if (mc.gui.screen() instanceof ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen screen) {
                     screen.syncTerraformingState(
                             payload.scanRadius(),
                             payload.verticalWindow(),

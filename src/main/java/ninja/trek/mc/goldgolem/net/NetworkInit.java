@@ -13,45 +13,47 @@ public class NetworkInit {
     public static void register() {
         // === GENERIC GROUP MODE PAYLOADS ===
         // Generic payloads for group-based modes (Wall, Tower, Tree)
-        PayloadTypeRegistry.playC2S().register(SetGroupModeWindowC2SPayload.ID, SetGroupModeWindowC2SPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(GroupModeStateS2CPayload.ID, GroupModeStateS2CPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetGroupModeSlotC2SPayload.ID, SetGroupModeSlotC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTowerHeightC2SPayload.ID, SetTowerHeightC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(ResetTowerOriginC2SPayload.ID, ResetTowerOriginC2SPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(GroupModeBlockGroupsS2CPayload.ID, GroupModeBlockGroupsS2CPayload.CODEC);
+        var serverboundPlay = PayloadTypeRegistry.serverboundPlay();
+        var clientboundPlay = PayloadTypeRegistry.clientboundPlay();
+        serverboundPlay.register(SetGroupModeWindowC2SPayload.ID, SetGroupModeWindowC2SPayload.CODEC);
+        clientboundPlay.register(GroupModeStateS2CPayload.ID, GroupModeStateS2CPayload.CODEC);
+        serverboundPlay.register(SetGroupModeSlotC2SPayload.ID, SetGroupModeSlotC2SPayload.CODEC);
+        serverboundPlay.register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
+        serverboundPlay.register(SetTowerHeightC2SPayload.ID, SetTowerHeightC2SPayload.CODEC);
+        serverboundPlay.register(ResetTowerOriginC2SPayload.ID, ResetTowerOriginC2SPayload.CODEC);
+        clientboundPlay.register(GroupModeBlockGroupsS2CPayload.ID, GroupModeBlockGroupsS2CPayload.CODEC);
 
         // === PATH/GRADIENT MODE PAYLOADS ===
-        PayloadTypeRegistry.playC2S().register(SetGradientSlotC2SPayload.ID, SetGradientSlotC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetPathWidthC2SPayload.ID, SetPathWidthC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetGradientWindowC2SPayload.ID, SetGradientWindowC2SPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(SyncGradientS2CPayload.ID, SyncGradientS2CPayload.CODEC);
+        serverboundPlay.register(SetGradientSlotC2SPayload.ID, SetGradientSlotC2SPayload.CODEC);
+        serverboundPlay.register(SetPathWidthC2SPayload.ID, SetPathWidthC2SPayload.CODEC);
+        serverboundPlay.register(SetGradientWindowC2SPayload.ID, SetGradientWindowC2SPayload.CODEC);
+        clientboundPlay.register(SyncGradientS2CPayload.ID, SyncGradientS2CPayload.CODEC);
 
         // === SHARED PAYLOADS ===
-        PayloadTypeRegistry.playS2C().register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(UniqueBlocksS2CPayload.ID, UniqueBlocksS2CPayload.CODEC);
+        clientboundPlay.register(LinesS2CPayload.ID, LinesS2CPayload.CODEC);
+        clientboundPlay.register(UniqueBlocksS2CPayload.ID, UniqueBlocksS2CPayload.CODEC);
 
         // === EXCAVATION MODE PAYLOADS ===
-        PayloadTypeRegistry.playC2S().register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(SyncExcavationS2CPayload.ID, SyncExcavationS2CPayload.CODEC);
+        serverboundPlay.register(SetExcavationHeightC2SPayload.ID, SetExcavationHeightC2SPayload.CODEC);
+        serverboundPlay.register(SetExcavationDepthC2SPayload.ID, SetExcavationDepthC2SPayload.CODEC);
+        clientboundPlay.register(SyncExcavationS2CPayload.ID, SyncExcavationS2CPayload.CODEC);
 
         // === MINING MODE PAYLOADS ===
-        PayloadTypeRegistry.playS2C().register(SyncMiningS2CPayload.ID, SyncMiningS2CPayload.CODEC);
+        clientboundPlay.register(SyncMiningS2CPayload.ID, SyncMiningS2CPayload.CODEC);
 
         // === TUNNEL MODE PAYLOADS ===
-        PayloadTypeRegistry.playC2S().register(SetTunnelWidthC2SPayload.ID, SetTunnelWidthC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTunnelHeightC2SPayload.ID, SetTunnelHeightC2SPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(SyncTunnelS2CPayload.ID, SyncTunnelS2CPayload.CODEC);
+        serverboundPlay.register(SetTunnelWidthC2SPayload.ID, SetTunnelWidthC2SPayload.CODEC);
+        serverboundPlay.register(SetTunnelHeightC2SPayload.ID, SetTunnelHeightC2SPayload.CODEC);
+        clientboundPlay.register(SyncTunnelS2CPayload.ID, SyncTunnelS2CPayload.CODEC);
 
         // === ORE MINING MODE PAYLOAD (shared by Mining, Excavation, and Tunnel) ===
-        PayloadTypeRegistry.playC2S().register(SetOreMiningModeC2SPayload.ID, SetOreMiningModeC2SPayload.CODEC);
+        serverboundPlay.register(SetOreMiningModeC2SPayload.ID, SetOreMiningModeC2SPayload.CODEC);
 
         // === TERRAFORMING MODE PAYLOADS ===
-        PayloadTypeRegistry.playC2S().register(SetTerraformingGradientSlotC2SPayload.ID, SetTerraformingGradientSlotC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTerraformingScanRadiusC2SPayload.ID, SetTerraformingScanRadiusC2SPayload.CODEC);
-        PayloadTypeRegistry.playC2S().register(SetTerraformingGradientWindowC2SPayload.ID, SetTerraformingGradientWindowC2SPayload.CODEC);
-        PayloadTypeRegistry.playS2C().register(SyncTerraformingS2CPayload.ID, SyncTerraformingS2CPayload.CODEC);
+        serverboundPlay.register(SetTerraformingGradientSlotC2SPayload.ID, SetTerraformingGradientSlotC2SPayload.CODEC);
+        serverboundPlay.register(SetTerraformingScanRadiusC2SPayload.ID, SetTerraformingScanRadiusC2SPayload.CODEC);
+        serverboundPlay.register(SetTerraformingGradientWindowC2SPayload.ID, SetTerraformingGradientWindowC2SPayload.CODEC);
+        clientboundPlay.register(SyncTerraformingS2CPayload.ID, SyncTerraformingS2CPayload.CODEC);
 
         // === GENERIC GROUP MODE HANDLERS ===
         // Single handler for all group-based modes (Wall, Tower, Tree)

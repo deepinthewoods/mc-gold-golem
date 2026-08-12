@@ -2310,7 +2310,7 @@ public class GoldGolemEntity extends PathfinderMob {
         if (container == null) return false;
 
         // Convert stream to list for easier manipulation
-        java.util.List<ItemStack> contents = new java.util.ArrayList<>(container.stream().toList());
+        java.util.List<ItemStack> contents = new java.util.ArrayList<>(container.allItemsCopyStream().toList());
 
         // Search through the shulker box contents
         for (int i = 0; i < contents.size(); i++) {
@@ -2916,7 +2916,7 @@ public class GoldGolemEntity extends PathfinderMob {
 
     private long resolveWorldSeed() {
         if (this.level() instanceof ServerLevel sw && sw.getServer() != null) {
-            return sw.getServer().getWorldData().worldGenOptions().seed();
+            return sw.getSeed();
         }
         return 0L;
     }
@@ -3164,7 +3164,7 @@ public class GoldGolemEntity extends PathfinderMob {
                 if (singleplayer && !ownerOnline) {
                     setOwner(player);
                 } else {
-                    sp.displayClientMessage(Component.translatable("message.gold_golem.not_owner"), true);
+                    sp.sendOverlayMessage(Component.translatable("message.gold_golem.not_owner"));
                     return InteractionResult.FAIL;
                 }
             }
@@ -3186,7 +3186,7 @@ public class GoldGolemEntity extends PathfinderMob {
                         if (!player.isCreative()) stack.shrink(1);
                         spawnHearts();
                         if (result == BuildStrategy.FeedResult.RESUMED) {
-                            sp.displayClientMessage(Component.literal("[Gold Golem] Resuming!"), true);
+                            sp.sendOverlayMessage(Component.literal("[Gold Golem] Resuming!"));
                         }
                         // Path/Wall/Tower modes need trackStart initialization
                         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
@@ -3206,7 +3206,7 @@ public class GoldGolemEntity extends PathfinderMob {
                         }
                     }
                     case ALREADY_ACTIVE -> {
-                        sp.displayClientMessage(Component.literal("[Gold Golem] Already active!"), true);
+                        sp.sendOverlayMessage(Component.literal("[Gold Golem] Already active!"));
                         return InteractionResult.FAIL;
                     }
                     case NOT_HANDLED -> {
@@ -3230,7 +3230,7 @@ public class GoldGolemEntity extends PathfinderMob {
             if (singleplayer && !ownerOnline) {
                 setOwner(player);
             } else {
-                sp.displayClientMessage(Component.translatable("message.gold_golem.not_owner"), true);
+                sp.sendOverlayMessage(Component.translatable("message.gold_golem.not_owner"));
                 return InteractionResult.FAIL;
             }
         }

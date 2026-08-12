@@ -2,7 +2,7 @@ package ninja.trek.mc.goldgolem.client.screen;
 
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -440,6 +440,10 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     private void onTowerLayersChanged(String text) {
         if (updatingTowerLayersField) return;
         if (text == null || text.isEmpty()) return;
+        if (!text.chars().allMatch(Character::isDigit)) {
+            setTowerLayersFieldText(towerLayers);
+            return;
+        }
         int parsed;
         try {
             parsed = Integer.parseInt(text);
@@ -458,9 +462,8 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     }
 
     public GolemHandledScreen(GolemInventoryScreenHandler handler, Inventory inventory, Component title) {
-        super(handler, inventory, title);
-        this.imageWidth = 176; // vanilla chest width
-        this.imageHeight = handler.getControlsMargin() + handler.getGolemRows() * 18 + 94;
+        super(handler, inventory, title, 176,
+                handler.getControlsMargin() + handler.getGolemRows() * 18 + 94);
     }
 
     /**
@@ -940,7 +943,6 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         if (towerLayersField == null) {
             towerLayersField = new EditBox(this.font, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Component.literal("Layers"));
             towerLayersField.setMaxLength(3);
-            towerLayersField.setFilter(input -> input.isEmpty() || input.chars().allMatch(Character::isDigit));
             towerLayersField.setResponder(this::onTowerLayersChanged);
             setTowerLayersFieldText(towerLayers);
             setTowerLayersSliderValue(towerLayers);
@@ -1134,7 +1136,8 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     }
 
     @Override
-    protected void renderBg(GuiGraphics context, float delta, int mouseX, int mouseY) {
+    public void extractBackground(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
+        super.extractBackground(context, mouseX, mouseY, delta);
         // Vanilla chest-style background split into header/body/bottom slices from generic_54.png
         int left = this.leftPos;
         int top = this.topPos;
@@ -1363,7 +1366,6 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
                 this.addRenderableWidget(towerLayersSlider);
                 towerLayersField = new EditBox(this.font, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Component.literal("Layers"));
                 towerLayersField.setMaxLength(3);
-                towerLayersField.setFilter(input -> input.isEmpty() || input.chars().allMatch(Character::isDigit));
                 towerLayersField.setResponder(this::onTowerLayersChanged);
                 setTowerLayersFieldText(towerLayers);
                 setTowerLayersSliderValue(towerLayers);
@@ -1585,10 +1587,9 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     }
 
     @Override
-    public void render(GuiGraphics context, int mouseX, int mouseY, float delta) {
-        this.renderBackground(context, mouseX, mouseY, delta);
-        super.render(context, mouseX, mouseY, delta);
-        this.renderTooltip(context, mouseX, mouseY);
+    public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
+        super.extractRenderState(context, mouseX, mouseY, delta);
+        context.nextStratum();
 
         // Draw mode name on top of everything to ensure visibility
         BuildMode currentMode = getCurrentBuildMode();
@@ -1597,13 +1598,13 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         int labelWidth = this.font.width(modeName);
         int labelX = Math.max(2, Math.min(this.leftPos + 8, this.width - labelWidth - 2));
         int labelY = Math.max(2, this.topPos + 6);
-        context.drawString(this.font, Component.literal(modeName), labelX, labelY, 0xFF404040, false);
+        context.text(this.font, Component.literal(modeName), labelX, labelY, 0xFF404040, false);
 
         String jsonName = this.menu.getJsonName();
         if (jsonName != null && !jsonName.isBlank()) {
             int nameWidth = this.font.width(jsonName);
             int nameX = Math.max(2, Math.min(this.leftPos + this.imageWidth - 8 - nameWidth, this.width - nameWidth - 2));
-            context.drawString(this.font, Component.literal(jsonName), nameX, labelY, 0xFF404040, false);
+            context.text(this.font, Component.literal(jsonName), nameX, labelY, 0xFF404040, false);
         }
     }
 
@@ -1642,34 +1643,34 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     }
 
     @Override
-    protected void renderLabels(GuiGraphics context, int mouseX, int mouseY) {
+    protected void extractLabels(GuiGraphicsExtractor context, int mouseX, int mouseY) {
         // Labels (foreground coordinates are relative to GUI top-left)
         // Player inventory label - position relative to where slots actually are
         // Slots are positioned using controlsMargin from the handler
         int margin = this.menu.getControlsMargin();
         int golemRows = this.menu.getGolemRows();
         int invY = margin + golemRows * 18 + 2; // 2px above player inventory slots (which start at margin + golemRows*18 + 15)
-        context.drawString(this.font, this.playerInventoryTitle, 8, invY, 0xFF404040, false);
+        context.text(this.font, this.playerInventoryTitle, 8, invY, 0xFF404040, false);
         // Width label near the slider
         if (widthSlider != null && this.menu.isSliderEnabled()) {
             int lx = widthSlider.getX() - this.leftPos;
             int ly = widthSlider.getY() - this.topPos - 10;
-            context.drawString(this.font, Component.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFFFF, false);
+            context.text(this.font, Component.literal("Width: " + this.pathWidth), lx, ly, 0xFFFFFFFF, false);
         }
         if (gradientNoiseScaleSliderSurface != null && this.menu.isSliderEnabled()) {
             int lx = gradientNoiseScaleSliderSurface.getX() - this.leftPos;
             int ly = gradientNoiseScaleSliderSurface.getY() - this.topPos - 10;
-            context.drawString(this.font, Component.literal("Scale: " + this.gradientNoiseScaleSurface), lx, ly, 0xFFFFFFFF, false);
+            context.text(this.font, Component.literal("Scale: " + this.gradientNoiseScaleSurface), lx, ly, 0xFFFFFFFF, false);
         }
         if (gradientNoiseScaleSliderMain != null && this.menu.isSliderEnabled()) {
             int lx = gradientNoiseScaleSliderMain.getX() - this.leftPos;
             int ly = gradientNoiseScaleSliderMain.getY() - this.topPos - 10;
-            context.drawString(this.font, Component.literal("Scale: " + this.gradientNoiseScaleMain), lx, ly, 0xFFFFFFFF, false);
+            context.text(this.font, Component.literal("Scale: " + this.gradientNoiseScaleMain), lx, ly, 0xFFFFFFFF, false);
         }
         if (gradientNoiseScaleSliderStep != null && this.menu.isSliderEnabled()) {
             int lx = gradientNoiseScaleSliderStep.getX() - this.leftPos;
             int ly = gradientNoiseScaleSliderStep.getY() - this.topPos - 10;
-            context.drawString(this.font, Component.literal("Scale: " + this.gradientNoiseScaleStep), lx, ly, 0xFFFFFFFF, false);
+            context.text(this.font, Component.literal("Scale: " + this.gradientNoiseScaleStep), lx, ly, 0xFFFFFFFF, false);
         }
 
         // Marker dots above each window slider (path mode)
@@ -1760,12 +1761,12 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         return G;
     }
 
-    private static void fillDot(GuiGraphics ctx, int cx, int cy, int argb) {
+    private static void fillDot(GuiGraphicsExtractor ctx, int cx, int cy, int argb) {
         int r = 1;
         ctx.fill(cx - r, cy - r, cx + r + 1, cy + r + 1, argb);
     }
 
-    private void drawSliderMarkers(GuiGraphics context, AbstractSliderButton slider, int g) {
+    private void drawSliderMarkers(GuiGraphicsExtractor context, AbstractSliderButton slider, int g) {
         if (slider == null) return;
         int sx = slider.getX() - this.leftPos;
         int sy = slider.getY() - this.topPos;
@@ -1795,7 +1796,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     /**
      * Draw slider markers for group mode sliders.
      */
-    private void drawGroupSliderMarkers(GuiGraphics context, GroupModeStrategy strategy) {
+    private void drawGroupSliderMarkers(GuiGraphicsExtractor context, GroupModeStrategy strategy) {
         if (strategy == null || groupRowSliders == null || groupRowSliders.isEmpty()) return;
 
         java.util.List<Integer> vis = strategy.getVisibleGroups();

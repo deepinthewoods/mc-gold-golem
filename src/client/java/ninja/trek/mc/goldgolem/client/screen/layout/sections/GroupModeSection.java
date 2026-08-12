@@ -10,7 +10,7 @@ import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 
 import java.util.*;
 import net.minecraft.client.gui.Font;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -71,13 +71,13 @@ public class GroupModeSection extends AbstractGuiSection {
     // ============ RENDERING ============
 
     @Override
-    public void renderBackground(GuiGraphics context, int guiX, int guiY) {
+    public void renderBackground(GuiGraphicsExtractor context, int guiX, int guiY) {
         // Group mode rendering is done entirely in renderForeground (renderLabels context)
         // because the old code rendered icons and rows in renderLabels with pre-translated coordinates
     }
 
     @Override
-    public void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY) {
+    public void renderForeground(GuiGraphicsExtractor context, int guiX, int guiY, int mouseX, int mouseY) {
         iconHits.clear();
 
         GroupModeStrategy strategy = getStrategy();
@@ -124,7 +124,7 @@ public class GroupModeSection extends AbstractGuiSection {
                 if (block == null) continue;
                 ItemStack icon = new ItemStack(block.asItem());
                 int ix = iconXOff - i * 18;
-                context.renderItem(icon, ix, rowY);
+                context.item(icon, ix, rowY);
 
                 // Block counts (Tower mode)
                 if (showCounts) {
@@ -132,7 +132,7 @@ public class GroupModeSection extends AbstractGuiSection {
                     int count = counts.getOrDefault(id, 0);
                     int textX = ix + 24;
                     int textY = rowY + 4;
-                    context.drawString(textRenderer, "x" + count, textX, textY, 0xFFFFFFFF, true);
+                    context.text(textRenderer, "x" + count, textX, textY, 0xFFFFFFFF, true);
                 }
 
                 // Track icon hit area (absolute screen coordinates)
@@ -157,14 +157,14 @@ public class GroupModeSection extends AbstractGuiSection {
                         if (GradientSlotUtil.isMineAction(bid)) {
                             var toolItem = GradientSlotUtil.getToolItem(bid);
                             if (toolItem != null) {
-                                context.renderItem(new ItemStack(toolItem), x, rowY);
+                                context.item(new ItemStack(toolItem), x, rowY);
                             }
                         } else {
                             var ident2 = Identifier.tryParse(bid);
                             if (ident2 != null) {
                                 var block2 = BuiltInRegistries.BLOCK.getValue(ident2);
                                 if (block2 != null) {
-                                    context.renderItem(new ItemStack(block2.asItem()), x, rowY);
+                                    context.item(new ItemStack(block2.asItem()), x, rowY);
                                 }
                             }
                         }
@@ -186,13 +186,13 @@ public class GroupModeSection extends AbstractGuiSection {
                 if (block != null) {
                     int relX = mouseX - guiX - 8;
                     int relY = mouseY - guiY - 8;
-                    context.renderItem(new ItemStack(block.asItem()), relX, relY);
+                    context.item(new ItemStack(block.asItem()), relX, relY);
                 }
             }
         }
     }
 
-    private void renderTowerTotals(GuiGraphics context) {
+    private void renderTowerTotals(GuiGraphicsExtractor context) {
         GroupModeStrategy strategy = getStrategy();
         if (strategy == null) return;
         Map<String, Integer> blockCounts = strategy.getBlockCounts();
@@ -213,7 +213,7 @@ public class GroupModeSection extends AbstractGuiSection {
         int s2 = 50;
         int previewX = wx2 + w2 + gap2 + s2 + 8;
         int previewY = y;
-        context.drawString(textRenderer, Component.literal(preview.toString()), previewX, previewY, 0xFFFFFFFF, true);
+        context.text(textRenderer, Component.literal(preview.toString()), previewX, previewY, 0xFFFFFFFF, true);
     }
 
     // ============ CLICK HANDLING ============

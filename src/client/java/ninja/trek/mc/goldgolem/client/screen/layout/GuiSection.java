@@ -1,6 +1,6 @@
 package ninja.trek.mc.goldgolem.client.screen.layout;
 
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
  * Represents a self-contained UI section that knows its own size and can render itself.
@@ -45,7 +45,7 @@ public interface GuiSection {
      * @param guiX X position of the GUI on screen
      * @param guiY Y position of the GUI on screen
      */
-    void renderBackground(GuiGraphics context, int guiX, int guiY);
+    void renderBackground(GuiGraphicsExtractor context, int guiX, int guiY);
 
     /**
      * Render the foreground elements of this section (text, tooltips, etc.).
@@ -56,7 +56,7 @@ public interface GuiSection {
      * @param mouseX Mouse X position
      * @param mouseY Mouse Y position
      */
-    void renderForeground(GuiGraphics context, int guiX, int guiY, int mouseX, int mouseY);
+    void renderForeground(GuiGraphicsExtractor context, int guiX, int guiY, int mouseX, int mouseY);
 
     /**
      * Handle mouse click events in this section.
