@@ -19,6 +19,7 @@ import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.util.Mth;
 import net.minecraft.util.ProblemReporter;
 import net.minecraft.util.RandomSource;
@@ -35,6 +36,8 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
+import net.minecraft.world.entity.projectile.Projectile;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownSplashPotion;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -66,6 +69,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
+import ninja.trek.mc.goldgolem.util.GroupAssignmentUtil;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategy;
 import ninja.trek.mc.goldgolem.world.entity.strategy.BuildStrategyRegistry;
 
@@ -88,6 +92,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private static final int STUCK_TICK_THRESHOLD = 20;
     private static final int EYE_UPDATE_COOLDOWN_MIN = 5;
     private static final int EYE_UPDATE_COOLDOWN_MAX = 10;
+    private static final int FIRE_HAZARD_CHECK_INTERVAL_TICKS = 10;
 
     // Owner cache constants
     private static final int OWNER_CACHE_DURATION = 100; // 5 seconds (100 ticks)
@@ -132,6 +137,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private boolean buildingPaths = false;
     private long gradientNoiseSeedCache = Long.MIN_VALUE;
     private SimplexNoise gradientNoiseSampler;
+    private int fireHazardCheckCooldown = 0;
 
     // Strategy pattern for build modes
     private BuildStrategy activeStrategy = null;
@@ -551,16 +557,9 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         return out;
     }
-    public void setWallBlockGroup(String blockId, int group) {
-        if (group < 0) { // create new
-            wallGroupSlots.add(new String[9]);
-            wallGroupWindows.add(1.0f);
-            wallGroupNoiseScales.add(1);
-            group = wallGroupSlots.size() - 1;
-        } else if (group >= wallGroupSlots.size()) {
-            return;
-        }
-        wallBlockGroup.put(blockId, group);
+    public boolean setWallBlockGroup(String blockId, int group) {
+        return GroupAssignmentUtil.assign(blockId, group, wallUniqueBlockIds,
+                wallGroupSlots, wallGroupWindows, wallGroupNoiseScales, wallBlockGroup);
     }
     public void setWallGroupWindow(int group, float window) {
         if (group < 0 || group >= wallGroupWindows.size()) return;
@@ -656,17 +655,11 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         return out;
     }
-    public void setTowerBlockGroup(String blockId, int group) {
-        if (group < 0) { // create new
-            towerGroupSlots.add(new String[9]);
-            towerGroupWindows.add(1.0f);
-            towerGroupNoiseScales.add(1);
-            group = towerGroupSlots.size() - 1;
-        } else if (group >= towerGroupSlots.size()) {
-            return;
-        }
-        towerBlockGroup.put(blockId, group);
-        notifyTowerConfigurationChanged("towerGradient");
+    public boolean setTowerBlockGroup(String blockId, int group) {
+        boolean assigned = GroupAssignmentUtil.assign(blockId, group, towerUniqueBlockIds,
+                towerGroupSlots, towerGroupWindows, towerGroupNoiseScales, towerBlockGroup);
+        if (assigned) notifyTowerConfigurationChanged("towerGradient");
+        return assigned;
     }
     public void setTowerGroupWindow(int group, float window) {
         if (group < 0 || group >= towerGroupWindows.size()) return;
@@ -1237,16 +1230,9 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         return out;
     }
-    public void setTreeBlockGroup(String blockId, int group) {
-        if (group < 0) { // create new
-            treeGroupSlots.add(new String[9]);
-            treeGroupWindows.add(1.0f);
-            treeGroupNoiseScales.add(1);
-            group = treeGroupSlots.size() - 1;
-        } else if (group >= treeGroupSlots.size()) {
-            return;
-        }
-        treeBlockGroup.put(blockId, group);
+    public boolean setTreeBlockGroup(String blockId, int group) {
+        return GroupAssignmentUtil.assign(blockId, group, treeUniqueBlockIds,
+                treeGroupSlots, treeGroupWindows, treeGroupNoiseScales, treeBlockGroup);
     }
     public void setTreeGroupWindow(int group, float window) {
         if (group < 0 || group >= treeGroupWindows.size()) return;
@@ -1623,6 +1609,7 @@ public class GoldGolemEntity extends PathfinderMob {
         }
 
         if (this.level().isClientSide()) return;
+        tickFireResistancePotion();
         tickResourceWaitReturn();
         if (buildingPaths) {
             // Increment placement tick counter (2-tick cycle)
@@ -1652,6 +1639,67 @@ public class GoldGolemEntity extends PathfinderMob {
         }
 
         advanceHandAnimationTicks();
+    }
+
+    private void tickFireResistancePotion() {
+        if (this.hasEffect(net.minecraft.world.effect.MobEffects.FIRE_RESISTANCE)) {
+            fireHazardCheckCooldown = 0;
+            return;
+        }
+        if (fireHazardCheckCooldown-- > 0) return;
+        fireHazardCheckCooldown = FIRE_HAZARD_CHECK_INTERVAL_TICKS - 1;
+
+        int potionSlot = GoldGolemFireSafety.findFireResistancePotionSlot(inventory);
+        if (potionSlot < 0 || !hasNearbyFireOrLava()) return;
+
+        ItemStack potion = inventory.getItem(potionSlot);
+        if (GoldGolemFireSafety.isSplashPotion(potion)) {
+            throwSplashPotionAtFeet(potionSlot, potion);
+            return;
+        }
+
+        ItemStack remainder = potion.finishUsingItem(this.level(), this);
+        inventory.setItem(potionSlot, remainder);
+        this.playSound(SoundEvents.GENERIC_DRINK.value(), 1.0f, 0.9f + this.getRandom().nextFloat() * 0.1f);
+    }
+
+    private void throwSplashPotionAtFeet(int potionSlot, ItemStack potion) {
+        ServerLevel serverLevel = (ServerLevel) this.level();
+        ItemStack thrownPotion = potion.copyWithCount(1);
+        ThrownSplashPotion projectile = new ThrownSplashPotion(serverLevel, this, thrownPotion);
+        Projectile.spawnProjectileUsingShoot(
+                projectile, serverLevel, thrownPotion, 0.0, -1.0, 0.0, 0.5f, 0.0f);
+
+        potion.shrink(1);
+        inventory.setItem(potionSlot, potion);
+        this.playSound(
+                SoundEvents.SPLASH_POTION_THROW,
+                0.5f,
+                0.8f + this.getRandom().nextFloat() * 0.4f);
+    }
+
+    private boolean hasNearbyFireOrLava() {
+        var area = this.getBoundingBox().inflate(1.0);
+        int minX = Mth.floor(area.minX);
+        int minY = Mth.floor(area.minY);
+        int minZ = Mth.floor(area.minZ);
+        int maxX = Mth.floor(area.maxX);
+        int maxY = Mth.floor(area.maxY);
+        int maxZ = Mth.floor(area.maxZ);
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    cursor.set(x, y, z);
+                    if (this.level().hasChunkAt(cursor)
+                            && GoldGolemFireSafety.isFireOrLava(this.level().getBlockState(cursor))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private void tickResourceWaitReturn() {

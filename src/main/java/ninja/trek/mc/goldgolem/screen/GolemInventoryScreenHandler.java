@@ -8,6 +8,7 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import ninja.trek.mc.goldgolem.registry.ModScreenHandlers;
+import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 public class GolemInventoryScreenHandler extends AbstractContainerMenu {
     private final Container golemInventory;
@@ -76,7 +77,16 @@ public class GolemInventoryScreenHandler extends AbstractContainerMenu {
 
     @Override
     public boolean stillValid(Player player) {
-        return true;
+        // The client uses a temporary inventory and relies on the server to enforce validity.
+        if (player.level().isClientSide()) return true;
+
+        var entity = player.level().getEntity(entityId);
+        return entity instanceof GoldGolemEntity golem
+                && golem.isAlive()
+                && !golem.isRemoved()
+                && golem.isOwner(player)
+                && golem.getInventory() == golemInventory
+                && player.distanceToSqr(golem) <= 64.0;
     }
 
     public int getEntityId() {
@@ -93,6 +103,7 @@ public class GolemInventoryScreenHandler extends AbstractContainerMenu {
     @Override
     public void removed(Player player) {
         super.removed(player);
+        golemInventory.stopOpen(player);
         // Clear GUI viewer tracking on the golem entity
         if (!player.level().isClientSide()) {
             var entity = player.level().getEntity(this.entityId);

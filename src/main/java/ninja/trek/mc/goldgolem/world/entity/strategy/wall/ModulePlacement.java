@@ -2,6 +2,7 @@ package ninja.trek.mc.goldgolem.world.entity.strategy.wall;
 
 import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
+import ninja.trek.mc.goldgolem.wall.WallStateTransform;
 import ninja.trek.mc.goldgolem.util.GradientSlotUtil;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy;
@@ -299,8 +300,11 @@ public class ModulePlacement {
         BlockState expected = blockStatesMap.get(pos);
         if (expected == null) return true; // Not in our map, skip it
 
+        int expectedRotation = preRotatedPositions.contains(pos) ? 0 : rot;
+        boolean expectedMirror = !preRotatedPositions.contains(pos) && mirror;
+        expected = WallStateTransform.forPlacement(expected, expectedRotation, expectedMirror);
         BlockState current = golem.level().getBlockState(pos);
-        return current.getBlock() == expected.getBlock();
+        return current.equals(expected);
     }
 
     /**

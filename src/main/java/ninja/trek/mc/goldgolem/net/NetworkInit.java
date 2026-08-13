@@ -63,7 +63,8 @@ public class NetworkInit {
             context.server().execute(() -> {
                 var world = player.level();
                 var e = world.getEntity(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && isMatchingGroupMode(golem, payload.mode())) {
                     switch (payload.mode()) {
                         case WALL -> {
                             golem.setWallGroupWindow(payload.group(), payload.window());
@@ -89,8 +90,10 @@ public class NetworkInit {
             context.server().execute(() -> {
                 var world = player.level();
                 var e = world.getEntity(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && isMatchingGroupMode(golem, payload.mode())) {
                     String id = payload.block().map(Identifier::toString).orElse("");
+                    if (!id.isEmpty() && !PayloadValidator.isValidBlockId(id)) return;
                     switch (payload.mode()) {
                         case WALL -> golem.setWallGroupSlot(payload.group(), payload.slot(), id);
                         case TOWER -> golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
@@ -107,14 +110,16 @@ public class NetworkInit {
             context.server().execute(() -> {
                 var world = player.level();
                 var e = world.getEntity(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
-                    switch (payload.mode()) {
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && isMatchingGroupMode(golem, payload.mode())
+                        && PayloadValidator.isValidBlockId(payload.blockId())) {
+                    boolean assigned = switch (payload.mode()) {
                         case WALL -> golem.setWallBlockGroup(payload.blockId(), payload.group());
                         case TOWER -> golem.setTowerBlockGroup(payload.blockId(), payload.group());
                         case TREE -> golem.setTreeBlockGroup(payload.blockId(), payload.group());
-                        default -> { }
-                    }
-                    sendGroupModeState(player, golem, payload.mode());
+                        default -> false;
+                    };
+                    if (assigned) sendGroupModeState(player, golem, payload.mode());
                 }
             });
         });
@@ -322,6 +327,10 @@ public class NetworkInit {
                 }
             });
         });
+    }
+
+    private static boolean isMatchingGroupMode(GoldGolemEntity golem, BuildMode requestedMode) {
+        return requestedMode != null && requestedMode.isGroupMode() && golem.getBuildMode() == requestedMode;
     }
 
     /**

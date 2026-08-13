@@ -4,6 +4,7 @@ import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
 import ninja.trek.mc.goldgolem.wall.WallJoinSlice;
 import ninja.trek.mc.goldgolem.wall.WallModuleTemplate;
+import ninja.trek.mc.goldgolem.wall.WallStateTransform;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import ninja.trek.mc.goldgolem.world.entity.strategy.wall.JoinEntry;
 import ninja.trek.mc.goldgolem.world.entity.strategy.wall.ModulePlacement;
@@ -1043,30 +1044,13 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     public boolean placeBlockStateAt(GoldGolemEntity golem, int wx, int wy, int wz, BlockState baseState, int rot, boolean mirror, BlockPos nextPos) {
         var world = golem.level();
         BlockPos pos = new BlockPos(wx, wy, wz);
-        net.minecraft.world.level.block.Block block = baseState.getBlock();
+        BlockState place = WallStateTransform.forPlacement(baseState, rot, mirror);
+        net.minecraft.world.level.block.Block block = place.getBlock();
         var current = world.getBlockState(pos);
-        if (!current.isAir() && current.is(block)) return true;
+        if (current.equals(place)) return true;
 
         long key = pos.asLong();
         if (!golem.recordPlaced(key)) return false;
-
-        net.minecraft.world.level.block.Rotation rotation = switch (rot & 3) {
-            case 1 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_90;
-            case 2 -> net.minecraft.world.level.block.Rotation.CLOCKWISE_180;
-            case 3 -> net.minecraft.world.level.block.Rotation.COUNTERCLOCKWISE_90;
-            default -> net.minecraft.world.level.block.Rotation.NONE;
-        };
-        // ModulePlacement mirrors coordinates by negating X, which is Minecraft's
-        // FRONT_BACK mirror. Apply the identical transform to directional block states.
-        net.minecraft.world.level.block.Mirror mir = mirror ? net.minecraft.world.level.block.Mirror.FRONT_BACK : net.minecraft.world.level.block.Mirror.NONE;
-        BlockState place = baseState;
-        try { place = place.rotate(rotation); } catch (Exception ignored) {}
-        try { place = place.mirror(mir); } catch (Exception ignored) {}
-        try {
-            if (place.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
-                place = place.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, Boolean.FALSE);
-            }
-        } catch (Exception ignored) {}
 
         String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString();
         if (!golem.consumeBlockFromInventory(blockId)) {

@@ -10,6 +10,7 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CarvedPumpkinBlock;
@@ -29,7 +30,15 @@ public class PumpkinSummoning {
         if (!(stack.getItem() instanceof BlockItem bi)) return InteractionResult.PASS;
         if (!(bi.getBlock() instanceof CarvedPumpkinBlock)) return InteractionResult.PASS;
 
-        BlockPos placePos = hit.getBlockPos().relative(hit.getDirection());
+        // UseBlockCallback runs before vanilla's spectator and item-use checks. Mirror the
+        // relevant BlockItem checks before this callback performs any world mutation.
+        if (player.isSpectator()) return InteractionResult.PASS;
+        BlockPlaceContext placeContext = new BlockPlaceContext(player, hand, stack, hit);
+        if (!placeContext.canPlace()) return InteractionResult.PASS;
+
+        BlockPos placePos = placeContext.getClickedPos();
+        BlockPos permissionTarget = hit.getBlockPos().relative(hit.getDirection());
+        if (!player.mayUseItemAt(permissionTarget, hit.getDirection(), stack)) return InteractionResult.PASS;
         BlockPos below = placePos.below();
         if (!world.getBlockState(below).is(Blocks.GOLD_BLOCK)) return InteractionResult.PASS;
 
@@ -198,8 +207,8 @@ public class PumpkinSummoning {
             golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TUNNEL);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TUNNEL)));
             golem.setTunnelConfig(chest1, chest2, chest3, emptyDir, below);
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TUNNEL)));
 
             world.destroyBlock(below, false, player);
             ((ServerLevel) world).addFreshEntity(golem);
@@ -215,8 +224,8 @@ public class PumpkinSummoning {
             golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.EXCAVATION);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.EXCAVATION)));
             golem.setExcavationConfig(chest1, chest2, chestDirection1, chestDirection2, below);
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.EXCAVATION)));
 
             world.destroyBlock(below, false, player);
             ((ServerLevel) world).addFreshEntity(golem);
@@ -232,8 +241,8 @@ public class PumpkinSummoning {
             golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.MINING);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.MINING)));
             golem.setMiningConfig(chestPos, miningDir, below);
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.MINING)));
 
             world.destroyBlock(below, false, player);
             ((ServerLevel) world).addFreshEntity(golem);
@@ -255,8 +264,8 @@ public class PumpkinSummoning {
             golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
             golem.setOwner(player);
             golem.setBuildMode(BuildMode.TERRAFORMING);
-            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TERRAFORMING)));
             golem.setTerraformingConfig(def, below);
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TERRAFORMING)));
 
             // Remove the 3x3 gold platform
             for (int dx = -1; dx <= 1; dx++) {

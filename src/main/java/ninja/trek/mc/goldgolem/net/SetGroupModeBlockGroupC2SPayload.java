@@ -17,7 +17,7 @@ public record SetGroupModeBlockGroupC2SPayload(int entityId, BuildMode mode, Str
     public static final StreamCodec<RegistryFriendlyByteBuf, SetGroupModeBlockGroupC2SPayload> CODEC = StreamCodec.composite(
             ByteBufCodecs.VAR_INT, SetGroupModeBlockGroupC2SPayload::entityId,
             BuildMode.PACKET_CODEC, SetGroupModeBlockGroupC2SPayload::mode,
-            ByteBufCodecs.STRING_UTF8, SetGroupModeBlockGroupC2SPayload::blockId,
+            ByteBufCodecs.stringUtf8(128), SetGroupModeBlockGroupC2SPayload::blockId,
             ByteBufCodecs.VAR_INT, SetGroupModeBlockGroupC2SPayload::group,
             SetGroupModeBlockGroupC2SPayload::new
     );
