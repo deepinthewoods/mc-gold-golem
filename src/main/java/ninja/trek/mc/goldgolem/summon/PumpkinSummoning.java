@@ -124,13 +124,23 @@ public class PumpkinSummoning {
 
         boolean miningMode = (!tunnelMode && chestCount == 1);
 
-        // Check for Tower Mode: gold block below the pumpkin's gold block
+        // Pyramid Mode: two-block gold column with four gold arms around the lower block.
         BlockPos belowBelow = below.below();
-        boolean towerMode = !tunnelMode && !miningMode && !excavationMode && world.getBlockState(belowBelow).is(Blocks.GOLD_BLOCK);
+        boolean pyramidMode = !tunnelMode && !miningMode && !excavationMode
+                && world.getBlockState(belowBelow).is(Blocks.GOLD_BLOCK);
+        for (var dir : new net.minecraft.core.Direction[]{
+                net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH,
+                net.minecraft.core.Direction.EAST, net.minecraft.core.Direction.WEST}) {
+            pyramidMode &= world.getBlockState(belowBelow.relative(dir)).is(Blocks.GOLD_BLOCK);
+        }
+
+        // Tower Mode: a plain vertical gold column.
+        boolean towerMode = !pyramidMode && !tunnelMode && !miningMode && !excavationMode
+                && world.getBlockState(belowBelow).is(Blocks.GOLD_BLOCK);
 
         // Check for Terraforming Mode: 3x3 layer of gold blocks
         boolean terraformingMode = false;
-        if (!tunnelMode && !towerMode && !miningMode && !excavationMode) {
+        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode) {
             // Check if this gold block is the center of a 3x3 horizontal gold platform
             boolean is3x3Gold = true;
             for (int dx = -1; dx <= 1 && is3x3Gold; dx++) {
@@ -147,7 +157,7 @@ public class PumpkinSummoning {
         // Check for Tree Mode: second gold block touching pumpkin's gold block
         boolean treeMode = false;
         BlockPos secondGoldPos = null;
-        if (!tunnelMode && !towerMode && !miningMode && !excavationMode && !terraformingMode) {
+        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode && !terraformingMode) {
             for (var dir : new net.minecraft.core.Direction[]{
                     net.minecraft.core.Direction.NORTH,
                     net.minecraft.core.Direction.SOUTH,
@@ -168,7 +178,7 @@ public class PumpkinSummoning {
         // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
         // Tower, mining, excavation, terraforming, and tree modes take precedence over wall mode
         boolean wallMode = false;
-        if (!tunnelMode && !towerMode && !miningMode && !excavationMode && !terraformingMode && !treeMode) {
+        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode && !terraformingMode && !treeMode) {
             for (var dir : new net.minecraft.core.Direction[]{
                     net.minecraft.core.Direction.NORTH,
                     net.minecraft.core.Direction.SOUTH,
@@ -245,6 +255,60 @@ public class PumpkinSummoning {
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.MINING)));
 
             world.destroyBlock(below, false, player);
+            ((ServerLevel) world).addFreshEntity(golem);
+            if (!player.isCreative()) stack.shrink(1);
+            return InteractionResult.SUCCESS;
+        } else if (pyramidMode) {
+            BlockPos pyramidOrigin = belowBelow;
+            java.util.List<BlockPos> markerPositions = new java.util.ArrayList<>();
+            markerPositions.add(pyramidOrigin);
+            markerPositions.add(below);
+            markerPositions.add(pyramidOrigin.north());
+            markerPositions.add(pyramidOrigin.south());
+            markerPositions.add(pyramidOrigin.east());
+            markerPositions.add(pyramidOrigin.west());
+
+            var res = ninja.trek.mc.goldgolem.tower.TowerScanner.scan(world, markerPositions, pyramidOrigin, player);
+            if (!res.ok()) {
+                if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                    sp.sendOverlayMessage(net.minecraft.network.chat.Component.literal(
+                            "[Gold Golem] Pyramid mode summon failed: " + res.error()));
+                }
+                return InteractionResult.FAIL;
+            }
+            var def = res.def();
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
+            golem.snapTo(pyramidOrigin.getX() + 0.5, pyramidOrigin.getY(), pyramidOrigin.getZ() + 0.5,
+                    player.getYRot(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(BuildMode.PYRAMID);
+
+            String jsonRel = null;
+            try {
+                java.nio.file.Path gameDir = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir();
+                java.nio.file.Path out = ninja.trek.mc.goldgolem.tower.TowerScanner.writeJson(gameDir, golem.getUUID(), def);
+                jsonRel = gameDir.relativize(out).toString();
+            } catch (Exception ignored) {
+                jsonRel = null;
+            }
+
+            java.util.List<ninja.trek.mc.goldgolem.tower.TowerModuleTemplate.Voxel> vox = new java.util.ArrayList<>();
+            int minY = Integer.MAX_VALUE;
+            int maxY = Integer.MIN_VALUE;
+            for (var relative : def.voxels) {
+                var state = world.getBlockState(def.origin.offset(relative));
+                vox.add(new ninja.trek.mc.goldgolem.tower.TowerModuleTemplate.Voxel(relative, state));
+                minY = Math.min(minY, relative.getY());
+                maxY = Math.max(maxY, relative.getY());
+            }
+            var template = new ninja.trek.mc.goldgolem.tower.TowerModuleTemplate(vox,
+                    minY == Integer.MAX_VALUE ? 0 : minY, maxY == Integer.MIN_VALUE ? 0 : maxY);
+            int defaultHeight = ninja.trek.mc.goldgolem.tower.PyramidResampler.defaultHeight(template);
+            golem.setTowerCapture(def.uniqueBlockIds, def.blockCounts, pyramidOrigin, jsonRel, defaultHeight, template);
+            golem.setPyramidCurvature(0);
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.PYRAMID)));
+
+            for (BlockPos marker : markerPositions) world.destroyBlock(marker, false, player);
             ((ServerLevel) world).addFreshEntity(golem);
             if (!player.isCreative()) stack.shrink(1);
             return InteractionResult.SUCCESS;
@@ -340,9 +404,10 @@ public class PumpkinSummoning {
                 bottomGold = bottomGold.below();
             }
 
-            // Count gold blocks upward from below (pumpkin's gold block) to determine tower height
+            // Count the complete marker column. Starting at the top marker made every tower's
+            // captured height one block regardless of how far the column extended downward.
             int towerHeight = 0;
-            BlockPos checkPos = below; // Start from the pumpkin's gold block
+            BlockPos checkPos = bottomGold;
             while (world.getBlockState(checkPos).is(Blocks.GOLD_BLOCK)) {
                 towerHeight++;
                 checkPos = checkPos.above();

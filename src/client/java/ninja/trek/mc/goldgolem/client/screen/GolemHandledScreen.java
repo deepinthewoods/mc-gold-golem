@@ -72,6 +72,8 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     private Button towerOriginResetButton;
     private volatile boolean updatingTowerLayersField = false;
     private boolean hasTowerModeData = false;
+    private int pyramidCurvature = 0;
+    private PyramidCurvatureSlider pyramidCurvatureSlider;
 
     // Excavation mode state
     private int excavationHeight = 3; // 1-5
@@ -393,9 +395,14 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         return Math.max(2, Math.min(24, layers));
     }
 
+    private String towerHeightLabel() {
+        return getCurrentBuildMode() == BuildMode.PYRAMID ? "Height" : "Layers";
+    }
+
     private class TowerLayersRangeSlider extends AbstractSliderButton {
         public TowerLayersRangeSlider(int x, int y, int width, int height, int initialLayers) {
-            super(x, y, width, height, Component.literal("Layers"), toValueInit(initialLayers));
+            super(x, y, width, height, Component.literal(GolemHandledScreen.this.towerHeightLabel()),
+                    toValueInit(initialLayers));
         }
         private static double toValueInit(int l) {
             return (clampTowerLayersSlider(l) - 2) / 22.0;
@@ -405,7 +412,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         }
         @Override
         protected void updateMessage() {
-            this.setMessage(Component.literal("Layers: " + toLayers(this.value)));
+            this.setMessage(Component.literal(towerHeightLabel() + ": " + toLayers(this.value)));
         }
         @Override
         protected void applyValue() {
@@ -419,6 +426,43 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         }
         public void syncTo(int l) {
             this.value = toValueInit(l);
+            updateMessage();
+        }
+    }
+
+    private class PyramidCurvatureSlider extends AbstractSliderButton {
+        PyramidCurvatureSlider(int x, int y, int width, int height, int initialCurvature) {
+            super(x, y, width, height, Component.literal("Curve"), toValue(initialCurvature));
+        }
+
+        private static double toValue(int curvature) {
+            return (Math.max(-100, Math.min(100, curvature)) + 100) / 200.0;
+        }
+
+        private static int fromValue(double value) {
+            return Math.max(-100, Math.min(100, (int) Math.round(value * 200.0 - 100.0)));
+        }
+
+        @Override
+        protected void updateMessage() {
+            int curvature = fromValue(value);
+            String shape = curvature < -5 ? "Pointy" : curvature > 5 ? "Dome" : "Linear";
+            setMessage(Component.literal("Curve: " + shape + " " + curvature));
+        }
+
+        @Override
+        protected void applyValue() {
+            int curvature = fromValue(value);
+            if (curvature != pyramidCurvature) {
+                pyramidCurvature = curvature;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetPyramidCurvatureC2SPayload(
+                        getEntityId(), curvature));
+                updateMessage();
+            }
+        }
+
+        void syncTo(int curvature) {
+            value = toValue(curvature);
             updateMessage();
         }
     }
@@ -609,6 +653,15 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         ensureTowerLayersField();
     }
 
+    public void syncPyramidUniqueBlocks(java.util.List<String> ids) {
+        synchronized (stateLock) {
+            this.towerUniqueBlocks = ids == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+            getModeState(BuildMode.PYRAMID).setUniqueBlocks(ids);
+            this.hasTowerModeData = true;
+        }
+        ensureTowerLayersField();
+    }
+
     /** @deprecated Use {@link #syncTowerUniqueBlocks} instead */
     @Deprecated
     public void setTowerUniqueBlocks(java.util.List<String> ids) {
@@ -664,6 +717,28 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         ensureTowerLayersField();
     }
 
+    public void syncPyramidBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height,
+                                        int curvature) {
+        synchronized (stateLock) {
+            this.towerBlockCounts.clear();
+            java.util.Map<String, Integer> countMap = new java.util.HashMap<>();
+            if (ids != null && counts != null) {
+                for (int i = 0; i < Math.min(ids.size(), counts.size()); i++) {
+                    this.towerBlockCounts.put(ids.get(i), counts.get(i));
+                    countMap.put(ids.get(i), counts.get(i));
+                }
+            }
+            getModeState(BuildMode.PYRAMID).setBlockCounts(countMap);
+            this.towerLayers = Math.max(1, height);
+            this.pyramidCurvature = Math.max(-100, Math.min(100, curvature));
+            this.hasTowerModeData = true;
+        }
+        setTowerLayersFieldText(this.towerLayers);
+        setTowerLayersSliderValue(this.towerLayers);
+        if (pyramidCurvatureSlider != null) pyramidCurvatureSlider.syncTo(this.pyramidCurvature);
+        ensureTowerLayersField();
+    }
+
     /** @deprecated Use {@link #syncTowerBlockCounts} instead */
     @Deprecated
     public void setTowerBlockCounts(java.util.List<String> ids, java.util.List<Integer> counts, int height) {
@@ -674,6 +749,14 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         synchronized (stateLock) {
             this.towerBlockGroups = (groups == null) ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
             getModeState(BuildMode.TOWER).setBlockGroups(groups);
+        }
+    }
+
+    public void syncPyramidBlockGroups(java.util.List<Integer> groups) {
+        synchronized (stateLock) {
+            this.towerBlockGroups = groups == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+            getModeState(BuildMode.PYRAMID).setBlockGroups(groups);
         }
     }
 
@@ -698,6 +781,24 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         }
         ensureTowerLayersField();
         // Schedule UI update on render thread
+        Minecraft.getInstance().execute(this::refreshLayoutIfNeeded);
+    }
+
+    public void syncPyramidGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales,
+                                        java.util.List<String> flatSlots) {
+        synchronized (stateLock) {
+            this.towerGroupWindows = windows == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+            this.towerGroupNoiseScales = noiseScales == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
+            this.towerGroupFlatSlots = flatSlots == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+            getModeState(BuildMode.PYRAMID).updateGroupState(windows, noiseScales, flatSlots);
+        }
+        groupModeStrategy = null;
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null) syncGroupSliders(strategy);
+        ensureTowerLayersField();
         Minecraft.getInstance().execute(this::refreshLayoutIfNeeded);
     }
 
@@ -902,7 +1003,8 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         int maxVis = getGroupMaxVisibleRows();
         int rows = 0;
         GroupModeStrategy strategy = getGroupModeStrategy();
-        if (strategy != null && strategy.getMode() == BuildMode.TOWER) {
+        if (strategy != null && (strategy.getMode() == BuildMode.TOWER
+                || strategy.getMode() == BuildMode.PYRAMID)) {
             int total = strategy.getVisibleGroups().size();
             rows = Math.min(Math.max(0, total - strategy.getScroll()), maxVis);
         }
@@ -917,7 +1019,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     private void ensureTowerLayersField() {
         if (this.menu.isSliderEnabled()) return;
         int sliderMode = this.menu.getSliderMode();
-        if (sliderMode != 0 && sliderMode != 6) return;
+        if (sliderMode != 6 && sliderMode != 8) return;
         if (!this.hasTowerModeData) return;
         if (this.minecraft == null || this.width <= 0) return;
         int layersFieldW = 36;
@@ -941,7 +1043,8 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             towerLayersSlider.setY(layersFieldY);
         }
         if (towerLayersField == null) {
-            towerLayersField = new EditBox(this.font, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Component.literal("Layers"));
+            towerLayersField = new EditBox(this.font, layersFieldX, layersFieldY, layersFieldW, layersFieldH,
+                    Component.literal(towerHeightLabel()));
             towerLayersField.setMaxLength(3);
             towerLayersField.setResponder(this::onTowerLayersChanged);
             setTowerLayersFieldText(towerLayers);
@@ -962,6 +1065,20 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             towerOriginResetButton.setSize(resetButtonW, layersFieldH);
             towerOriginResetButton.setX(resetButtonX);
             towerOriginResetButton.setY(layersFieldY);
+        }
+        if (sliderMode == 8) {
+            int curvatureY = layersFieldY + layersFieldH + 6;
+            int curvatureX = this.leftPos + 8;
+            int curvatureW = this.imageWidth - 16;
+            if (pyramidCurvatureSlider == null) {
+                pyramidCurvatureSlider = new PyramidCurvatureSlider(curvatureX, curvatureY, curvatureW,
+                        layersFieldH, pyramidCurvature);
+                this.addRenderableWidget(pyramidCurvatureSlider);
+            } else {
+                pyramidCurvatureSlider.setX(curvatureX);
+                pyramidCurvatureSlider.setY(curvatureY);
+                pyramidCurvatureSlider.setSize(curvatureW, layersFieldH);
+            }
         }
     }
 
@@ -1035,6 +1152,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             case 5 -> BuildMode.TREE;
             case 6 -> BuildMode.TOWER;
             case 7 -> BuildMode.TUNNEL;
+            case 8 -> BuildMode.PYRAMID;
             default -> BuildMode.PATH;
         };
     }
@@ -1051,6 +1169,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         groupModeStrategy = switch (mode) {
             case WALL -> new WallModeStrategy();
             case TOWER -> new TowerModeStrategy();
+            case PYRAMID -> new PyramidModeStrategy();
             case TREE -> new TreeModeStrategy();
             default -> null;
         };
@@ -1068,11 +1187,13 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         if (groupModeStrategy.getMode() == BuildMode.WALL) {
             groupModeStrategy.updateBlocksAndGroups(wallUniqueBlocks, wallBlockGroups);
             groupModeStrategy.updateGroupState(wallGroupWindows, wallGroupNoiseScales, wallGroupFlatSlots, java.util.Map.of());
-        } else if (groupModeStrategy.getMode() == BuildMode.TOWER) {
+        } else if (groupModeStrategy.getMode() == BuildMode.TOWER
+                || groupModeStrategy.getMode() == BuildMode.PYRAMID) {
             groupModeStrategy.updateBlocksAndGroups(towerUniqueBlocks, towerBlockGroups);
             var extraData = new java.util.HashMap<String, Object>();
             extraData.put("blockCounts", towerBlockCounts);
             extraData.put("height", towerLayers);
+            extraData.put("curvature", pyramidCurvature);
             groupModeStrategy.updateGroupState(towerGroupWindows, towerGroupNoiseScales, towerGroupFlatSlots, extraData);
         } else if (groupModeStrategy.getMode() == BuildMode.TREE) {
             groupModeStrategy.updateBlocksAndGroups(treeUniqueBlocks, treeBlockGroups);
@@ -1276,7 +1397,9 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             int widthX = right - wsliderW;
             widthSlider = new WidthSlider(widthX, wsliderY, wsliderW, wsliderH, pathWidth);
             this.addRenderableWidget(widthSlider);
-        } else if (!this.menu.isSliderEnabled() && (this.menu.getSliderMode() <= 1 || this.menu.getSliderMode() == 5 || this.menu.getSliderMode() == 6)) {
+        } else if (!this.menu.isSliderEnabled() && (this.menu.getSliderMode() <= 1
+                || this.menu.getSliderMode() == 5 || this.menu.getSliderMode() == 6
+                || this.menu.getSliderMode() == 8)) {
             // Group Mode UI (Wall, Tower, Tree): create per-row sliders and scroll buttons using strategy pattern
             // Check sliderMode: 0 or 1 indicates Wall or Tower mode, 5 indicates Tree mode
             // Mode-specific data arrives later via network, but we create sliders now
@@ -1349,7 +1472,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             this.addRenderableWidget(dnBtn);
 
             // Tower mode: add layers slider on the right side
-            if (mode == BuildMode.TOWER) {
+            if (mode == BuildMode.TOWER || mode == BuildMode.PYRAMID) {
                 int layersFieldW = 36;
                 int layersGap = 6;
                 int layersFieldH = 12;
@@ -1364,7 +1487,8 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
                 int resetButtonX = left;
                 towerLayersSlider = new TowerLayersRangeSlider(layersSliderX, layersFieldY, layersSliderW, layersFieldH, towerLayers);
                 this.addRenderableWidget(towerLayersSlider);
-                towerLayersField = new EditBox(this.font, layersFieldX, layersFieldY, layersFieldW, layersFieldH, Component.literal("Layers"));
+                towerLayersField = new EditBox(this.font, layersFieldX, layersFieldY, layersFieldW, layersFieldH,
+                        Component.literal(towerHeightLabel()));
                 towerLayersField.setMaxLength(3);
                 towerLayersField.setResponder(this::onTowerLayersChanged);
                 setTowerLayersFieldText(towerLayers);
@@ -1375,6 +1499,11 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
                     .bounds(resetButtonX, layersFieldY, resetButtonW, layersFieldH)
                     .build();
                 this.addRenderableWidget(towerOriginResetButton);
+                if (mode == BuildMode.PYRAMID) {
+                    pyramidCurvatureSlider = new PyramidCurvatureSlider(left,
+                            layersFieldY + layersFieldH + 6, totalW, layersFieldH, pyramidCurvature);
+                    this.addRenderableWidget(pyramidCurvatureSlider);
+                }
             }
 
             // Tree mode: add tiling preset button

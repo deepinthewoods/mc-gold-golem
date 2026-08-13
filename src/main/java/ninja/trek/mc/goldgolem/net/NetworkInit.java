@@ -21,6 +21,8 @@ public class NetworkInit {
         serverboundPlay.register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
         serverboundPlay.register(SetTowerHeightC2SPayload.ID, SetTowerHeightC2SPayload.CODEC);
         serverboundPlay.register(ResetTowerOriginC2SPayload.ID, ResetTowerOriginC2SPayload.CODEC);
+        serverboundPlay.register(SetPyramidCurvatureC2SPayload.ID, SetPyramidCurvatureC2SPayload.CODEC);
+        serverboundPlay.register(MovePyramidPriorityC2SPayload.ID, MovePyramidPriorityC2SPayload.CODEC);
         clientboundPlay.register(GroupModeBlockGroupsS2CPayload.ID, GroupModeBlockGroupsS2CPayload.CODEC);
 
         // === PATH/GRADIENT MODE PAYLOADS ===
@@ -70,7 +72,7 @@ public class NetworkInit {
                             golem.setWallGroupWindow(payload.group(), payload.window());
                             golem.setWallGroupNoiseScale(payload.group(), payload.scale());
                         }
-                        case TOWER -> {
+                        case TOWER, PYRAMID -> {
                             golem.setTowerGroupWindow(payload.group(), payload.window());
                             golem.setTowerGroupNoiseScale(payload.group(), payload.scale());
                         }
@@ -96,7 +98,7 @@ public class NetworkInit {
                     if (!id.isEmpty() && !PayloadValidator.isValidBlockId(id)) return;
                     switch (payload.mode()) {
                         case WALL -> golem.setWallGroupSlot(payload.group(), payload.slot(), id);
-                        case TOWER -> golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
+                        case TOWER, PYRAMID -> golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
                         case TREE -> golem.setTreeGroupSlot(payload.group(), payload.slot(), id);
                         default -> { }
                     }
@@ -115,7 +117,7 @@ public class NetworkInit {
                         && PayloadValidator.isValidBlockId(payload.blockId())) {
                     boolean assigned = switch (payload.mode()) {
                         case WALL -> golem.setWallBlockGroup(payload.blockId(), payload.group());
-                        case TOWER -> golem.setTowerBlockGroup(payload.blockId(), payload.group());
+                        case TOWER, PYRAMID -> golem.setTowerBlockGroup(payload.blockId(), payload.group());
                         case TREE -> golem.setTreeBlockGroup(payload.blockId(), payload.group());
                         default -> false;
                     };
@@ -130,9 +132,35 @@ public class NetworkInit {
             context.server().execute(() -> {
                 var world = player.level();
                 var e = world.getEntity(payload.entityId());
-                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)) {
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && (golem.getBuildMode() == BuildMode.TOWER || golem.getBuildMode() == BuildMode.PYRAMID)) {
                     golem.setTowerHeight(payload.height());
-                    sendGroupModeState(player, golem, BuildMode.TOWER);
+                    sendGroupModeState(player, golem, golem.getBuildMode());
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetPyramidCurvatureC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var e = player.level().getEntity(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && golem.getBuildMode() == BuildMode.PYRAMID) {
+                    golem.setPyramidCurvature(payload.curvature());
+                    sendGroupModeState(player, golem, BuildMode.PYRAMID);
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(MovePyramidPriorityC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var e = player.level().getEntity(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && golem.getBuildMode() == BuildMode.PYRAMID
+                        && PayloadValidator.isValidBlockId(payload.blockId())
+                        && golem.movePyramidPriority(payload.blockId(), payload.delta())) {
+                    sendGroupModeState(player, golem, BuildMode.PYRAMID);
                 }
             });
         });
@@ -354,13 +382,16 @@ public class NetworkInit {
                 slots = golem.getWallGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createWallExtraData();
             }
-            case TOWER -> {
+            case TOWER, PYRAMID -> {
                 var ids = golem.getTowerUniqueBlockIds();
                 groups = golem.getTowerBlockGroupMap(ids);
                 windows = golem.getTowerGroupWindows();
                 scales = golem.getTowerGroupNoiseScales();
                 slots = golem.getTowerGroupFlatSlots();
-                extraData = GroupModeStateS2CPayload.createTowerExtraData(golem.getTowerBlockCounts(), golem.getTowerHeight());
+                extraData = mode == BuildMode.PYRAMID
+                        ? GroupModeStateS2CPayload.createPyramidExtraData(golem.getTowerBlockCounts(),
+                                golem.getTowerHeight(), golem.getPyramidCurvature())
+                        : GroupModeStateS2CPayload.createTowerExtraData(golem.getTowerBlockCounts(), golem.getTowerHeight());
             }
             case TREE -> {
                 var ids = golem.getTreeUniqueBlockIds();
@@ -387,7 +418,7 @@ public class NetworkInit {
     private static java.util.List<String> getUniqueBlocks(GoldGolemEntity golem, BuildMode mode) {
         return switch (mode) {
             case WALL -> golem.getWallUniqueBlockIds();
-            case TOWER -> golem.getTowerUniqueBlockIds();
+            case TOWER, PYRAMID -> golem.getTowerUniqueBlockIds();
             case TREE -> golem.getTreeUniqueBlockIds();
             default -> java.util.List.of();
         };

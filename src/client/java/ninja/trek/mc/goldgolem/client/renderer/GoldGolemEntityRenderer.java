@@ -69,7 +69,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.activeWheelSet = switch (entity.getBuildMode()) {
             case PATH, GRADIENT -> 0;  // 4-wheel config for general path building
             case WALL -> 1;             // 2-wheel config for wall building
-            case TOWER -> 2;            // 4-wheel config for stable tower building
+            case TOWER, PYRAMID -> 2;   // 4-wheel config for stable vertical building
             case MINING -> 3;           // 2-wheel config for mining
             case EXCAVATION -> 4;       // 2-wheel config for excavation
             case TERRAFORMING -> 5;     // 1-wheel config (right side) for terraforming

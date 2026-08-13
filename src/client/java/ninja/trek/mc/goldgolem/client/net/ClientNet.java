@@ -38,6 +38,7 @@ public final class ClientNet {
                     switch (payload.mode()) {
                         case WALL -> screen.syncWallUniqueBlocks(payload.blockIds());
                         case TOWER -> screen.syncTowerUniqueBlocks(payload.blockIds());
+                        case PYRAMID -> screen.syncPyramidUniqueBlocks(payload.blockIds());
                         case TREE -> screen.syncTreeUniqueBlocks(payload.blockIds());
                         default -> { }
                     }
@@ -61,6 +62,13 @@ public final class ClientNet {
                             );
                             screen.syncTowerGroupsState(payload.windows(), payload.noiseScales(), payload.flatSlots());
                         }
+                        case PYRAMID -> {
+                            screen.syncPyramidBlockCounts(
+                                    payload.getBlockCounts().keySet().stream().toList(),
+                                    payload.getBlockCounts().values().stream().toList(),
+                                    payload.getTowerHeight(), payload.getPyramidCurvature());
+                            screen.syncPyramidGroupsState(payload.windows(), payload.noiseScales(), payload.flatSlots());
+                        }
                         case TREE -> screen.syncTreeGroupsState(payload.getTilingPresetOrdinal(), payload.windows(), payload.noiseScales(), payload.flatSlots());
                         default -> { }
                     }
@@ -76,6 +84,7 @@ public final class ClientNet {
                     switch (payload.mode()) {
                         case WALL -> screen.syncWallBlockGroups(payload.groups());
                         case TOWER -> screen.syncTowerBlockGroups(payload.groups());
+                        case PYRAMID -> screen.syncPyramidBlockGroups(payload.groups());
                         case TREE -> screen.syncTreeBlockGroups(payload.groups());
                         default -> { }
                     }

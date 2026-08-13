@@ -25,11 +25,13 @@ public final class GolemScreens {
         boolean treeMode = false;
         boolean towerMode = false;
         boolean tunnelMode = false;
+        boolean pyramidMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             BuildMode mode = g0.getBuildMode();
-            if (mode == BuildMode.WALL || mode == BuildMode.TOWER) {
+            if (mode == BuildMode.WALL || mode == BuildMode.TOWER || mode == BuildMode.PYRAMID) {
                 sliderEnabled = false;
                 towerMode = mode == BuildMode.TOWER;
+                pyramidMode = mode == BuildMode.PYRAMID;
             } else if (mode == BuildMode.EXCAVATION) {
                 excavationMode = true;
                 sliderEnabled = false;
@@ -49,10 +51,12 @@ public final class GolemScreens {
         }
 
         // Build dynamic UI spec
-        boolean isGroupMode = towerMode || treeMode || (!sliderEnabled && !excavationMode && !miningMode && !terraformingMode && !tunnelMode);
+        boolean isGroupMode = towerMode || pyramidMode || treeMode
+                || (!sliderEnabled && !excavationMode && !miningMode && !terraformingMode && !tunnelMode);
         int gradientRows = (terraformingMode || sliderEnabled) ? 3 : (isGroupMode ? 6 : 2);
         int golemSlots = golemInventory.getContainerSize();
-        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4 : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : 0))))));
+        int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4
+                : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : (pyramidMode ? 8 : 0)))))));
         String jsonName = "";
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             jsonName = g0.getCurrentJsonName();
@@ -174,7 +178,7 @@ public final class GolemScreens {
                             new GroupModeStateS2CPayload(entityId, mode, golem.getWallGroupWindows(), golem.getWallGroupNoiseScales(), golem.getWallGroupFlatSlots(), extraData));
                 }
             }
-            case TOWER -> {
+            case TOWER, PYRAMID -> {
                 if (golem.getTowerUniqueBlockIds() != null && !golem.getTowerUniqueBlockIds().isEmpty()) {
                     if (golem.getTowerGroupWindows().isEmpty()) {
                         golem.initTowerGroups(golem.getTowerUniqueBlockIds());
@@ -184,7 +188,10 @@ public final class GolemScreens {
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new UniqueBlocksS2CPayload(entityId, mode, ids));
                     var groups = golem.getTowerBlockGroupMap(ids);
-                    var extraData = GroupModeStateS2CPayload.createTowerExtraData(counts, golem.getTowerHeight());
+                    var extraData = mode == BuildMode.PYRAMID
+                            ? GroupModeStateS2CPayload.createPyramidExtraData(counts, golem.getTowerHeight(),
+                                    golem.getPyramidCurvature())
+                            : GroupModeStateS2CPayload.createTowerExtraData(counts, golem.getTowerHeight());
                     // Use generic payloads
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));

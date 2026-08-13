@@ -16,7 +16,8 @@ public enum BuildMode {
     TERRAFORMING,
     TREE,
     TUNNEL,
-    GRADIENT       // Alias for PATH (gradient-based building)
+    GRADIENT,      // Alias for PATH (gradient-based building)
+    PYRAMID        // Tower-like building with progressive horizontal resampling
     ;
 
     private static final BuildMode[] VALUES = values();
@@ -46,7 +47,7 @@ public enum BuildMode {
      * Check if this mode uses the group-based UI (Wall, Tower, Tree).
      */
     public boolean isGroupMode() {
-        return this == WALL || this == TOWER || this == TREE;
+        return this == WALL || this == TOWER || this == TREE || this == PYRAMID;
     }
 
     /**
@@ -62,7 +63,7 @@ public enum BuildMode {
      */
     public boolean returnsToBuildStartWhenOutOfBlocks() {
         return switch (this) {
-            case PATH, WALL, TOWER, TERRAFORMING, TREE, GRADIENT -> true;
+            case PATH, WALL, TOWER, TERRAFORMING, TREE, GRADIENT, PYRAMID -> true;
             case MINING, EXCAVATION, TUNNEL -> false;
         };
     }

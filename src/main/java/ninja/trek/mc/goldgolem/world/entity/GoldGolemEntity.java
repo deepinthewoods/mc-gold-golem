@@ -170,6 +170,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private String towerJsonFile = null; // saved snapshot path (relative to game dir)
     private int towerHeight = 0; // total height to build (in blocks)
     private ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate = null;
+    private int pyramidCurvature = 0; // -100=pointy/concave, 0=linear, 100=dome/convex
     // Tower UI state: dynamic gradient groups (same as wall mode)
     private final java.util.List<String[]> towerGroupSlots = new java.util.ArrayList<>(); // each String[9]
     private final java.util.List<Float> towerGroupWindows = new java.util.ArrayList<>();
@@ -599,6 +600,28 @@ public class GoldGolemEntity extends PathfinderMob {
         this.towerHeight = clampedHeight;
         notifyTowerConfigurationChanged("towerHeight");
     }
+    public int getPyramidCurvature() { return pyramidCurvature; }
+    public void setPyramidCurvature(int curvature) {
+        int clamped = Math.max(-100, Math.min(100, curvature));
+        if (this.pyramidCurvature == clamped) return;
+        this.pyramidCurvature = clamped;
+        notifyTowerConfigurationChanged("pyramidCurvature");
+    }
+    public java.util.List<String> getPyramidPriority() {
+        return java.util.Collections.unmodifiableList(this.towerUniqueBlockIds);
+    }
+    public boolean movePyramidPriority(String blockId, int delta) {
+        if (blockId == null || delta == 0 || towerUniqueBlockIds.size() < 2) return false;
+        int from = towerUniqueBlockIds.indexOf(blockId);
+        if (from < 0) return false;
+        int to = Math.floorMod(from + Integer.signum(delta), towerUniqueBlockIds.size());
+        java.util.ArrayList<String> reordered = new java.util.ArrayList<>(towerUniqueBlockIds);
+        String moved = reordered.remove(from);
+        reordered.add(to, moved);
+        towerUniqueBlockIds = reordered;
+        notifyTowerConfigurationChanged("pyramidPriority");
+        return true;
+    }
     public ninja.trek.mc.goldgolem.tower.TowerModuleTemplate getTowerTemplate() {
         // Lazy load from JSON file if template is null but file path is set
         if (towerTemplate == null && towerJsonFile != null && !towerJsonFile.isEmpty()) {
@@ -747,7 +770,7 @@ public class GoldGolemEntity extends PathfinderMob {
         if (mode == null) return null;
         return switch (mode) {
             case WALL -> wallJsonFile;
-            case TOWER -> towerJsonFile;
+            case TOWER, PYRAMID -> towerJsonFile;
             case TREE -> treeJsonFile;
             default -> null;
         };
@@ -757,7 +780,7 @@ public class GoldGolemEntity extends PathfinderMob {
         if (mode == null) return;
         switch (mode) {
             case WALL -> this.wallJsonFile = jsonRel;
-            case TOWER -> this.towerJsonFile = jsonRel;
+            case TOWER, PYRAMID -> this.towerJsonFile = jsonRel;
             case TREE -> this.treeJsonFile = jsonRel;
             default -> {
             }
@@ -1174,7 +1197,7 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         if (getBuildMode() == BuildMode.TREE) {
             this.treeOrigin = summonOrigin;
-        } else if (getBuildMode() == BuildMode.TOWER) {
+        } else if (getBuildMode() == BuildMode.TOWER || getBuildMode() == BuildMode.PYRAMID) {
             if (this.towerOrigin == null) {
                 this.towerOrigin = summonOrigin;
             }
@@ -2187,6 +2210,17 @@ public class GoldGolemEntity extends PathfinderMob {
         return true;
     }
 
+    public boolean removeBlockToInventory(BlockPos pos, BlockPos nextPos, boolean isLeft) {
+        BlockState removedState = this.level().getBlockState(pos);
+        if (removedState.isAir()) return true;
+
+        this.level().setBlockAndUpdate(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState());
+        // Match replacement behavior: recover the old material when possible, otherwise discard it.
+        tryAddToInventory(new ItemStack(removedState.getBlock().asItem()));
+        beginHandAnimation(isLeft, pos, nextPos);
+        return true;
+    }
+
     private boolean tryAddToInventory(ItemStack stack) {
         if (stack.isEmpty()) return false;
 
@@ -2535,6 +2569,7 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         if (this.towerJsonFile != null) view.putString("TowerJson", this.towerJsonFile);
         view.putInt("TowerHeight", this.towerHeight);
+        view.putInt("PyramidCurvature", this.pyramidCurvature);
         if (this.towerUniqueBlockIds != null && !this.towerUniqueBlockIds.isEmpty()) {
             view.putInt("TowerUniqCount", this.towerUniqueBlockIds.size());
             for (int i = 0; i < this.towerUniqueBlockIds.size(); i++) {
@@ -2772,6 +2807,7 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         this.towerJsonFile = view.getStringOr("TowerJson", null);
         this.towerHeight = view.getIntOr("TowerHeight", 0);
+        this.pyramidCurvature = Math.max(-100, Math.min(100, view.getIntOr("PyramidCurvature", 0)));
         int tc = view.getIntOr("TowerUniqCount", 0);
         if (tc > 0) {
             java.util.ArrayList<String> ids = new java.util.ArrayList<>(tc);

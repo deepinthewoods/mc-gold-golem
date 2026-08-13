@@ -128,6 +128,11 @@ public record GroupModeStateS2CPayload(
         return height instanceof Integer ? (Integer) height : 1;
     }
 
+    public int getPyramidCurvature() {
+        Object curvature = extraData.get("curvature");
+        return curvature instanceof Integer ? (Integer) curvature : 0;
+    }
+
     /**
      * Helper to extract tiling preset ordinal from extra data (TREE mode).
      */
@@ -143,6 +148,13 @@ public record GroupModeStateS2CPayload(
         Map<String, Object> extra = new HashMap<>();
         extra.put("blockCounts", blockCounts);
         extra.put("height", height);
+        return extra;
+    }
+
+    public static Map<String, Object> createPyramidExtraData(Map<String, Integer> blockCounts, int height,
+                                                              int curvature) {
+        Map<String, Object> extra = new HashMap<>(createTowerExtraData(blockCounts, height));
+        extra.put("curvature", curvature);
         return extra;
     }
 

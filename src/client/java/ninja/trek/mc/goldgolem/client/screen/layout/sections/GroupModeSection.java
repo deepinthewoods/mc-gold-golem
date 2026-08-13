@@ -17,7 +17,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Section for group-based build modes (WALL, TOWER, TREE).
+ * Section for group-based build modes (WALL, TOWER, PYRAMID, TREE).
  * Owns all rendering, click handling, drag-drop, and icon management for group modes.
  */
 public class GroupModeSection extends AbstractGuiSection {
@@ -90,6 +90,7 @@ public class GroupModeSection extends AbstractGuiSection {
         int gridX = 8; // relative to GUI left
         int iconXOff = strategy.getIconXOffset();
         boolean showCounts = strategy.shouldShowBlockCounts();
+        boolean showPriority = strategy.getMode() == BuildMode.PYRAMID;
 
         List<String> uniqueBlocks = strategy.getUniqueBlocks();
         List<Integer> blockGroups = strategy.getBlockGroups();
@@ -137,6 +138,10 @@ public class GroupModeSection extends AbstractGuiSection {
 
                 // Track icon hit area (absolute screen coordinates)
                 iconHits.add(new IconHit(id, groupIdx, guiX + ix, guiY + rowY, 16, 16));
+                if (showPriority) {
+                    int priority = uniqueBlocks.indexOf(id) + 1;
+                    context.text(textRenderer, "#" + priority, ix, rowY - 7, 0xFFFFD700, true);
+                }
             }
 
             // Group row slots
@@ -220,10 +225,31 @@ public class GroupModeSection extends AbstractGuiSection {
 
     @Override
     public boolean handleClick(int mouseX, int mouseY, int button) {
-        if (button != 0) return false;
-
         GroupModeStrategy strategy = getStrategy();
         if (strategy == null) return false;
+
+        // Pyramid source order is the material tie-break. Right-click cycles an icon upward.
+        if (button == 1 && strategy.getMode() == BuildMode.PYRAMID) {
+            for (IconHit ih : iconHits) {
+                if (ih.contains(mouseX, mouseY)) {
+                    ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.MovePyramidPriorityC2SPayload(
+                            screen.getEntityId(), ih.blockId, -1));
+                    int from = strategy.getUniqueBlocks().indexOf(ih.blockId);
+                    if (from >= 0 && strategy.getUniqueBlocks().size() > 1) {
+                        int to = Math.floorMod(from - 1, strategy.getUniqueBlocks().size());
+                        String moved = strategy.getUniqueBlocks().remove(from);
+                        strategy.getUniqueBlocks().add(to, moved);
+                        if (from < strategy.getBlockGroups().size()) {
+                            Integer movedGroup = strategy.getBlockGroups().remove(from);
+                            strategy.getBlockGroups().add(to, movedGroup);
+                        }
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (button != 0) return false;
 
         int guiX = screen.getGuiX();
         int guiY = screen.getGuiY();
