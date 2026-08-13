@@ -425,8 +425,7 @@ public class GoldGolemEntity extends PathfinderMob {
      * Start building with the current strategy.
      */
     public void startBuilding() {
-        this.buildStartPosition = this.blockPosition();
-        this.resourceWaitAnchor = null;
+        prepareBuildReturnState(true);
         this.buildingPaths = true;
         this.entityData.set(BUILDING_PATHS, true);
         initializeStrategyForCurrentMode();
@@ -450,6 +449,17 @@ public class GoldGolemEntity extends PathfinderMob {
 
     private void clearBuildReturnState() {
         buildStartPosition = null;
+        resourceWaitAnchor = null;
+    }
+
+    private void prepareBuildReturnState(boolean resetStartPosition) {
+        if (!getBuildMode().returnsToBuildStartWhenOutOfBlocks()) {
+            clearBuildReturnState();
+            return;
+        }
+        if (resetStartPosition || buildStartPosition == null) {
+            buildStartPosition = this.blockPosition();
+        }
         resourceWaitAnchor = null;
     }
 
@@ -1645,7 +1655,8 @@ public class GoldGolemEntity extends PathfinderMob {
     }
 
     private void tickResourceWaitReturn() {
-        if (buildingPaths || !isWaitingForResources() || resourceWaitAnchor == null) return;
+        if (!getBuildMode().returnsToBuildStartWhenOutOfBlocks()
+                || buildingPaths || !isWaitingForResources() || resourceWaitAnchor == null) return;
 
         double targetX = resourceWaitAnchor.getX() + 0.5;
         double targetZ = resourceWaitAnchor.getZ() + 0.5;
@@ -3177,10 +3188,7 @@ public class GoldGolemEntity extends PathfinderMob {
 
                 switch (result) {
                     case STARTED, RESUMED -> {
-                        if (result == BuildStrategy.FeedResult.STARTED || buildStartPosition == null) {
-                            buildStartPosition = this.blockPosition();
-                        }
-                        resourceWaitAnchor = null;
+                        prepareBuildReturnState(result == BuildStrategy.FeedResult.STARTED);
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.shrink(1);
@@ -3211,8 +3219,7 @@ public class GoldGolemEntity extends PathfinderMob {
                     }
                     case NOT_HANDLED -> {
                         // Default behavior: just start building
-                        buildStartPosition = this.blockPosition();
-                        resourceWaitAnchor = null;
+                        prepareBuildReturnState(true);
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
                         if (!player.isCreative()) stack.shrink(1);
@@ -3350,15 +3357,19 @@ public class GoldGolemEntity extends PathfinderMob {
             activeStrategy.setWaitingForResources(true);
         }
         this.getNavigation().stop();
-        if (buildStartPosition == null) {
-            buildStartPosition = this.blockPosition();
+        if (getBuildMode().returnsToBuildStartWhenOutOfBlocks()) {
+            if (buildStartPosition == null) {
+                buildStartPosition = this.blockPosition();
+            }
+            resourceWaitAnchor = buildStartPosition;
+            this.getNavigation().moveTo(
+                    resourceWaitAnchor.getX() + 0.5,
+                    resourceWaitAnchor.getY(),
+                    resourceWaitAnchor.getZ() + 0.5,
+                    0.8);
+        } else {
+            resourceWaitAnchor = null;
         }
-        resourceWaitAnchor = buildStartPosition;
-        this.getNavigation().moveTo(
-                resourceWaitAnchor.getX() + 0.5,
-                resourceWaitAnchor.getY(),
-                resourceWaitAnchor.getZ() + 0.5,
-                0.8);
         spawnAngry();
         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
             this.trackStart = null;
@@ -3886,9 +3897,9 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
     public boolean canUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
-        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.MINING) return false;
-        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.EXCAVATION) return false;
-        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.TUNNEL) return false;
+        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
+        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never wander in excavation mode
+        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never wander in tunnel mode
         return super.canUse();
     }
 
@@ -3896,9 +3907,9 @@ class PathingAwareWanderGoal extends WaterAvoidingRandomStrollGoal {
     public boolean canContinueToUse() {
         if (golem.isBuildingPaths()) return false;
         if (golem.hasGuiViewer()) return false; // Stay in place while GUI is open
-        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.MINING) return false;
-        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.EXCAVATION) return false;
-        if (!golem.isWaitingForResources() && golem.getBuildMode() == BuildMode.TUNNEL) return false;
+        if (golem.getBuildMode() == BuildMode.MINING) return false; // Never wander in mining mode
+        if (golem.getBuildMode() == BuildMode.EXCAVATION) return false; // Never wander in excavation mode
+        if (golem.getBuildMode() == BuildMode.TUNNEL) return false; // Never wander in tunnel mode
         return super.canContinueToUse();
     }
 

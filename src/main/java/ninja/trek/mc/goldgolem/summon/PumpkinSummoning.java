@@ -431,17 +431,6 @@ public class PumpkinSummoning {
                 return InteractionResult.FAIL;
             }
             var def = res.def();
-            // Debug output removed
-            // Validate join slices across all gold markers per spec
-            var validation = ninja.trek.mc.goldgolem.wall.WallModuleValidator.validate(world, def.origin, def.voxels, def.goldMarkers, below);
-            if (!validation.ok()) {
-                if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
-                    sp.sendSystemMessage(net.minecraft.network.chat.Component.literal("[Gold Golem] Wall validation failed: " + validation.error()));
-                }
-                return InteractionResult.FAIL;
-            }
-            // Validation summary logging removed
-
             // Spawn golem with wall mode set
             GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
             golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
@@ -467,6 +456,7 @@ public class PumpkinSummoning {
                 }
                 return InteractionResult.FAIL;
             }
+            var validation = extraction.validation();
 
             try {
             // Build module templates with per-voxel block ids relative to each module's A marker
@@ -481,16 +471,12 @@ public class PumpkinSummoning {
                 BlockPos gAbs = def.origin.offset(gRel);
                 if (gAbs.equals(below)) continue;
                 net.minecraft.world.level.block.state.BlockState candidate = world.getBlockState(gAbs.above());
-                if (!candidate.isAir()) {
+                if (!candidate.isAir() && !candidate.is(net.minecraft.world.level.block.Blocks.SNOW)
+                        && !candidate.is(net.minecraft.world.level.block.Blocks.GOLD_BLOCK)) {
                     correctPumpkinState = candidate;
                     break;
                 }
             }
-
-            // Compute per-module slice axes from extraction cut data
-            boolean[] cutIsX = extraction.cutIsX();
-            int numSegments = extraction.modules().size();
-            int numCuts = numSegments - 1;
 
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> templates = new java.util.ArrayList<>();
             int moduleIdx = 0;
@@ -588,54 +574,11 @@ public class PumpkinSummoning {
                     }
                 }
 
-                // Determine A-side and B-side slice axes
-                // Interior cuts: axis comes directly from cutIsX[]
-                // Chain endpoints: derive from the adjacent cut's axis + corner detection,
-                // since the voxel heuristic is unreliable for L-shaped corner modules
-                boolean isCorner = mod.aMarker().getX() != mod.bMarker().getX()
-                        && mod.aMarker().getZ() != mod.bMarker().getZ();
-
-                ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis aAxis;
-                if (moduleIdx > 0 && moduleIdx - 1 < cutIsX.length) {
-                    // Interior: A-side axis from the cut before this module
-                    aAxis = cutIsX[moduleIdx - 1]
-                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
-                } else if (moduleIdx < numCuts && moduleIdx < cutIsX.length) {
-                    // Chain start endpoint: derive from the B-side cut
-                    var bAxisFromCut = cutIsX[moduleIdx]
-                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
-                    aAxis = isCorner
-                            ? (bAxisFromCut == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                                ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK
-                                : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK)
-                            : bAxisFromCut;
-                } else {
-                    // Single-module chain (no cuts): fall back to voxel heuristic
-                    aAxis = inferSliceAxisFromVoxels(mod.aMarker(), mod.voxels());
-                }
-
-                ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis bAxis;
-                if (moduleIdx < numCuts && moduleIdx < cutIsX.length) {
-                    // Interior: B-side axis from the cut after this module
-                    bAxis = cutIsX[moduleIdx]
-                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
-                } else if (moduleIdx > 0 && moduleIdx - 1 < cutIsX.length) {
-                    // Chain end endpoint: derive from the A-side cut
-                    var aAxisFromCut = cutIsX[moduleIdx - 1]
-                            ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                            : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
-                    bAxis = isCorner
-                            ? (aAxisFromCut == ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                                ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK
-                                : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK)
-                            : aAxisFromCut;
-                } else {
-                    // Single-module chain (no cuts): fall back to voxel heuristic
-                    bAxis = inferSliceAxisFromVoxels(mod.bMarker(), mod.voxels());
-                }
+                // These axes were classified from each marker's exact local join component.
+                // Never infer a corner from marker displacement: slipped and asymmetric modules
+                // can have diagonal endpoints without changing their connector orientation.
+                var aAxis = mod.aAxis();
+                var bAxis = mod.bAxis();
 
                 var builtTemplate = new ninja.trek.mc.goldgolem.wall.WallModuleTemplate(
                         mod.aMarker(), mod.bMarker(), vox,
@@ -650,7 +593,6 @@ public class PumpkinSummoning {
                         + " delta=(" + (mod.bMarker().getX() - mod.aMarker().getX())
                         + "," + (mod.bMarker().getY() - mod.aMarker().getY())
                         + "," + (mod.bMarker().getZ() - mod.aMarker().getZ()) + ")"
-                        + " isCorner=" + isCorner
                         + " voxels=" + vox.size());
                 System.out.println("[WallSummon]   aAxis=" + aAxis
                         + " aSlice=" + (aSlice != null ? aSlice.signature() : "null")
@@ -679,22 +621,49 @@ public class PumpkinSummoning {
                 moduleIdx++;
             }
 
+            // Validate the final templates, after pumpkin repair and synthetic marker fills. This
+            // prevents a partially classified template set from reaching runtime selection.
+            var referenceSlice = validation.referenceSlice();
+            for (int templateIndex = 0; templateIndex < templates.size(); templateIndex++) {
+                var template = templates.get(templateIndex);
+                var aSlice = template.getASlice();
+                var bSlice = template.getBSlice();
+                if (aSlice == null || bSlice == null) {
+                    if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                        sp.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                                "[Gold Golem] Wall template " + templateIndex
+                                        + " is missing a complete endpoint join"));
+                    }
+                    return InteractionResult.FAIL;
+                }
+                if (!referenceSlice.matches(aSlice) || !referenceSlice.matches(bSlice)) {
+                    if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                        sp.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                                "[Gold Golem] Wall template " + templateIndex
+                                        + " has an incompatible endpoint profile"));
+                    }
+                    return InteractionResult.FAIL;
+                }
+                if (templateIndex > 0) {
+                    var previousOutput = templates.get(templateIndex - 1).getBSlice();
+                    if (!previousOutput.profileEquals(aSlice)) {
+                        if (player instanceof net.minecraft.server.level.ServerPlayer sp) {
+                            sp.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                                    "[Gold Golem] Extracted wall templates disagree at join "
+                                            + templateIndex));
+                        }
+                        return InteractionResult.FAIL;
+                    }
+                }
+            }
+
             // Summon golem and persist capture metadata
             golem.setWallCapture(def.uniqueBlockIds, def.origin, jsonRel);
             golem.setWallJoinSignature(validation.signature());
             golem.setWallJoinMeta(validation.axis(), validation.uSize());
             golem.setWallSliceSymmetric(validation.symmetric());
-            // Build join template from a non-summon slice using the validated axis
-            ninja.trek.mc.goldgolem.wall.WallJoinSlice best = null;
-            for (var g : def.goldMarkers) {
-                var s = ninja.trek.mc.goldgolem.wall.WallJoinSlice.from(world, def.origin, def.voxels, g, validation.axis()).orElse(null);
-                if (s != null) {
-                    // Prefer the slice from a non-summon marker; among those, pick the one with most points
-                    BlockPos markerAbs = def.origin.offset(g);
-                    boolean isSummonMarker = markerAbs.equals(below);
-                    if (best == null || (!isSummonMarker && s.points.size() >= best.points.size())) best = s;
-                }
-            }
+            // Persist the same canonical profile used for validation and runtime matching.
+            ninja.trek.mc.goldgolem.wall.WallJoinSlice best = validation.referenceSlice();
             System.out.println("[WallSummon] Join template reference: axis=" + validation.axis()
                     + " bestSlice=" + (best != null ? best.signature() : "null")
                     + " (" + (best != null ? best.points.size() : 0) + " pts)"
@@ -751,25 +720,4 @@ public class PumpkinSummoning {
         }
     }
 
-    /**
-     * Infer the join slice axis at a gold marker from the voxel shape.
-     * Counts voxels extending along X vs Z near the marker to determine
-     * which axis the wall runs along (and thus which plane the cross-section is on).
-     */
-    private static ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis inferSliceAxisFromVoxels(
-            BlockPos marker, java.util.Set<BlockPos> voxels) {
-        int xCount = 0, zCount = 0;
-        for (BlockPos v : voxels) {
-            int dx = Math.abs(v.getX() - marker.getX());
-            int dz = Math.abs(v.getZ() - marker.getZ());
-            // Count voxels extending along each axis near the marker
-            if (dx > 0 && dx <= 2 && dz == 0) xCount++;
-            if (dz > 0 && dz <= 2 && dx == 0) zCount++;
-        }
-        // Module extends along X → cross-section is at x=const → X_THICK
-        // Module extends along Z → cross-section is at z=const → Z_THICK
-        return xCount >= zCount
-                ? ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.X_THICK
-                : ninja.trek.mc.goldgolem.wall.WallJoinSlice.Axis.Z_THICK;
-    }
 }

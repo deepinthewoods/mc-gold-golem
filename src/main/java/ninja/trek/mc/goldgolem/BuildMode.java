@@ -55,4 +55,15 @@ public enum BuildMode {
     public boolean isGradientMode() {
         return this == PATH || this == GRADIENT;
     }
+
+    /**
+     * Whether a resource-starved golem should return to the position where this build started.
+     * Digging modes manage their own return and idle behavior.
+     */
+    public boolean returnsToBuildStartWhenOutOfBlocks() {
+        return switch (this) {
+            case PATH, WALL, TOWER, TERRAFORMING, TREE, GRADIENT -> true;
+            case MINING, EXCAVATION, TUNNEL -> false;
+        };
+    }
 }

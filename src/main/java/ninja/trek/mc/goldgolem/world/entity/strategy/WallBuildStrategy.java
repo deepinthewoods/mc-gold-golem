@@ -142,6 +142,12 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Save direction
         nbt.putInt("LastDirX", wallLastDirX);
         nbt.putInt("LastDirZ", wallLastDirZ);
+        if (entity != null && entity.getTrackStart() != null) {
+            Vec3 trackStart = entity.getTrackStart();
+            nbt.putDouble("TrackStartX", trackStart.x);
+            nbt.putDouble("TrackStartY", trackStart.y);
+            nbt.putDouble("TrackStartZ", trackStart.z);
+        }
 
         // Save current output slice
         if (currentOutputSlice != null) {
@@ -153,8 +159,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 var p = sorted.get(i);
                 nbt.putInt("OS_dy" + i, p.dy());
                 nbt.putInt("OS_du" + i, p.du());
-                String id = currentOutputSlice.blockIds.get(p);
-                nbt.putString("OS_id" + i, id != null ? id : "");
+                nbt.putString("OS_id" + i, serializedSliceValue(currentOutputSlice, p));
             }
         }
 
@@ -233,6 +238,12 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         // Load direction
         wallLastDirX = nbt.getIntOr("LastDirX", 1);
         wallLastDirZ = nbt.getIntOr("LastDirZ", 0);
+        if (entity != null && nbt.contains("TrackStartX")) {
+            entity.setTrackStart(new Vec3(
+                    nbt.getDoubleOr("TrackStartX", 0.0),
+                    nbt.getDoubleOr("TrackStartY", 0.0),
+                    nbt.getDoubleOr("TrackStartZ", 0.0)));
+        }
 
         // Load current output slice
         String outSliceAxisStr = nbt.contains("OutSliceAxis") ? nbt.getStringOr("OutSliceAxis", null) : null;
@@ -277,6 +288,12 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         view.putBoolean("WallWaiting", waitingForResources);
         view.putInt("WallDirX", wallLastDirX);
         view.putInt("WallDirZ", wallLastDirZ);
+        if (entity != null && entity.getTrackStart() != null) {
+            Vec3 trackStart = entity.getTrackStart();
+            view.putDouble("WallTrackStartX", trackStart.x);
+            view.putDouble("WallTrackStartY", trackStart.y);
+            view.putDouble("WallTrackStartZ", trackStart.z);
+        }
         if (currentOutputSlice != null) {
             view.putString("WallOutSliceAxis", currentOutputSlice.axis.name());
             List<WallJoinSlice.Point> sorted = new ArrayList<>(currentOutputSlice.points);
@@ -286,8 +303,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 var p = sorted.get(i);
                 view.putInt("WallOS_dy" + i, p.dy());
                 view.putInt("WallOS_du" + i, p.du());
-                String id = currentOutputSlice.blockIds.get(p);
-                view.putString("WallOS_id" + i, id != null ? id : "");
+                view.putString("WallOS_id" + i, serializedSliceValue(currentOutputSlice, p));
             }
         } else {
             view.putInt("WallOutSliceCnt", 0);
@@ -384,6 +400,24 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
         } else {
             currentModulePlacement = null;
         }
+
+        if (entity != null) {
+            if (view.contains("WallTrackStartX")) {
+                entity.setTrackStart(new Vec3(
+                        view.getDoubleOr("WallTrackStartX", 0.0),
+                        view.getDoubleOr("WallTrackStartY", 0.0),
+                        view.getDoubleOr("WallTrackStartZ", 0.0)));
+            } else {
+                entity.setTrackStart(getResumeTrackStart());
+            }
+        }
+    }
+
+    private static String serializedSliceValue(WallJoinSlice slice, WallJoinSlice.Point point) {
+        BlockState state = slice.blockStates.get(point);
+        if (state != null) return WallJoinSlice.serializeState(state);
+        String id = slice.blockIds.get(point);
+        return id != null ? id : "";
     }
 
     @Override
@@ -541,6 +575,10 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
 
     private void tickWallMode(GoldGolemEntity golem, Player owner) {
         Vec3 trackStart = golem.getTrackStart();
+        if (trackStart == null) {
+            trackStart = getResumeTrackStart();
+            if (trackStart != null) golem.setTrackStart(trackStart);
+        }
 
         // Ensure planner exists
         if (planner == null) {
@@ -582,18 +620,6 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 double threshold = wallMaxSliceDist + 1.0;
                 double dist = Math.sqrt((p.x - trackStart.x) * (p.x - trackStart.x) + (p.z - trackStart.z) * (p.z - trackStart.z));
                 if (dist >= threshold) {
-                    // Initialize lastDir from walking direction for first module
-                    if (pendingModules.isEmpty() && currentModulePlacement == null) {
-                        double initDx = p.x - trackStart.x;
-                        double initDz = p.z - trackStart.z;
-                        if (Math.abs(initDx) >= Math.abs(initDz)) {
-                            wallLastDirX = initDx >= 0 ? 1 : -1;
-                            wallLastDirZ = 0;
-                        } else {
-                            wallLastDirX = 0;
-                            wallLastDirZ = initDz >= 0 ? 1 : -1;
-                        }
-                    }
                     var cand = chooseNextModule(trackStart, p);
                     if (cand != null) {
                         // Module stays on the guide line — enqueue it
@@ -765,46 +791,25 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
     }
 
     /**
-     * Build a reference join slice from the wallJoinTemplate for a given axis.
-     * This is the canonical wall cross-section profile used for profile matching.
-     */
-    private WallJoinSlice buildReferenceSlice(WallJoinSlice.Axis axis) {
-        if (wallJoinTemplate.isEmpty() || axis == null) return null;
-        Set<WallJoinSlice.Point> pts = new HashSet<>();
-        Map<WallJoinSlice.Point, String> ids = new HashMap<>();
-        for (JoinEntry e : wallJoinTemplate) {
-            WallJoinSlice.Point p = new WallJoinSlice.Point(e.dy, e.du);
-            pts.add(p);
-            if (e.id != null && !e.id.isEmpty()) {
-                // Strip property suffix (e.g. "minecraft:oak_stairs[facing=north]" -> "minecraft:oak_stairs")
-                // because template slices store plain block IDs from the registry
-                String id = e.id;
-                int bracket = id.indexOf('[');
-                if (bracket >= 0) id = id.substring(0, bracket);
-                ids.put(p, id);
-            }
-        }
-        return WallJoinSlice.fromData(axis, pts, ids);
-    }
-
-    /**
      * A scored candidate from the module selection process.
      * Stores the placement, its score, and the output direction/slice it would produce.
      */
     private static class ScoredCandidate {
         final ModulePlacement placement;
-        final double score;
-        final int outDirX, outDirZ;
-        final WallJoinSlice outSlice;
-        final long endpointKey;
+        final int verticalTier;
+        final double segmentDistance;
+        final double yError;
+        final double playerDistance;
+        final int continuityDot;
 
-        ScoredCandidate(ModulePlacement placement, double score, int outDirX, int outDirZ, WallJoinSlice outSlice, long endpointKey) {
+        ScoredCandidate(ModulePlacement placement, int verticalTier, double segmentDistance,
+                        double yError, double playerDistance, int continuityDot) {
             this.placement = placement;
-            this.score = score;
-            this.outDirX = outDirX;
-            this.outDirZ = outDirZ;
-            this.outSlice = outSlice;
-            this.endpointKey = endpointKey;
+            this.verticalTier = verticalTier;
+            this.segmentDistance = segmentDistance;
+            this.yError = yError;
+            this.playerDistance = playerDistance;
+            this.continuityDot = continuityDot;
         }
     }
 
@@ -825,9 +830,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             int dyModule = tpl.bMarker.getY() - tpl.aMarker.getY();
             int dzModule = tpl.bMarker.getZ() - tpl.aMarker.getZ();
 
-            // When slice is symmetric, also consider reversed (B→A) placement
-            boolean[] reverseOptions = wallSliceSymmetric ? new boolean[]{false, true} : new boolean[]{false};
-            int mirrorMax = wallSliceSymmetric ? 2 : 1;
+            // Always consider the full transform set. Exact input-profile matching below decides
+            // which reverse/mirror operations are legal for an asymmetric connector.
+            boolean[] reverseOptions = new boolean[]{false, true};
 
             for (boolean rev : reverseOptions) {
                 int dx = rev ? -dxModule : dxModule;
@@ -835,76 +840,58 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 int dz = rev ? -dzModule : dzModule;
 
                 for (int rot = 0; rot < 4; rot++) {
-                    for (int mir = 0; mir < mirrorMax; mir++) {
+                    for (int mir = 0; mir < 2; mir++) {
                         int[] d = ModulePlacement.rotateAndMirror(dx, dy, dz, rot, mir == 1);
                         Vec3 end = new Vec3(anchor.x + d[0], anchor.y + d[1], anchor.z + d[2]);
 
                         String candidateTag = "tpl=" + ti + " rot=" + rot + " mir=" + mir + " rev=" + rev;
 
-                        // Y rule: toward player Y and no overshoot
                         double dyNeed = playerPos.y - anchor.y;
                         double dyStep = d[1];
-                        boolean okY = Math.signum(dyStep) == Math.signum(dyNeed) || Math.abs(dyNeed) < 1e-6 || dyStep == 0.0;
-                        if (okY) okY = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
-                        double yScore = Math.abs(dyNeed - dyStep);
-                        // Lateral distance from endpoint to the effective direction ray
-                        double lateralDist = Math.abs((double)d[2] * effectiveDirX - (double)d[0] * effectiveDirZ);
+                        double yError = Math.abs(playerPos.y - end.y);
+                        boolean exactY = yError < 0.5;
+                        boolean towardY = Math.abs(dyNeed) < 1e-6
+                                ? Math.abs(dyStep) < 1e-6
+                                : Math.signum(dyStep) == Math.signum(dyNeed);
+                        boolean noOvershoot = Math.abs(dyStep) <= Math.abs(dyNeed) + 1e-6;
+                        int verticalTier = exactY ? 0
+                                : towardY && noOvershoot ? 1
+                                : Math.abs(dyStep) < 1e-6 ? 2 : 3;
 
-                        // Divergence rejection: reject candidates whose endpoint is too far from the anchor→player segment
+                        // A candidate must advance along the live anchor→player guide. Previous
+                        // cardinal direction is only a tiebreaker and cannot force a stale turn.
+                        double guideX = playerPos.x - anchor.x;
+                        double guideZ = playerPos.z - anchor.z;
+                        double guideProjection = d[0] * guideX + d[2] * guideZ;
+                        if (guideProjection <= 1e-6) {
+                            if (log) System.out.println("[WallChoose] " + candidateTag
+                                    + " → rejected(no guide progress)");
+                            continue;
+                        }
                         double segDist = distToSegmentXZ(end.x, end.z,
                                 anchor.x, anchor.z, playerPos.x, playerPos.z);
-                        if (segDist > 3.0) {
-                            if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(divergence segDist=" + String.format("%.2f", segDist) + ")");
-                            continue;
-                        }
+                        double playerDistance = end.distanceTo(playerPos);
 
-                        // Incoming direction constraint: input-side axis must match effective wallLastDir
-                        // Skip for the first module — there's no previous module to chain from,
-                        // so the forward-dot check and scoring handle orientation instead.
+                        // A chained placement is legal only when the complete transformed input
+                        // profile (axis, shape, block types, and block-state properties) is exact.
                         if (!isFirstModule) {
-                            WallJoinSlice.Axis inputAxis = rev ? tpl.bSliceAxis : tpl.aSliceAxis;
-                            if (inputAxis != null) {
-                                WallJoinSlice.Axis rotatedInputAxis = inputAxis;
-                                if (rot == 1 || rot == 3) {
-                                    rotatedInputAxis = (inputAxis == WallJoinSlice.Axis.X_THICK)
-                                            ? WallJoinSlice.Axis.Z_THICK : WallJoinSlice.Axis.X_THICK;
-                                }
-                                boolean axisMatch;
-                                if (effectiveDirX != 0 && effectiveDirZ == 0) {
-                                    axisMatch = (rotatedInputAxis == WallJoinSlice.Axis.X_THICK);
-                                } else if (effectiveDirZ != 0 && effectiveDirX == 0) {
-                                    axisMatch = (rotatedInputAxis == WallJoinSlice.Axis.Z_THICK);
-                                } else {
-                                    axisMatch = true;
-                                }
-                                if (!axisMatch) {
-                                    if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(axisMatch)");
-                                    continue;
-                                }
+                            if (effectiveSlice == null) {
+                                if (log) System.out.println("[WallChoose] " + candidateTag
+                                        + " → rejected(missing previous slice)");
+                                continue;
                             }
-                        }
-
-                        // Slice shape constraint — skip for first module (no predecessor to match).
-                        // Compare against effectiveSlice (previous module's output slice) which
-                        // is computed from template voxels. The wallJoinTemplate reference is not
-                        // used because it excludes gold marker positions while template slices
-                        // include them (with fill blocks), causing a point count mismatch.
-                        if (!isFirstModule && effectiveSlice != null) {
                             WallJoinSlice inputSlice = rev ? tpl.getBSlice() : tpl.getASlice();
-                            if (inputSlice != null) {
-                                WallJoinSlice transformedInput = inputSlice.transformedDu(rot, mir == 1);
-                                if (!effectiveSlice.shapeEquals(transformedInput)) {
-                                    if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(sliceShape)");
-                                    continue;
-                                }
+                            if (inputSlice == null) {
+                                if (log) System.out.println("[WallChoose] " + candidateTag
+                                        + " → rejected(missing input slice)");
+                                continue;
                             }
-                        }
-
-                        // Forward direction constraint: module must not go backward
-                        int fwdDot = d[0] * effectiveDirX + d[2] * effectiveDirZ;
-                        if (fwdDot <= 0) {
-                            if (log) System.out.println("[WallChoose] " + candidateTag + " → rejected(backward)");
-                            continue;
+                            WallJoinSlice transformedInput = inputSlice.transformed(rot, mir == 1);
+                            if (!effectiveSlice.profileEquals(transformedInput)) {
+                                if (log) System.out.println("[WallChoose] " + candidateTag
+                                        + " → rejected(join profile)");
+                                continue;
+                            }
                         }
 
                         // Compute output direction
@@ -923,42 +910,54 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                         } else {
                             outDirX = 0; outDirZ = Integer.signum(d[2]);
                         }
-                        double score = (okY ? 0.0 : 1000.0) + yScore * 10.0 + lateralDist;
+                        int continuityDot = d[0] * effectiveDirX + d[2] * effectiveDirZ;
                         if (log) {
                             System.out.println("[WallChoose] " + candidateTag
-                                    + " → score=" + String.format("%.2f", score)
-                                    + " (okY=" + okY + " yS=" + String.format("%.1f", yScore)
-                                    + " lat=" + String.format("%.2f", lateralDist)
+                                    + " → rank=(yTier=" + verticalTier
                                     + " seg=" + String.format("%.2f", segDist)
+                                    + " yErr=" + String.format("%.2f", yError)
+                                    + " player=" + String.format("%.2f", playerDistance)
+                                    + " continuity=" + continuityDot
                                     + " outDir=(" + outDirX + "," + outDirZ + "))");
                         }
 
                         // Compute output slice
                         WallJoinSlice outSlice = rev ? tpl.getASlice() : tpl.getBSlice();
-                        if (outSlice != null) outSlice = outSlice.transformedDu(rot, mir == 1);
-
-                        long epKey = BlockPos.asLong(d[0], d[1], d[2]);
+                        if (outSlice == null) {
+                            if (log) System.out.println("[WallChoose] " + candidateTag
+                                    + " → rejected(missing output slice)");
+                            continue;
+                        }
+                        outSlice = outSlice.transformed(rot, mir == 1);
                         candidates.add(new ScoredCandidate(
                                 new ModulePlacement(ti, rot, mir == 1, rev, anchor, end),
-                                score, outDirX, outDirZ, outSlice, epKey));
+                                verticalTier, segDist, yError, playerDistance, continuityDot));
                     }
                 }
             }
         }
 
-        // Sort by score (best first), with direction-match tiebreaker
+        // Lexicographic ranking keeps the rules independent: vertical validity first, then
+        // closeness to the walked guide, then Y/player distance, then old-direction continuity.
         candidates.sort((a, b) -> {
-            int cmp = Double.compare(a.score, b.score);
+            int cmp = Integer.compare(a.verticalTier, b.verticalTier);
             if (cmp != 0) return cmp;
-            boolean aMatch = (a.outDirX == effectiveDirX && a.outDirZ == effectiveDirZ);
-            boolean bMatch = (b.outDirX == effectiveDirX && b.outDirZ == effectiveDirZ);
-            return Boolean.compare(bMatch, aMatch); // direction-matching first
+            cmp = Double.compare(a.segmentDistance, b.segmentDistance);
+            if (cmp != 0) return cmp;
+            cmp = Double.compare(a.yError, b.yError);
+            if (cmp != 0) return cmp;
+            cmp = Double.compare(a.playerDistance, b.playerDistance);
+            if (cmp != 0) return cmp;
+            cmp = Integer.compare(b.continuityDot, a.continuityDot);
+            if (cmp != 0) return cmp;
+            cmp = Integer.compare(a.placement.getTplIndex(), b.placement.getTplIndex());
+            if (cmp != 0) return cmp;
+            cmp = Boolean.compare(a.placement.isReversed(), b.placement.isReversed());
+            if (cmp != 0) return cmp;
+            cmp = Integer.compare(a.placement.getRot(), b.placement.getRot());
+            if (cmp != 0) return cmp;
+            return Boolean.compare(a.placement.isMirror(), b.placement.isMirror());
         });
-
-        // Deduplicate by endpoint: among candidates with the same integer delta,
-        // keep the first (best-scoring, direction-preferred) one.
-        Set<Long> seen = new HashSet<>();
-        candidates.removeIf(c -> !seen.add(c.endpointKey));
 
         return candidates;
     }
@@ -982,8 +981,7 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             if (s != null) effectiveSlice = s;
         }
 
-        // First module has no predecessor to chain from — skip the axis constraint
-        // so any direction is accepted (scored by proximity/forward-dot instead).
+        // The first module has no predecessor profile to match.
         boolean isFirstModule = pendingModules.isEmpty()
                 && currentModulePlacement == null
                 && currentOutputSlice == null;
@@ -997,33 +995,23 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
                 + " joinTpl=" + wallJoinTemplate.size()
                 + " outSlice=" + (currentOutputSlice != null));
 
-        // Pick the best-scoring candidate. Candidates are already sorted by score
-        // (proximity to preview line + Y fitness). Per-candidate distance gating in
-        // scoreCandidates already filtered out modules the player hasn't walked to yet.
-        ModulePlacement best = null;
-        double bestScore = Double.POSITIVE_INFINITY;
-        double bestEndDist = Double.POSITIVE_INFINITY;
-
-        for (ScoredCandidate c : candidates) {
-            if (c.score > 100.0) continue; // skip Y-invalid candidates
-            best = c.placement;
-            bestScore = c.score;
-            bestEndDist = distToSegmentXZ(c.placement.end().x, c.placement.end().z,
-                    anchor.x, anchor.z, playerPos.x, playerPos.z);
-            break; // already sorted by score, first valid one wins
-        }
+        // Candidates are already ordered by the independent vertical/guide/player rules.
+        ScoredCandidate selected = candidates.isEmpty() ? null : candidates.getFirst();
+        ModulePlacement best = selected != null ? selected.placement : null;
 
         if (best != null) {
             System.out.println("[WallChoose] Selected: tpl=" + best.getTplIndex()
                     + " rot=" + best.getRot() + " mir=" + best.isMirror()
                     + " rev=" + best.isReversed()
-                    + " score=" + String.format("%.1f", bestScore)
-                    + " endDist=" + String.format("%.2f", bestEndDist)
+                    + " rank=(yTier=" + selected.verticalTier
+                    + " seg=" + String.format("%.2f", selected.segmentDistance)
+                    + " yErr=" + String.format("%.2f", selected.yError)
+                    + " player=" + String.format("%.2f", selected.playerDistance) + ")"
                     + " anchor=" + String.format("(%.1f,%.1f,%.1f)", anchor.x, anchor.y, anchor.z)
                     + " end=" + String.format("(%.1f,%.1f,%.1f)", best.end().x, best.end().y, best.end().z)
                     + " effDir=(" + effectiveDirX + "," + effectiveDirZ + ")");
         } else {
-            System.out.println("[WallChoose] No valid module (all diverge). templates=" + wallTemplates.size()
+            System.out.println("[WallChoose] No compatible advancing module. templates=" + wallTemplates.size()
                     + " effDir=(" + effectiveDirX + "," + effectiveDirZ + ")"
                     + " anchor=" + String.format("(%.1f,%.1f,%.1f)", anchor.x, anchor.y, anchor.z)
                     + " player=" + String.format("(%.1f,%.1f,%.1f)", playerPos.x, playerPos.y, playerPos.z));
@@ -1068,7 +1056,9 @@ public class WallBuildStrategy extends AbstractBuildStrategy {
             case 3 -> net.minecraft.world.level.block.Rotation.COUNTERCLOCKWISE_90;
             default -> net.minecraft.world.level.block.Rotation.NONE;
         };
-        net.minecraft.world.level.block.Mirror mir = mirror ? net.minecraft.world.level.block.Mirror.LEFT_RIGHT : net.minecraft.world.level.block.Mirror.NONE;
+        // ModulePlacement mirrors coordinates by negating X, which is Minecraft's
+        // FRONT_BACK mirror. Apply the identical transform to directional block states.
+        net.minecraft.world.level.block.Mirror mir = mirror ? net.minecraft.world.level.block.Mirror.FRONT_BACK : net.minecraft.world.level.block.Mirror.NONE;
         BlockState place = baseState;
         try { place = place.rotate(rotation); } catch (Exception ignored) {}
         try { place = place.mirror(mir); } catch (Exception ignored) {}

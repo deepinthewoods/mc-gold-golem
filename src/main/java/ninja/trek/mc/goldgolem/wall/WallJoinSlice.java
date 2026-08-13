@@ -4,6 +4,8 @@ import java.util.*;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.Property;
@@ -15,6 +17,9 @@ import ninja.trek.mc.goldgolem.wall.WallModuleTemplate.Voxel;
  */
 public final class WallJoinSlice {
     public enum Axis { X_THICK, Z_THICK }
+
+    /** The normalized join profile together with the exact structure voxels that formed it. */
+    public record Capture(WallJoinSlice slice, Set<BlockPos> componentVoxels) {}
 
     public final Axis axis; // which plane: X_THICK means x = const, Z_THICK means z = const
     public final Set<Point> points; // normalized (dy, du) pairs starting at (0,0)
@@ -50,6 +55,18 @@ public final class WallJoinSlice {
      * bridge for connectivity but excluded from the final slice points.
      */
     public static Optional<WallJoinSlice> fromIgnoring(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel, BlockPos goldRel, Axis axis, BlockPos overrideAbs, @org.jetbrains.annotations.Nullable BlockState overrideState) {
+        return captureIgnoring(world, originAbs, voxelsRel, goldRel, axis, overrideAbs, overrideState)
+                .map(Capture::slice);
+    }
+
+    /**
+     * Capture the local, connected join component. Unlike a plane cut, this records only the
+     * voxels belonging to the marker's join profile, so unrelated geometry in the same plane is
+     * never removed during module extraction.
+     */
+    public static Optional<Capture> captureIgnoring(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel,
+                                                     BlockPos goldRel, Axis axis, BlockPos overrideAbs,
+                                                     @org.jetbrains.annotations.Nullable BlockState overrideState) {
         int planeCoord = (axis == Axis.X_THICK) ? goldRel.getX() : goldRel.getZ();
         boolean includeOverride = overrideAbs != null && overrideState != null;
         BlockPos overrideRel = overrideAbs != null ? overrideAbs.subtract(originAbs) : null;
@@ -158,61 +175,36 @@ public final class WallJoinSlice {
             ids.put(p, BuiltInRegistries.BLOCK.getKey(st.getBlock()).toString());
             states.put(p, st);
         }
-        return Optional.of(new WallJoinSlice(axis, pts, ids, states));
+        return Optional.of(new Capture(
+                new WallJoinSlice(axis, pts, ids, states),
+                Collections.unmodifiableSet(new HashSet<>(component))));
     }
 
-    /**
-     * Check if two slices match under rotation (X<->Z), mirroring in-plane (even mirroring supported via offset),
-     * and small in-plane offsets (du in [-1,0,1]). Vertical (Y) offsets are normalized away.
-     */
+    /** Check whether two complete profiles are equivalent under a horizontal D4 transform. */
     public boolean matches(WallJoinSlice other) {
-        // Try both same-axis and rotated comparison: if axes differ, treat as rotated
-        for (boolean rotated : new boolean[]{false, true}) {
-            if (!rotated && this.axis != other.axis) continue;
-            if (rotated && this.axis == other.axis) continue;
-
-            // Build normalized representations for both
-            var A = this.points;
-            var B = other.points;
-
-            // Compute bounds for mirror
-            int bMaxU = B.stream().mapToInt(p -> p.du).max().orElse(0);
-
+        if (other == null) return false;
+        for (int rot = 0; rot < 4; rot++) {
             for (boolean mirror : new boolean[]{false, true}) {
-                for (int shift = -1; shift <= 1; shift++) {
-                    if (equalUnder(A, this.blockIds, B, other.blockIds, bMaxU, mirror, shift)) return true;
-                }
+                if (profileEquals(other.transformed(rot, mirror))) return true;
             }
         }
         return false;
     }
 
-    private static boolean equalUnder(Set<Point> A, Map<Point, String> idA,
-                                      Set<Point> B, Map<Point, String> idB, int bMaxU,
-                                      boolean mirror, int shift) {
-        if (A.size() != B.size()) return false;
-        // Build transformed B set into A's frame
-        for (Point p : A) {
-            int bu = mirror ? (bMaxU - p.du) : p.du;
-            bu += shift;
-            Point q = new Point(p.dy, bu);
-            if (!B.contains(q)) return false;
-            String aId = idA.get(p);
-            String bId = idB.get(q);
-            if (!Objects.equals(aId, bId)) return false;
-        }
-        return true;
-    }
-
-    /** Check if the slice is mirror-symmetric along the du axis (shape and block ids). */
+    /** Check if the slice is mirror-symmetric along du, including block-state orientation. */
     public boolean isSymmetric() {
         int maxU = points.stream().mapToInt(p -> p.du).max().orElse(0);
         for (Point p : points) {
             Point mirrored = new Point(p.dy, maxU - p.du);
             if (!points.contains(mirrored)) return false;
-            String id = blockIds.get(p);
-            String mirId = blockIds.get(mirrored);
-            if (!Objects.equals(id, mirId)) return false;
+            BlockState state = blockStates.get(p);
+            BlockState mirroredState = blockStates.get(mirrored);
+            if (state != null && mirroredState != null) {
+                Mirror sliceMirror = axis == Axis.X_THICK ? Mirror.LEFT_RIGHT : Mirror.FRONT_BACK;
+                if (!state.mirror(sliceMirror).equals(mirroredState)) return false;
+            } else if (!Objects.equals(blockIds.get(p), blockIds.get(mirrored))) {
+                return false;
+            }
         }
         return true;
     }
@@ -227,8 +219,9 @@ public final class WallJoinSlice {
         list.sort(Comparator.<Point>comparingInt(p -> p.dy).thenComparingInt(p -> p.du));
         for (Point p : list) {
             sb.append(p.dy).append(':').append(p.du).append('#');
-            String id = blockIds.get(p);
-            sb.append(id == null ? "" : id).append(';');
+            BlockState state = blockStates.get(p);
+            String value = state != null ? serializeState(state) : blockIds.get(p);
+            sb.append(value == null ? "" : value).append(';');
         }
         return sb.toString();
     }
@@ -374,7 +367,7 @@ public final class WallJoinSlice {
      * Return a new slice with axis rotated (for rot 1,3) and du values mirrored
      * if the placement transform flips the du direction.
      */
-    public WallJoinSlice transformedDu(int rot, boolean mirror) {
+    public WallJoinSlice transformed(int rot, boolean mirror) {
         Axis newAxis = this.axis;
         if (rot == 1 || rot == 3) {
             newAxis = (this.axis == Axis.X_THICK) ? Axis.Z_THICK : Axis.X_THICK;
@@ -382,28 +375,40 @@ public final class WallJoinSlice {
 
         boolean duMirrored = isDuMirrored(this.axis, rot, mirror);
 
-        if (!duMirrored && newAxis == this.axis) {
-            return this;
-        }
-
-        if (!duMirrored) {
-            return new WallJoinSlice(newAxis, this.points, this.blockIds, this.blockStates);
-        }
-
-        // Mirror du values: du' = maxDu - du
         int maxDu = this.points.stream().mapToInt(p -> p.du).max().orElse(0);
         Set<Point> newPts = new HashSet<>();
         Map<Point, String> newIds = new HashMap<>();
         Map<Point, BlockState> newStates = new HashMap<>();
         for (Point p : this.points) {
-            Point np = new Point(p.dy, maxDu - p.du);
+            Point np = new Point(p.dy, duMirrored ? maxDu - p.du : p.du);
             newPts.add(np);
-            String id = this.blockIds.get(p);
-            if (id != null) newIds.put(np, id);
             BlockState st = this.blockStates.get(p);
-            if (st != null) newStates.put(np, st);
+            if (st != null) {
+                BlockState transformedState = transformState(st, rot, mirror);
+                newStates.put(np, transformedState);
+                newIds.put(np, BuiltInRegistries.BLOCK.getKey(transformedState.getBlock()).toString());
+            } else {
+                String id = this.blockIds.get(p);
+                if (id != null) newIds.put(np, id);
+            }
         }
         return new WallJoinSlice(newAxis, newPts, newIds, newStates);
+    }
+
+    /** Backward-compatible name used by placement code. */
+    public WallJoinSlice transformedDu(int rot, boolean mirror) {
+        return transformed(rot, mirror);
+    }
+
+    private static BlockState transformState(BlockState state, int rot, boolean mirror) {
+        Rotation rotation = switch (rot & 3) {
+            case 1 -> Rotation.CLOCKWISE_90;
+            case 2 -> Rotation.CLOCKWISE_180;
+            case 3 -> Rotation.COUNTERCLOCKWISE_90;
+            default -> Rotation.NONE;
+        };
+        BlockState transformed = state.rotate(rotation);
+        return mirror ? transformed.mirror(Mirror.FRONT_BACK) : transformed;
     }
 
     /**
@@ -430,29 +435,41 @@ public final class WallJoinSlice {
         return comp < 0;
     }
 
-    /** Shape-only match: axis and (dy,du) point set, ignoring block IDs.
-     *  Trusts summoning-time validation that all templates have compatible join slices. */
-    public boolean shapeEquals(WallJoinSlice other) {
-        if (other == null) return false;
-        if (this.axis != other.axis) return false;
-        return this.points.equals(other.points);
-    }
-
     /** Exact match of axis, points set, and blockIds at each point. */
     public boolean profileEquals(WallJoinSlice other) {
         if (other == null) return false;
         if (this.axis != other.axis) return false;
         if (!this.points.equals(other.points)) return false;
         for (Point p : this.points) {
-            String thisId = this.blockIds.get(p);
-            String otherId = other.blockIds.get(p);
-            if (!Objects.equals(thisId, otherId)) return false;
+            BlockState thisState = this.blockStates.get(p);
+            BlockState otherState = other.blockStates.get(p);
+            if (thisState != null && otherState != null) {
+                if (!thisState.equals(otherState)) return false;
+            } else if (!Objects.equals(this.blockIds.get(p), other.blockIds.get(p))) {
+                return false;
+            }
         }
         return true;
     }
 
-    /** Construct a slice from deserialized data (no blockStates needed, only for profile comparison). */
+    /** Construct a slice from deserialized state strings, while accepting legacy plain block ids. */
     public static WallJoinSlice fromData(Axis axis, Set<Point> points, Map<Point, String> blockIds) {
-        return new WallJoinSlice(axis, points, blockIds, Collections.emptyMap());
+        Map<Point, String> ids = new HashMap<>();
+        Map<Point, BlockState> states = new HashMap<>();
+        for (Point point : points) {
+            String serialized = blockIds.get(point);
+            // A plain id is legacy data that did not preserve properties. Keep it id-only so
+            // profileEquals can remain backward compatible instead of treating a default state
+            // as if it had actually been saved.
+            BlockState state = serialized != null && serialized.indexOf('[') >= 0
+                    ? parseState(serialized) : null;
+            if (state != null) {
+                states.put(point, state);
+                ids.put(point, BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
+            } else if (serialized != null) {
+                ids.put(point, serialized);
+            }
+        }
+        return new WallJoinSlice(axis, new HashSet<>(points), ids, states);
     }
 }
