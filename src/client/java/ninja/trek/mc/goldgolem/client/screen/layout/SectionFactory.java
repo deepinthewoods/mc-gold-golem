@@ -122,6 +122,7 @@ public class SectionFactory {
             case TOWER:
             case PYRAMID:
             case TREE:
+            case ROOM:
                 // GroupModeSection (paginable) - always create; it fetches strategy dynamically
                 groupModeSection = new GroupModeSection(null, screen, screen.getFont());
                 sections.add(groupModeSection);

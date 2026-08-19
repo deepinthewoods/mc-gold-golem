@@ -23,6 +23,7 @@ public class BuildStrategyRegistry {
         register(BuildMode.TUNNEL, TunnelBuildStrategy::new);
         register(BuildMode.GRADIENT, PathBuildStrategy::new); // GRADIENT is an alias for PATH
         register(BuildMode.PYRAMID, PyramidBuildStrategy::new);
+        register(BuildMode.ROOM, RoomBuildStrategy::new);
     }
 
     /**

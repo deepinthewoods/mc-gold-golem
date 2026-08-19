@@ -18,7 +18,7 @@ public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int 
 
     /** Check if the slider value represents a group mode (Wall=0, Tree=5, Tower=6). */
     public static boolean isGroupMode(int slider) {
-        return slider == 0 || slider == 5 || slider == 6 || slider == 8;
+        return slider == 0 || slider == 5 || slider == 6 || slider == 8 || slider == 9;
     }
 
     public static int computeControlsMargin(int gradientRows, int slider, int titleLine) {
@@ -36,6 +36,7 @@ public record GolemOpenData(int entityId, int gradientRows, int golemSlots, int 
                 controls += 12 + 6; // layersFieldH + gap
             }
             if (slider == 8) controls += 12 + 6; // Pyramid curvature slider
+            if (slider == 9) controls += 12 + 6; // Room memory limit slider
             return controls;
         }
 

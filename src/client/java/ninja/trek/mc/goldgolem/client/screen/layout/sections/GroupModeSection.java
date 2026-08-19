@@ -17,7 +17,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Section for group-based build modes (WALL, TOWER, PYRAMID, TREE).
+ * Section for group-based build modes (WALL, TOWER, PYRAMID, TREE, ROOM).
  * Owns all rendering, click handling, drag-drop, and icon management for group modes.
  */
 public class GroupModeSection extends AbstractGuiSection {

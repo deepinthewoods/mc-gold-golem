@@ -187,6 +187,14 @@ public interface BuildStrategy {
     }
 
     /**
+     * Handle an owner player attack before the normal stop/damage behavior.
+     * @return true when the attack was consumed by the strategy
+     */
+    default boolean handleOwnerAttack(Player player) {
+        return false;
+    }
+
+    /**
      * @return true if this strategy can start from its idle state
      */
     default boolean canStartFromIdle() {

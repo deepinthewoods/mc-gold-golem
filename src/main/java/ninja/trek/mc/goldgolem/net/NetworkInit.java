@@ -20,6 +20,7 @@ public class NetworkInit {
         serverboundPlay.register(SetGroupModeSlotC2SPayload.ID, SetGroupModeSlotC2SPayload.CODEC);
         serverboundPlay.register(SetGroupModeBlockGroupC2SPayload.ID, SetGroupModeBlockGroupC2SPayload.CODEC);
         serverboundPlay.register(SetTowerHeightC2SPayload.ID, SetTowerHeightC2SPayload.CODEC);
+        serverboundPlay.register(SetRoomMemoryLimitC2SPayload.ID, SetRoomMemoryLimitC2SPayload.CODEC);
         serverboundPlay.register(ResetTowerOriginC2SPayload.ID, ResetTowerOriginC2SPayload.CODEC);
         serverboundPlay.register(SetPyramidCurvatureC2SPayload.ID, SetPyramidCurvatureC2SPayload.CODEC);
         serverboundPlay.register(MovePyramidPriorityC2SPayload.ID, MovePyramidPriorityC2SPayload.CODEC);
@@ -80,6 +81,10 @@ public class NetworkInit {
                             golem.setTreeGroupWindow(payload.group(), payload.window());
                             golem.setTreeGroupNoiseScale(payload.group(), payload.scale());
                         }
+                        case ROOM -> {
+                            golem.setRoomGroupWindow(payload.group(), payload.window());
+                            golem.setRoomGroupNoiseScale(payload.group(), payload.scale());
+                        }
                         default -> { }
                     }
                     sendGroupModeState(player, golem, payload.mode());
@@ -100,6 +105,7 @@ public class NetworkInit {
                         case WALL -> golem.setWallGroupSlot(payload.group(), payload.slot(), id);
                         case TOWER, PYRAMID -> golem.setTowerGroupSlot(payload.group(), payload.slot(), id);
                         case TREE -> golem.setTreeGroupSlot(payload.group(), payload.slot(), id);
+                        case ROOM -> golem.setRoomGroupSlot(payload.group(), payload.slot(), id);
                         default -> { }
                     }
                     sendGroupModeState(player, golem, payload.mode());
@@ -119,6 +125,7 @@ public class NetworkInit {
                         case WALL -> golem.setWallBlockGroup(payload.blockId(), payload.group());
                         case TOWER, PYRAMID -> golem.setTowerBlockGroup(payload.blockId(), payload.group());
                         case TREE -> golem.setTreeBlockGroup(payload.blockId(), payload.group());
+                        case ROOM -> golem.setRoomBlockGroup(payload.blockId(), payload.group());
                         default -> false;
                     };
                     if (assigned) sendGroupModeState(player, golem, payload.mode());
@@ -136,6 +143,18 @@ public class NetworkInit {
                         && (golem.getBuildMode() == BuildMode.TOWER || golem.getBuildMode() == BuildMode.PYRAMID)) {
                     golem.setTowerHeight(payload.height());
                     sendGroupModeState(player, golem, golem.getBuildMode());
+                }
+            });
+        });
+
+        ServerPlayNetworking.registerGlobalReceiver(SetRoomMemoryLimitC2SPayload.ID, (payload, context) -> {
+            var player = context.player();
+            context.server().execute(() -> {
+                var e = player.level().getEntity(payload.entityId());
+                if (e instanceof GoldGolemEntity golem && golem.isOwner(player)
+                        && golem.getBuildMode() == BuildMode.ROOM) {
+                    golem.setRoomMemoryLimit(payload.limit());
+                    sendGroupModeState(player, golem, BuildMode.ROOM);
                 }
             });
         });
@@ -401,6 +420,14 @@ public class NetworkInit {
                 slots = golem.getTreeGroupFlatSlots();
                 extraData = GroupModeStateS2CPayload.createTreeExtraData(golem.getTreeTilingPreset().ordinal());
             }
+            case ROOM -> {
+                var ids = golem.getRoomUniqueBlockIds();
+                groups = golem.getRoomBlockGroupMap(ids);
+                windows = golem.getRoomGroupWindows();
+                scales = golem.getRoomGroupNoiseScales();
+                slots = golem.getRoomGroupFlatSlots();
+                extraData = GroupModeStateS2CPayload.createRoomExtraData(golem.getRoomMemoryLimit());
+            }
             default -> {
                 return;
             }
@@ -420,6 +447,7 @@ public class NetworkInit {
             case WALL -> golem.getWallUniqueBlockIds();
             case TOWER, PYRAMID -> golem.getTowerUniqueBlockIds();
             case TREE -> golem.getTreeUniqueBlockIds();
+            case ROOM -> golem.getRoomUniqueBlockIds();
             default -> java.util.List.of();
         };
     }

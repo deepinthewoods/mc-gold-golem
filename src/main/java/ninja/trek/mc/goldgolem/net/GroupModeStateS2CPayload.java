@@ -133,6 +133,11 @@ public record GroupModeStateS2CPayload(
         return curvature instanceof Integer ? (Integer) curvature : 0;
     }
 
+    public int getRoomMemoryLimit() {
+        Object limit = extraData.get("memoryLimit");
+        return limit instanceof Integer ? Math.max(1, Math.min(1000, (Integer) limit)) : 100;
+    }
+
     /**
      * Helper to extract tiling preset ordinal from extra data (TREE mode).
      */
@@ -172,5 +177,9 @@ public record GroupModeStateS2CPayload(
      */
     public static Map<String, Object> createWallExtraData() {
         return Map.of();
+    }
+
+    public static Map<String, Object> createRoomExtraData(int memoryLimit) {
+        return Map.of("memoryLimit", Math.max(1, Math.min(1000, memoryLimit)));
     }
 }

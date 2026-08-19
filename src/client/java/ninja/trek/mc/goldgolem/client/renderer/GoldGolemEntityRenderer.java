@@ -14,6 +14,7 @@ import net.minecraft.client.renderer.item.ItemStackRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import ninja.trek.mc.goldgolem.BuildMode;
@@ -23,6 +24,8 @@ import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, GoldGolemEntityRenderer.GoldGolemRenderState> {
     private static final Identifier TEXTURE = Identifier.fromNamespaceAndPath("gold-golem", "textures/entity/goldgolem.png");
     private static final RenderType GOLD_GOLEM_TRIANGLES_LAYER = RenderTypes.entitySolid(TEXTURE);
+    private static final float DEATH_TRANSFORM_FINAL_SCALE = 0.28f;
+    private static final float DEATH_TRANSFORM_SPIN_DEGREES = 720.0f;
 
     // Relative rotation speeds for each wheel set (inversely proportional to wheel diameter)
     // Calculated on first render based on actual mesh extents
@@ -50,6 +53,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float rightArmRotation;
         public float leftArmYaw;
         public float rightArmYaw;
+        public float deathAnimationTicks;
         public ItemStack leftHandItem = ItemStack.EMPTY;
         public ItemStack rightHandItem = ItemStack.EMPTY;
         public final ItemStackRenderState leftItemRenderState = new ItemStackRenderState();
@@ -68,7 +72,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         // Map BuildMode to wheel set (6 sets available: 0-5)
         state.activeWheelSet = switch (entity.getBuildMode()) {
             case PATH, GRADIENT -> 0;  // 4-wheel config for general path building
-            case WALL -> 1;             // 2-wheel config for wall building
+            case WALL, ROOM -> 1;       // 2-wheel config for wall/room building
             case TOWER, PYRAMID -> 2;   // 4-wheel config for stable vertical building
             case MINING -> 3;           // 2-wheel config for mining
             case EXCAVATION -> 4;       // 2-wheel config for excavation
@@ -87,6 +91,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.rightArmRotation = entity.getRightArmRotation();
         state.leftArmYaw = entity.getLeftArmYaw();
         state.rightArmYaw = entity.getRightArmYaw();
+        state.deathAnimationTicks = entity.isDeadOrDying() ? entity.deathTime + tickDelta : 0.0f;
         state.leftHandItem = entity.getLeftHandItem();
         state.rightHandItem = entity.getRightHandItem();
 
@@ -245,7 +250,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         }
 
         matrices.pushPose();
-        matrices.translate(0.0f, 0.0f, 0.0f);
+        applyDeathTransformation(state, matrices);
         // Rotate the entire mesh based on body yaw (movement direction)
         // Additional 180° rotation to face the correct direction
         matrices.mulPose(Axis.YP.rotationDegrees(360.0f - state.bodyYaw));
@@ -419,6 +424,24 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
         matrices.popPose();
         super.submit(state, matrices, queue, cameraState);
+    }
+
+    private static void applyDeathTransformation(GoldGolemRenderState state, PoseStack matrices) {
+        if (state.deathAnimationTicks <= 0.0f) {
+            return;
+        }
+
+        float lastVisibleTick = GoldGolemEntity.DEATH_TRANSFORM_DURATION_TICKS - 1.0f;
+        float progress = Mth.clamp(state.deathAnimationTicks / lastVisibleTick, 0.0f, 1.0f);
+        float smoothProgress = progress * progress * (3.0f - 2.0f * progress);
+        float spinProgress = progress * progress;
+        float scale = Mth.lerp(smoothProgress, 1.0f, DEATH_TRANSFORM_FINAL_SCALE);
+        float pivotY = state.boundingBoxHeight * 0.5f;
+
+        matrices.translate(0.0f, pivotY, 0.0f);
+        matrices.mulPose(Axis.YP.rotationDegrees(DEATH_TRANSFORM_SPIN_DEGREES * spinProgress));
+        matrices.scale(scale, scale, scale);
+        matrices.translate(0.0f, -pivotY, 0.0f);
     }
 
     private void renderMesh(PoseStack matrices, SubmitNodeCollector queue, RenderType layer,

@@ -26,12 +26,15 @@ public final class GolemScreens {
         boolean towerMode = false;
         boolean tunnelMode = false;
         boolean pyramidMode = false;
+        boolean roomMode = false;
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             BuildMode mode = g0.getBuildMode();
-            if (mode == BuildMode.WALL || mode == BuildMode.TOWER || mode == BuildMode.PYRAMID) {
+            if (mode == BuildMode.WALL || mode == BuildMode.TOWER || mode == BuildMode.PYRAMID
+                    || mode == BuildMode.ROOM) {
                 sliderEnabled = false;
                 towerMode = mode == BuildMode.TOWER;
                 pyramidMode = mode == BuildMode.PYRAMID;
+                roomMode = mode == BuildMode.ROOM;
             } else if (mode == BuildMode.EXCAVATION) {
                 excavationMode = true;
                 sliderEnabled = false;
@@ -51,12 +54,12 @@ public final class GolemScreens {
         }
 
         // Build dynamic UI spec
-        boolean isGroupMode = towerMode || pyramidMode || treeMode
+        boolean isGroupMode = towerMode || pyramidMode || treeMode || roomMode
                 || (!sliderEnabled && !excavationMode && !miningMode && !terraformingMode && !tunnelMode);
         int gradientRows = (terraformingMode || sliderEnabled) ? 3 : (isGroupMode ? 6 : 2);
         int golemSlots = golemInventory.getContainerSize();
         int slider = sliderEnabled ? 1 : (excavationMode ? 2 : (miningMode ? 3 : (terraformingMode ? 4
-                : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : (pyramidMode ? 8 : 0)))))));
+                : (treeMode ? 5 : (towerMode ? 6 : (tunnelMode ? 7 : (pyramidMode ? 8 : (roomMode ? 9 : 0))))))));
         String jsonName = "";
         if (ent0 instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity g0) {
             jsonName = g0.getCurrentJsonName();
@@ -214,6 +217,24 @@ public final class GolemScreens {
                             new GroupModeBlockGroupsS2CPayload(entityId, mode, groups));
                     net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
                             new GroupModeStateS2CPayload(entityId, mode, golem.getTreeGroupWindows(), golem.getTreeGroupNoiseScales(), golem.getTreeGroupFlatSlots(), extraData));
+                }
+            }
+            case ROOM -> {
+                if (golem.getRoomUniqueBlockIds() != null && !golem.getRoomUniqueBlockIds().isEmpty()) {
+                    if (golem.getRoomGroupWindows().isEmpty()) {
+                        golem.initRoomGroups(golem.getRoomUniqueBlockIds());
+                    }
+                    var ids = golem.getRoomUniqueBlockIds();
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new UniqueBlocksS2CPayload(entityId, mode, ids));
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeBlockGroupsS2CPayload(
+                                    entityId, mode, golem.getRoomBlockGroupMap(ids)));
+                    net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(player,
+                            new GroupModeStateS2CPayload(
+                                    entityId, mode, golem.getRoomGroupWindows(),
+                                    golem.getRoomGroupNoiseScales(), golem.getRoomGroupFlatSlots(),
+                                    GroupModeStateS2CPayload.createRoomExtraData(golem.getRoomMemoryLimit())));
                 }
             }
             default -> { }

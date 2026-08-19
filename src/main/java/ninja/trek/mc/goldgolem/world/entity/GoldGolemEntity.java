@@ -36,6 +36,7 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.RandomLookAroundGoal;
 import net.minecraft.world.entity.ai.goal.WaterAvoidingRandomStrollGoal;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.projectile.Projectile;
 import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownSplashPotion;
 import net.minecraft.world.entity.player.Player;
@@ -80,6 +81,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private static final int ANIMATION_DURATION_TICKS = 12;
     private static final float ARM_SWING_MIN_ANGLE = 15.0f;
     private static final float ARM_SWING_MAX_ANGLE = 70.0f;
+    public static final int DEATH_TRANSFORM_DURATION_TICKS = 20;
 
     // Inventory constants
     private static final int GRADIENT_SIZE = 9;
@@ -121,6 +123,7 @@ public class GoldGolemEntity extends PathfinderMob {
     private static final EntityDataAccessor<ItemStack> RIGHT_MINING_TOOL = SynchedEntityData.defineId(GoldGolemEntity.class, EntityDataSerializers.ITEM_STACK);
 
     private final SimpleContainer inventory = new SimpleContainer(INVENTORY_SIZE);
+    private ItemStack pendingDeathPumpkin = ItemStack.EMPTY;
     private final String[] gradient = new String[GRADIENT_SIZE];
     private final String[] stepGradient = new String[GRADIENT_SIZE];
     private final String[] surfaceGradient = new String[GRADIENT_SIZE];
@@ -143,6 +146,10 @@ public class GoldGolemEntity extends PathfinderMob {
     private BuildStrategy activeStrategy = null;
     private BlockPos buildStartPosition = null;
     private BlockPos resourceWaitAnchor = null;
+    private java.util.UUID timelapseBuildSessionId = null;
+    private boolean timelapseBuildAnnounced = false;
+    private String timelapseBuildState = "";
+    private int timelapsePositionUpdateTicks = 0;
 
     // Wall-mode captured data (scaffold)
     private java.util.List<String> wallUniqueBlockIds = java.util.Collections.emptyList();
@@ -162,6 +169,17 @@ public class GoldGolemEntity extends PathfinderMob {
     private final java.util.List<Float> wallGroupWindows = new java.util.ArrayList<>();
     private final java.util.List<Integer> wallGroupNoiseScales = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> wallBlockGroup = new java.util.HashMap<>();
+
+    // Room-mode captured templates and independent group-gradient configuration.
+    private java.util.List<ninja.trek.mc.goldgolem.room.RoomTemplate> roomTemplates = java.util.Collections.emptyList();
+    private java.util.List<String> roomUniqueBlockIds = java.util.Collections.emptyList();
+    private BlockPos roomOrigin = null;
+    private String roomJsonFile = null;
+    private int roomMemoryLimit = 100;
+    private final java.util.List<String[]> roomGroupSlots = new java.util.ArrayList<>();
+    private final java.util.List<Float> roomGroupWindows = new java.util.ArrayList<>();
+    private final java.util.List<Integer> roomGroupNoiseScales = new java.util.ArrayList<>();
+    private final java.util.Map<String, Integer> roomBlockGroup = new java.util.HashMap<>();
 
     // Tower-mode captured data
     private java.util.List<String> towerUniqueBlockIds = java.util.Collections.emptyList();
@@ -337,7 +355,11 @@ public class GoldGolemEntity extends PathfinderMob {
         return ordinal >= 0 && ordinal < values.length ? values[ordinal] : BuildMode.PATH;
     }
     public void setBuildMode(BuildMode mode) {
-        this.entityData.set(BUILD_MODE, (mode == null ? BuildMode.PATH : mode).ordinal());
+        BuildMode nextMode = mode == null ? BuildMode.PATH : mode;
+        if (!this.level().isClientSide() && timelapseBuildSessionId != null && nextMode != getBuildMode()) {
+            endTimelapseBuild("stop");
+        }
+        this.entityData.set(BUILD_MODE, nextMode.ordinal());
     }
 
     public ItemStack getLeftMiningTool() {
@@ -405,6 +427,9 @@ public class GoldGolemEntity extends PathfinderMob {
         if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
             configureWallStrategy(wall);
         }
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.RoomBuildStrategy room) {
+            room.setTemplates(getRoomTemplates());
+        }
     }
 
     /**
@@ -419,6 +444,7 @@ public class GoldGolemEntity extends PathfinderMob {
      * Stop building and clean up the active strategy.
      */
     public void stopBuilding() {
+        endTimelapseBuild("stop");
         this.buildingPaths = false;
         this.entityData.set(BUILDING_PATHS, false);
         if (activeStrategy != null) {
@@ -436,6 +462,7 @@ public class GoldGolemEntity extends PathfinderMob {
         this.buildingPaths = true;
         this.entityData.set(BUILDING_PATHS, true);
         initializeStrategyForCurrentMode();
+        startTimelapseBuild(false);
     }
 
     /**
@@ -448,6 +475,61 @@ public class GoldGolemEntity extends PathfinderMob {
 
     public boolean isWaitingForResources() {
         return activeStrategy != null && activeStrategy.isWaitingForResources();
+    }
+
+    public java.util.UUID getOwnerUuid() {
+        return ownerUuid;
+    }
+
+    private void startTimelapseBuild(boolean resumed) {
+        if (this.level().isClientSide()
+                || !ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.supports(getBuildMode())) return;
+        if (!resumed || timelapseBuildSessionId == null) {
+            timelapseBuildSessionId = java.util.UUID.randomUUID();
+        }
+        ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.emit(
+                this, timelapseBuildSessionId, resumed ? "resume" : "start");
+        timelapseBuildState = resumed ? "resume" : "start";
+        timelapsePositionUpdateTicks = 0;
+        timelapseBuildAnnounced = true;
+    }
+
+    private void pauseTimelapseBuild() {
+        if (timelapseBuildSessionId == null) return;
+        ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.emit(this, timelapseBuildSessionId, "pause");
+        timelapseBuildState = "pause";
+        timelapsePositionUpdateTicks = 0;
+        timelapseBuildAnnounced = true;
+    }
+
+    private void endTimelapseBuild(String state) {
+        if (timelapseBuildSessionId == null) return;
+        ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.emit(this, timelapseBuildSessionId, state);
+        timelapseBuildSessionId = null;
+        timelapseBuildState = "";
+        timelapsePositionUpdateTicks = 0;
+        timelapseBuildAnnounced = false;
+    }
+
+    private void announceRestoredTimelapseBuild() {
+        if (!ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.supports(getBuildMode())
+                || timelapseBuildAnnounced || (!buildingPaths && !isWaitingForResources())) return;
+        boolean created = timelapseBuildSessionId == null;
+        if (created) timelapseBuildSessionId = java.util.UUID.randomUUID();
+        String state = isWaitingForResources() ? "pause" : (created ? "start" : "resume");
+        ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.emit(this, timelapseBuildSessionId, state);
+        timelapseBuildState = state;
+        timelapsePositionUpdateTicks = 0;
+        timelapseBuildAnnounced = true;
+    }
+
+    private void tickTimelapseBuildPosition() {
+        if (timelapseBuildSessionId == null || !buildingPaths
+                || !ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.usesTrackingRig(getBuildMode())) return;
+        if (++timelapsePositionUpdateTicks < 20) return;
+        timelapsePositionUpdateTicks = 0;
+        String state = timelapseBuildState.equals("resume") ? "resume" : "start";
+        ninja.trek.mc.goldgolem.integration.TimelapseBuildEvents.emit(this, timelapseBuildSessionId, state);
     }
 
     public BlockPos getResourceWaitAnchor() {
@@ -474,6 +556,100 @@ public class GoldGolemEntity extends PathfinderMob {
         this.wallUniqueBlockIds = uniqueIds == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(uniqueIds);
         this.wallOrigin = origin;
         this.wallJsonFile = jsonPath;
+    }
+
+    public void setRoomCapture(ninja.trek.mc.goldgolem.room.RoomDefinition definition) {
+        this.roomOrigin = definition.origin();
+        this.roomTemplates = new java.util.ArrayList<>(definition.rooms());
+        this.roomUniqueBlockIds = new java.util.ArrayList<>(definition.uniqueBlockIds());
+        initRoomGroups(this.roomUniqueBlockIds);
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.RoomBuildStrategy room) {
+            room.setTemplates(this.roomTemplates);
+        }
+    }
+
+    public java.util.List<ninja.trek.mc.goldgolem.room.RoomTemplate> getRoomTemplates() {
+        if ((roomTemplates == null || roomTemplates.isEmpty()) && roomJsonFile != null && !roomJsonFile.isEmpty()
+                && this.level() instanceof ServerLevel serverWorld) {
+            try {
+                Path path = FabricLoader.getInstance().getGameDir().resolve(roomJsonFile);
+                if (Files.exists(path)) {
+                    SnapshotData data = readSnapshot(serverWorld, path);
+                    if (data != null && data.roomTemplates() != null && !data.roomTemplates().isEmpty()) {
+                        roomTemplates = new java.util.ArrayList<>(data.roomTemplates());
+                    }
+                }
+            } catch (Exception e) {
+                LOGGER.warn("Failed to lazy-load room templates from {}: {}", roomJsonFile, e.getMessage());
+            }
+        }
+        return roomTemplates == null ? java.util.List.of() : java.util.Collections.unmodifiableList(roomTemplates);
+    }
+
+    public java.util.List<String> getRoomUniqueBlockIds() {
+        return java.util.Collections.unmodifiableList(roomUniqueBlockIds);
+    }
+
+    public BlockPos getRoomOrigin() {
+        return roomOrigin;
+    }
+
+    public int getRoomMemoryLimit() {
+        return roomMemoryLimit;
+    }
+
+    public void setRoomMemoryLimit(int limit) {
+        roomMemoryLimit = Math.max(1, Math.min(1000, limit));
+    }
+
+    public void initRoomGroups(java.util.List<String> uniqueBlocks) {
+        roomGroupSlots.clear();
+        roomGroupWindows.clear();
+        roomGroupNoiseScales.clear();
+        roomBlockGroup.clear();
+        if (uniqueBlocks == null) return;
+        for (int i = 0; i < uniqueBlocks.size(); i++) {
+            roomGroupSlots.add(new String[9]);
+            roomGroupWindows.add(1.0f);
+            roomGroupNoiseScales.add(1);
+            roomBlockGroup.put(uniqueBlocks.get(i), i);
+        }
+    }
+
+    public java.util.List<Integer> getRoomBlockGroupMap(java.util.List<String> uniqueBlocks) {
+        java.util.List<Integer> result = new java.util.ArrayList<>(uniqueBlocks.size());
+        for (String id : uniqueBlocks) result.add(roomBlockGroup.getOrDefault(id, 0));
+        return result;
+    }
+
+    public java.util.List<String[]> getRoomGroupSlots() { return roomGroupSlots; }
+    public java.util.List<Float> getRoomGroupWindows() { return new java.util.ArrayList<>(roomGroupWindows); }
+    public java.util.List<Integer> getRoomGroupNoiseScales() { return new java.util.ArrayList<>(roomGroupNoiseScales); }
+    public java.util.Map<String, Integer> getRoomBlockGroup() { return roomBlockGroup; }
+    public java.util.List<String> getRoomGroupFlatSlots() {
+        java.util.List<String> result = new java.util.ArrayList<>(roomGroupSlots.size() * 9);
+        for (String[] slots : roomGroupSlots) {
+            for (int i = 0; i < 9; i++) result.add(slots[i] == null ? "" : slots[i]);
+        }
+        return result;
+    }
+    public boolean setRoomBlockGroup(String blockId, int group) {
+        return GroupAssignmentUtil.assign(blockId, group, roomUniqueBlockIds,
+                roomGroupSlots, roomGroupWindows, roomGroupNoiseScales, roomBlockGroup);
+    }
+    public void setRoomGroupWindow(int group, float window) {
+        if (group >= 0 && group < roomGroupWindows.size()) {
+            roomGroupWindows.set(group, Math.max(0.0f, Math.min(9.0f, window)));
+        }
+    }
+    public void setRoomGroupNoiseScale(int group, int scale) {
+        if (group >= 0 && group < roomGroupNoiseScales.size()) {
+            roomGroupNoiseScales.set(group, Math.max(1, Math.min(16, scale)));
+        }
+    }
+    public void setRoomGroupSlot(int group, int slot, String id) {
+        if (group < 0 || group >= roomGroupSlots.size() || slot < 0 || slot >= 9) return;
+        roomGroupSlots.get(group)[slot] = id == null ? "" : id;
     }
     public java.util.List<String> getWallUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.wallUniqueBlockIds); }
     public void setWallJoinSignature(String sig) { this.wallJoinSignature = sig; }
@@ -772,6 +948,7 @@ public class GoldGolemEntity extends PathfinderMob {
             case WALL -> wallJsonFile;
             case TOWER, PYRAMID -> towerJsonFile;
             case TREE -> treeJsonFile;
+            case ROOM -> roomJsonFile;
             default -> null;
         };
     }
@@ -782,6 +959,7 @@ public class GoldGolemEntity extends PathfinderMob {
             case WALL -> this.wallJsonFile = jsonRel;
             case TOWER, PYRAMID -> this.towerJsonFile = jsonRel;
             case TREE -> this.treeJsonFile = jsonRel;
+            case ROOM -> this.roomJsonFile = jsonRel;
             default -> {
             }
         }
@@ -1007,6 +1185,16 @@ public class GoldGolemEntity extends PathfinderMob {
         root.addProperty("mode", getBuildMode().name());
         root.addProperty("nbt", NbtUtils.structureToSnbt(nbt));
 
+        if (getBuildMode() == BuildMode.WALL || getBuildMode() == BuildMode.TOWER
+                || getBuildMode() == BuildMode.PYRAMID || getBuildMode() == BuildMode.TREE
+                || getBuildMode() == BuildMode.ROOM) {
+            var publicTemplate = ninja.trek.mc.goldgolem.api.structure.GoldGolemTemplate.fromGolem(this);
+            root.add(
+                    ninja.trek.mc.goldgolem.api.structure.GoldGolemTemplateCodec.SNAPSHOT_TEMPLATE_KEY,
+                    ninja.trek.mc.goldgolem.api.structure.GoldGolemTemplateCodec.toJson(publicTemplate)
+            );
+        }
+
         JsonArray wallTemplatesJson = new JsonArray();
         for (var tpl : getWallTemplates()) {
             JsonObject t = new JsonObject();
@@ -1145,7 +1333,16 @@ public class GoldGolemEntity extends PathfinderMob {
             }
         }
 
-        return new SnapshotData(nbt, wallTemplates, towerTemplate, treeModuleStates);
+        java.util.List<ninja.trek.mc.goldgolem.room.RoomTemplate> roomTemplates = java.util.List.of();
+        if (root.has(ninja.trek.mc.goldgolem.api.structure.GoldGolemTemplateCodec.SNAPSHOT_TEMPLATE_KEY)) {
+            try {
+                var publicTemplate = ninja.trek.mc.goldgolem.api.structure.GoldGolemTemplateCodec.fromJson(root);
+                roomTemplates = publicTemplate.roomTemplates();
+            } catch (ninja.trek.mc.goldgolem.api.structure.TemplateLoadException ignored) {
+                roomTemplates = java.util.List.of();
+            }
+        }
+        return new SnapshotData(nbt, wallTemplates, towerTemplate, treeModuleStates, roomTemplates);
     }
 
     private Path writeSnapshotForName(String desiredName) {
@@ -1195,6 +1392,9 @@ public class GoldGolemEntity extends PathfinderMob {
         if (data.treeModuleStates() != null) {
             setTreeModuleBlockStates(data.treeModuleStates());
         }
+        if (data.roomTemplates() != null && !data.roomTemplates().isEmpty()) {
+            this.roomTemplates = new java.util.ArrayList<>(data.roomTemplates());
+        }
         if (getBuildMode() == BuildMode.TREE) {
             this.treeOrigin = summonOrigin;
         } else if (getBuildMode() == BuildMode.TOWER || getBuildMode() == BuildMode.PYRAMID) {
@@ -1203,6 +1403,8 @@ public class GoldGolemEntity extends PathfinderMob {
             }
         } else if (getBuildMode() == BuildMode.WALL) {
             this.wallOrigin = summonOrigin;
+        } else if (getBuildMode() == BuildMode.ROOM) {
+            this.roomOrigin = summonOrigin;
         }
         return true;
     }
@@ -1211,7 +1413,8 @@ public class GoldGolemEntity extends PathfinderMob {
             CompoundTag nbt,
             java.util.List<ninja.trek.mc.goldgolem.wall.WallModuleTemplate> wallTemplates,
             ninja.trek.mc.goldgolem.tower.TowerModuleTemplate towerTemplate,
-            java.util.List<java.util.Map<BlockPos, BlockState>> treeModuleStates
+            java.util.List<java.util.Map<BlockPos, BlockState>> treeModuleStates,
+            java.util.List<ninja.trek.mc.goldgolem.room.RoomTemplate> roomTemplates
     ) {}
     public java.util.List<ninja.trek.mc.goldgolem.tree.TreeModule> getTreeModules() { return java.util.Collections.unmodifiableList(this.treeModules); }
     public java.util.List<String> getTreeUniqueBlockIds() { return java.util.Collections.unmodifiableList(this.treeUniqueBlockIds); }
@@ -1634,6 +1837,8 @@ public class GoldGolemEntity extends PathfinderMob {
         if (this.level().isClientSide()) return;
         tickFireResistancePotion();
         tickResourceWaitReturn();
+        announceRestoredTimelapseBuild();
+        tickTimelapseBuildPosition();
         if (buildingPaths) {
             // Increment placement tick counter (2-tick cycle)
             placementTickCounter = (placementTickCounter + 1) % 2;
@@ -1656,6 +1861,7 @@ public class GoldGolemEntity extends PathfinderMob {
 
                 // Check if strategy has completed its work
                 if (activeStrategy.isComplete()) {
+                    endTimelapseBuild("complete");
                     stopBuilding();
                 }
             }
@@ -2477,6 +2683,9 @@ public class GoldGolemEntity extends PathfinderMob {
         view.putString("Mode", getBuildMode().name());
         view.putBoolean("BuildingPaths", isBuildingPaths());
         view.putBoolean("WaitingForResources", isWaitingForResources());
+        if (timelapseBuildSessionId != null) {
+            view.putString("TimelapseBuildSession", timelapseBuildSessionId.toString());
+        }
         if (buildStartPosition != null) {
             view.putInt("BuildStartX", buildStartPosition.getX());
             view.putInt("BuildStartY", buildStartPosition.getY());
@@ -2608,6 +2817,28 @@ public class GoldGolemEntity extends PathfinderMob {
             view.putInt("TowerGM" + i, grp);
         }
 
+        if (roomOrigin != null) {
+            view.putInt("RoomOX", roomOrigin.getX());
+            view.putInt("RoomOY", roomOrigin.getY());
+            view.putInt("RoomOZ", roomOrigin.getZ());
+        }
+        if (roomJsonFile != null) view.putString("RoomJson", roomJsonFile);
+        view.putInt("RoomMemoryLimit", roomMemoryLimit);
+        view.putInt("RoomUniqCount", roomUniqueBlockIds.size());
+        for (int i = 0; i < roomUniqueBlockIds.size(); i++) view.putString("RoomU" + i, roomUniqueBlockIds.get(i));
+        view.putInt("RoomGroupCount", roomGroupSlots.size());
+        for (int group = 0; group < roomGroupSlots.size(); group++) {
+            view.putFloat("RoomGW" + group, roomGroupWindows.get(group));
+            view.putInt("RoomGNS" + group, roomGroupNoiseScales.get(group));
+            for (int slot = 0; slot < 9; slot++) {
+                String value = roomGroupSlots.get(group)[slot];
+                view.putString("RoomGS" + group + "_" + slot, value == null ? "" : value);
+            }
+        }
+        for (int i = 0; i < roomUniqueBlockIds.size(); i++) {
+            view.putInt("RoomGM" + i, roomBlockGroup.getOrDefault(roomUniqueBlockIds.get(i), 0));
+        }
+
         // Strategy state persisted via polymorphic dispatch (Mining, Excavation modes)
         if (activeStrategy != null) {
             activeStrategy.writeLegacyNbt(view);
@@ -2703,6 +2934,14 @@ public class GoldGolemEntity extends PathfinderMob {
         // Restore building state (after mode is set)
         boolean wasBuildingPaths = view.getBooleanOr("BuildingPaths", false);
         boolean wasWaitingForResources = view.getBooleanOr("WaitingForResources", false);
+        String savedTimelapseSession = view.getStringOr("TimelapseBuildSession", "");
+        try {
+            timelapseBuildSessionId = savedTimelapseSession.isEmpty()
+                    ? null : java.util.UUID.fromString(savedTimelapseSession);
+        } catch (IllegalArgumentException ignored) {
+            timelapseBuildSessionId = null;
+        }
+        timelapseBuildAnnounced = false;
         if (view.contains("BuildStartX")) {
             this.buildStartPosition = new BlockPos(
                     view.getIntOr("BuildStartX", 0),
@@ -2845,6 +3084,33 @@ public class GoldGolemEntity extends PathfinderMob {
             int grp = view.getIntOr("TowerGM" + i, 0);
             String id = towerUniqueBlockIds.get(i);
             towerBlockGroup.put(id, Math.max(0, Math.min(Math.max(0, towerGroupSlots.size() - 1), grp)));
+        }
+
+        if (view.contains("RoomOX")) {
+            roomOrigin = new BlockPos(view.getIntOr("RoomOX", 0), view.getIntOr("RoomOY", 0),
+                    view.getIntOr("RoomOZ", 0));
+        } else {
+            roomOrigin = null;
+        }
+        roomJsonFile = view.getStringOr("RoomJson", null);
+        roomMemoryLimit = Math.max(1, Math.min(1000, view.getIntOr("RoomMemoryLimit", 100)));
+        int roomUniqueCount = view.getIntOr("RoomUniqCount", 0);
+        java.util.List<String> loadedRoomIds = new java.util.ArrayList<>(roomUniqueCount);
+        for (int i = 0; i < roomUniqueCount; i++) loadedRoomIds.add(view.getStringOr("RoomU" + i, ""));
+        roomUniqueBlockIds = loadedRoomIds;
+        roomGroupSlots.clear(); roomGroupWindows.clear(); roomGroupNoiseScales.clear(); roomBlockGroup.clear();
+        int roomGroupCount = view.getIntOr("RoomGroupCount", 0);
+        for (int group = 0; group < roomGroupCount; group++) {
+            roomGroupWindows.add(Math.max(0.0f, Math.min(9.0f, view.getFloatOr("RoomGW" + group, 1.0f))));
+            roomGroupNoiseScales.add(Math.max(1, Math.min(16, view.getIntOr("RoomGNS" + group, 1))));
+            String[] slots = new String[9];
+            for (int slot = 0; slot < 9; slot++) slots[slot] = view.getStringOr("RoomGS" + group + "_" + slot, "");
+            roomGroupSlots.add(slots);
+        }
+        for (int i = 0; i < roomUniqueBlockIds.size(); i++) {
+            int group = view.getIntOr("RoomGM" + i, 0);
+            roomBlockGroup.put(roomUniqueBlockIds.get(i),
+                    Math.max(0, Math.min(Math.max(0, roomGroupSlots.size() - 1), group)));
         }
 
         // Strategy state loaded via polymorphic dispatch (Mining, Excavation, Terraforming, Tree modes)
@@ -3275,6 +3541,7 @@ public class GoldGolemEntity extends PathfinderMob {
                         prepareBuildReturnState(result == BuildStrategy.FeedResult.STARTED);
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
+                        startTimelapseBuild(result == BuildStrategy.FeedResult.RESUMED);
                         if (!player.isCreative()) stack.shrink(1);
                         spawnHearts();
                         if (result == BuildStrategy.FeedResult.RESUMED) {
@@ -3287,6 +3554,9 @@ public class GoldGolemEntity extends PathfinderMob {
                             if (result == BuildStrategy.FeedResult.RESUMED
                                     && activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
                                 resumePos = wall.getResumeTrackStart();
+                            }
+                            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.RoomBuildStrategy room) {
+                                resumePos = room.getActiveTrackStart();
                             }
                             this.trackStart = resumePos != null ? resumePos
                                     : new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
@@ -3306,6 +3576,7 @@ public class GoldGolemEntity extends PathfinderMob {
                         prepareBuildReturnState(true);
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
+                        startTimelapseBuild(false);
                         if (!player.isCreative()) stack.shrink(1);
                         spawnHearts();
                     }
@@ -3343,9 +3614,13 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         var attacker = source.getEntity();
         if (attacker instanceof Player p && isOwner(p)) {
+            if (activeStrategy != null && activeStrategy.handleOwnerAttack(p)) {
+                return false;
+            }
             boolean ignoreOwnerDamage = source.is(net.minecraft.world.damagesource.DamageTypes.PLAYER_ATTACK)
                 && amount <= 1.0F;
             // Stop building on owner hit; show angry particles; ignore only low (fist) damage
+            endTimelapseBuild("stop");
             this.buildingPaths = false;
             this.entityData.set(BUILDING_PATHS, false);
 
@@ -3414,7 +3689,48 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         ItemStack pumpkin = new ItemStack(Items.CARVED_PUMPKIN);
         pumpkin.set(DataComponents.CUSTOM_NAME, Component.literal(dropName));
-        this.spawnAtLocation(world, pumpkin);
+        this.pendingDeathPumpkin = pumpkin;
+    }
+
+    @Override
+    protected void tickDeath() {
+        if (this.deathTime == 0 && !this.level().isClientSide()) {
+            endTimelapseBuild("stop");
+        }
+        if (this.deathTime >= DEATH_TRANSFORM_DURATION_TICKS - 1) {
+            spawnPendingDeathPumpkin();
+        }
+        super.tickDeath();
+    }
+
+    @Override
+    public void onRemoval(net.minecraft.world.entity.Entity.RemovalReason reason) {
+        if (!this.level().isClientSide() && reason.shouldDestroy()) {
+            endTimelapseBuild("stop");
+        }
+        super.onRemoval(reason);
+    }
+
+    private void spawnPendingDeathPumpkin() {
+        if (!(this.level() instanceof ServerLevel world) || this.pendingDeathPumpkin.isEmpty()) {
+            return;
+        }
+
+        ItemStack pumpkin = this.pendingDeathPumpkin;
+        this.pendingDeathPumpkin = ItemStack.EMPTY;
+        Vec3 handoffVelocity = this.getDeltaMovement();
+        ItemEntity itemEntity = new ItemEntity(
+                world,
+                this.getX(),
+                this.getY() + this.getBbHeight() * 0.5,
+                this.getZ(),
+                pumpkin,
+                handoffVelocity.x,
+                handoffVelocity.y,
+                handoffVelocity.z
+        );
+        itemEntity.setDefaultPickUpDelay();
+        world.addFreshEntity(itemEntity);
     }
 
     private void spawnHearts() {
@@ -3440,6 +3756,7 @@ public class GoldGolemEntity extends PathfinderMob {
         if (activeStrategy != null) {
             activeStrategy.setWaitingForResources(true);
         }
+        pauseTimelapseBuild();
         this.getNavigation().stop();
         if (getBuildMode().returnsToBuildStartWhenOutOfBlocks()) {
             if (buildStartPosition == null) {

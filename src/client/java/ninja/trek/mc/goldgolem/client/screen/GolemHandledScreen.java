@@ -123,6 +123,15 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
     private int treeScroll = 0;
     private int treeTilingPresetOrdinal = 0; // 0 = 3x3, 1 = 5x5
 
+    // Room mode state
+    private java.util.List<String> roomUniqueBlocks = java.util.Collections.emptyList();
+    private java.util.List<Integer> roomBlockGroups = java.util.Collections.emptyList();
+    private java.util.List<Float> roomGroupWindows = java.util.Collections.emptyList();
+    private java.util.List<Integer> roomGroupNoiseScales = java.util.Collections.emptyList();
+    private java.util.List<String> roomGroupFlatSlots = java.util.Collections.emptyList();
+    private int roomMemoryLimit = 100;
+    private RoomMemoryLimitSlider roomMemoryLimitSlider;
+
     // Strategy pattern for group-based modes (Wall, Tower, Tree)
     private GroupModeStrategy groupModeStrategy;
     private final java.util.List<WindowSlider> groupRowSliders = new java.util.ArrayList<>();
@@ -467,6 +476,41 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         }
     }
 
+    private class RoomMemoryLimitSlider extends AbstractSliderButton {
+        RoomMemoryLimitSlider(int x, int y, int width, int height, int initialLimit) {
+            super(x, y, width, height, Component.literal("Remember rooms"), toValue(initialLimit));
+        }
+
+        private static double toValue(int limit) {
+            return (Math.max(1, Math.min(1000, limit)) - 1) / 999.0;
+        }
+
+        private static int fromValue(double value) {
+            return Math.max(1, Math.min(1000, 1 + (int) Math.round(value * 999.0)));
+        }
+
+        @Override
+        protected void updateMessage() {
+            setMessage(Component.literal("Remember rooms: " + fromValue(value)));
+        }
+
+        @Override
+        protected void applyValue() {
+            int limit = fromValue(value);
+            if (limit != roomMemoryLimit) {
+                roomMemoryLimit = limit;
+                ClientPlayNetworking.send(new ninja.trek.mc.goldgolem.net.SetRoomMemoryLimitC2SPayload(
+                        getEntityId(), limit));
+                updateMessage();
+            }
+        }
+
+        void syncTo(int limit) {
+            value = toValue(limit);
+            updateMessage();
+        }
+    }
+
     private void setTowerLayersFieldText(int layers) {
         if (towerLayersField == null) return;
         String text = Integer.toString(clampTowerLayers(layers));
@@ -682,6 +726,41 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             syncGroupSliders(strategy);
         }
         // Schedule UI update on render thread
+        Minecraft.getInstance().execute(this::refreshLayoutIfNeeded);
+    }
+
+    public void syncRoomUniqueBlocks(java.util.List<String> ids) {
+        synchronized (stateLock) {
+            roomUniqueBlocks = ids == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(ids);
+            getModeState(BuildMode.ROOM).setUniqueBlocks(ids);
+        }
+    }
+
+    public void syncRoomBlockGroups(java.util.List<Integer> groups) {
+        synchronized (stateLock) {
+            roomBlockGroups = groups == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(groups);
+            getModeState(BuildMode.ROOM).setBlockGroups(groups);
+        }
+    }
+
+    public void syncRoomGroupsState(java.util.List<Float> windows, java.util.List<Integer> noiseScales,
+                                    java.util.List<String> flatSlots, int memoryLimit) {
+        synchronized (stateLock) {
+            roomGroupWindows = windows == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(windows);
+            roomGroupNoiseScales = noiseScales == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(noiseScales);
+            roomGroupFlatSlots = flatSlots == null
+                    ? java.util.Collections.emptyList() : new java.util.ArrayList<>(flatSlots);
+            roomMemoryLimit = Math.max(1, Math.min(1000, memoryLimit));
+            getModeState(BuildMode.ROOM).updateGroupState(windows, noiseScales, flatSlots);
+        }
+        groupModeStrategy = null;
+        GroupModeStrategy strategy = getGroupModeStrategy();
+        if (strategy != null) syncGroupSliders(strategy);
+        if (roomMemoryLimitSlider != null) roomMemoryLimitSlider.syncTo(roomMemoryLimit);
         Minecraft.getInstance().execute(this::refreshLayoutIfNeeded);
     }
 
@@ -1153,6 +1232,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             case 6 -> BuildMode.TOWER;
             case 7 -> BuildMode.TUNNEL;
             case 8 -> BuildMode.PYRAMID;
+            case 9 -> BuildMode.ROOM;
             default -> BuildMode.PATH;
         };
     }
@@ -1171,6 +1251,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             case TOWER -> new TowerModeStrategy();
             case PYRAMID -> new PyramidModeStrategy();
             case TREE -> new TreeModeStrategy();
+            case ROOM -> new RoomModeStrategy();
             default -> null;
         };
         if (groupModeStrategy != null) {
@@ -1200,6 +1281,10 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             var extraData = new java.util.HashMap<String, Object>();
             extraData.put("tilingPresetOrdinal", treeTilingPresetOrdinal);
             groupModeStrategy.updateGroupState(treeGroupWindows, treeGroupNoiseScales, treeGroupFlatSlots, extraData);
+        } else if (groupModeStrategy.getMode() == BuildMode.ROOM) {
+            groupModeStrategy.updateBlocksAndGroups(roomUniqueBlocks, roomBlockGroups);
+            groupModeStrategy.updateGroupState(roomGroupWindows, roomGroupNoiseScales, roomGroupFlatSlots,
+                    java.util.Map.of("memoryLimit", roomMemoryLimit));
         }
     }
 
@@ -1399,7 +1484,7 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
             this.addRenderableWidget(widthSlider);
         } else if (!this.menu.isSliderEnabled() && (this.menu.getSliderMode() <= 1
                 || this.menu.getSliderMode() == 5 || this.menu.getSliderMode() == 6
-                || this.menu.getSliderMode() == 8)) {
+                || this.menu.getSliderMode() == 8 || this.menu.getSliderMode() == 9)) {
             // Group Mode UI (Wall, Tower, Tree): create per-row sliders and scroll buttons using strategy pattern
             // Check sliderMode: 0 or 1 indicates Wall or Tower mode, 5 indicates Tree mode
             // Mode-specific data arrives later via network, but we create sliders now
@@ -1516,6 +1601,13 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
                     b.setMessage(Component.literal("Preset: " + (newPreset == 0 ? "3x3" : "5x5")));
                 }).bounds(this.leftPos + this.imageWidth - 8 - 70, gridTop, 70, 20).build();
                 this.addRenderableWidget(presetBtn);
+            }
+
+            if (mode == BuildMode.ROOM) {
+                int limitY = this.topPos + 26 + getGroupMaxVisibleRows() * rowSpacing;
+                roomMemoryLimitSlider = new RoomMemoryLimitSlider(
+                        this.leftPos + 8, limitY, this.imageWidth - 16, 12, roomMemoryLimit);
+                this.addRenderableWidget(roomMemoryLimitSlider);
             }
 
             // Sync sliders if strategy is available, otherwise they'll be synced when data arrives
@@ -1725,8 +1817,13 @@ public class GolemHandledScreen extends AbstractContainerScreen<GolemInventorySc
         String modeName = currentMode.name().charAt(0) + currentMode.name().substring(1).toLowerCase();
         // Clamp to screen so it stays visible even if the GUI is taller than the viewport
         int labelWidth = this.font.width(modeName);
-        int labelX = Math.max(2, Math.min(this.leftPos + 8, this.width - labelWidth - 2));
+        int iconWidth = currentMode == BuildMode.ROOM ? 18 : 0;
+        int labelX = Math.max(2, Math.min(this.leftPos + 8, this.width - labelWidth - iconWidth - 2));
         int labelY = Math.max(2, this.topPos + 6);
+        if (currentMode == BuildMode.ROOM) {
+            context.item(new ItemStack(net.minecraft.world.level.block.Blocks.GOLD_BLOCK), labelX, labelY - 5);
+            labelX += iconWidth;
+        }
         context.text(this.font, Component.literal(modeName), labelX, labelY, 0xFF404040, false);
 
         String jsonName = this.menu.getJsonName();

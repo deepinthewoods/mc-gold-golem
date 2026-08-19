@@ -40,6 +40,7 @@ public final class ClientNet {
                         case TOWER -> screen.syncTowerUniqueBlocks(payload.blockIds());
                         case PYRAMID -> screen.syncPyramidUniqueBlocks(payload.blockIds());
                         case TREE -> screen.syncTreeUniqueBlocks(payload.blockIds());
+                        case ROOM -> screen.syncRoomUniqueBlocks(payload.blockIds());
                         default -> { }
                     }
                 }
@@ -70,6 +71,9 @@ public final class ClientNet {
                             screen.syncPyramidGroupsState(payload.windows(), payload.noiseScales(), payload.flatSlots());
                         }
                         case TREE -> screen.syncTreeGroupsState(payload.getTilingPresetOrdinal(), payload.windows(), payload.noiseScales(), payload.flatSlots());
+                        case ROOM -> screen.syncRoomGroupsState(
+                                payload.windows(), payload.noiseScales(), payload.flatSlots(),
+                                payload.getRoomMemoryLimit());
                         default -> { }
                     }
                 }
@@ -86,6 +90,7 @@ public final class ClientNet {
                         case TOWER -> screen.syncTowerBlockGroups(payload.groups());
                         case PYRAMID -> screen.syncPyramidBlockGroups(payload.groups());
                         case TREE -> screen.syncTreeBlockGroups(payload.groups());
+                        case ROOM -> screen.syncRoomBlockGroups(payload.groups());
                         default -> { }
                     }
                 }

@@ -154,10 +154,19 @@ public class PumpkinSummoning {
             terraformingMode = is3x3Gold;
         }
 
+        // Room Mode: detect a doorway network before the less-specific tree/wall markers.
+        ninja.trek.mc.goldgolem.room.RoomScanner.ScanResult roomScan = null;
+        boolean roomMode = false;
+        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode && !terraformingMode) {
+            roomScan = ninja.trek.mc.goldgolem.room.RoomScanner.scan(world, below);
+            roomMode = roomScan.ok();
+        }
+
         // Check for Tree Mode: second gold block touching pumpkin's gold block
         boolean treeMode = false;
         BlockPos secondGoldPos = null;
-        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode && !terraformingMode) {
+        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode
+                && !terraformingMode && !roomMode) {
             for (var dir : new net.minecraft.core.Direction[]{
                     net.minecraft.core.Direction.NORTH,
                     net.minecraft.core.Direction.SOUTH,
@@ -178,7 +187,8 @@ public class PumpkinSummoning {
         // Decide mode: Wall Mode if gold block is touching any non-air, non-snow layer block on sides (exclude below)
         // Tower, mining, excavation, terraforming, and tree modes take precedence over wall mode
         boolean wallMode = false;
-        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode && !terraformingMode && !treeMode) {
+        if (!tunnelMode && !pyramidMode && !towerMode && !miningMode && !excavationMode
+                && !terraformingMode && !roomMode && !treeMode) {
             for (var dir : new net.minecraft.core.Direction[]{
                     net.minecraft.core.Direction.NORTH,
                     net.minecraft.core.Direction.SOUTH,
@@ -341,6 +351,19 @@ public class PumpkinSummoning {
 
             ServerLevel sw = (ServerLevel) world;
             sw.addFreshEntity(golem);
+            if (!player.isCreative()) stack.shrink(1);
+            return InteractionResult.SUCCESS;
+        } else if (roomMode) {
+            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
+            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
+            golem.setOwner(player);
+            golem.setBuildMode(BuildMode.ROOM);
+            golem.setRoomCapture(roomScan.definition());
+            golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.ROOM)));
+
+            // Captured examples and doorway frames remain in place; only the summon block is consumed.
+            world.destroyBlock(below, false, player);
+            ((ServerLevel) world).addFreshEntity(golem);
             if (!player.isCreative()) stack.shrink(1);
             return InteractionResult.SUCCESS;
         } else if (treeMode) {
