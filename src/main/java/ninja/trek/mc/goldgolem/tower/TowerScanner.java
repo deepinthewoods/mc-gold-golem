@@ -1,18 +1,17 @@
 package ninja.trek.mc.goldgolem.tower;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Summon-time tower-mode scanner.
@@ -40,9 +39,9 @@ public final class TowerScanner {
      * @param summoner The player who summoned the golem
      * @return Result containing the tower definition or error message
      */
-    public static Result scan(World world, List<BlockPos> goldBlockPositions, BlockPos origin, PlayerEntity summoner) {
+    public static Result scan(Level world, List<BlockPos> goldBlockPositions, BlockPos origin, Player summoner) {
         // Determine the block the player is standing on (one below feet)
-        BlockPos playerGround = summoner == null ? null : summoner.getBlockPos().down();
+        BlockPos playerGround = summoner == null ? null : summoner.blockPosition().below();
         Set<BlockPos> summonGoldBlocks = new HashSet<>(goldBlockPositions);
 
         // Canonicalize ground-equivalence only if the player stands on a ground type
@@ -70,16 +69,16 @@ public final class TowerScanner {
         while (!queue.isEmpty()) {
             BlockPos cur = queue.removeFirst();
             for (Direction d : NEIGHBORS) {
-                BlockPos n = cur.offset(d);
+                BlockPos n = cur.relative(d);
                 if (visited.contains(n)) continue;
 
                 BlockState st = world.getBlockState(n);
 
                 // Exclude snow layers
-                if (st.isOf(Blocks.SNOW)) continue;
+                if (st.is(Blocks.SNOW)) continue;
 
                 // Exclude gold blocks (they're used for tower height marking)
-                if (st.isOf(Blocks.GOLD_BLOCK)) continue;
+                if (st.is(Blocks.GOLD_BLOCK)) continue;
 
                 // Ignore the type of block the player is standing on
                 if (groundType != null) {
@@ -126,11 +125,11 @@ public final class TowerScanner {
             }
             BlockState st = world.getBlockState(abs);
             Block b = st.getBlock();
-            String id = Registries.BLOCK.getId(b).toString();
+            String id = BuiltInRegistries.BLOCK.getKey(b).toString();
 
             // Unify ground ids if requested
             if (unifyGround && (b == Blocks.GRASS_BLOCK || b == Blocks.DIRT || b == Blocks.DIRT_PATH)) {
-                id = Registries.BLOCK.getId(Blocks.DIRT).toString();
+                id = BuiltInRegistries.BLOCK.getKey(Blocks.DIRT).toString();
             }
 
             if (uniqSet.add(id)) uniques.add(id);
@@ -163,7 +162,7 @@ public final class TowerScanner {
         // Calculate module height (Y extent), excluding summoning gold blocks
         int moduleHeight = moduleMax.getY() - moduleMin.getY() + 1;
 
-        TowerDefinition def = new TowerDefinition(origin.toImmutable(), rel, uniques, blockCounts, moduleHeight);
+        TowerDefinition def = new TowerDefinition(origin.immutable(), rel, uniques, blockCounts, moduleHeight);
         return new Result(def, null);
     }
 

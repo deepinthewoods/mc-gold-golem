@@ -1,21 +1,21 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy.path;
 
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Represents a line segment for path building.
  * Extracted from GoldGolemEntity inner class.
  */
 public class LineSeg {
-    public final Vec3d a;
-    public final Vec3d b;
+    public final Vec3 a;
+    public final Vec3 b;
     public final double dirX;
     public final double dirZ;
     public final List<BlockPos> cells;
@@ -27,12 +27,12 @@ public class LineSeg {
     public int totalBits = 0;
     public int scanBit = 0;
 
-    public LineSeg(Vec3d a, Vec3d b) {
+    public LineSeg(Vec3 a, Vec3 b) {
         this.a = a;
         this.b = b;
         this.dirX = b.x - a.x;
         this.dirZ = b.z - a.z;
-        this.cells = computeCells(BlockPos.ofFloored(a.x, 0, a.z), BlockPos.ofFloored(b.x, 0, b.z));
+        this.cells = computeCells(BlockPos.containing(a.x, 0, a.z), BlockPos.containing(b.x, 0, b.z));
     }
 
     public void begin(GoldGolemEntity golem) {
@@ -60,18 +60,18 @@ public class LineSeg {
             double wz = gz - az;
             t = (wx * vx + wz * vz) / denom;
         }
-        t = MathHelper.clamp(t, 0.0, 1.0);
+        t = Mth.clamp(t, 0.0, 1.0);
         int n = Math.max(1, cells.size());
-        return MathHelper.clamp((int) Math.floor(t * (n - 1)), 0, n - 1);
+        return Mth.clamp((int) Math.floor(t * (n - 1)), 0, n - 1);
     }
 
-    public Vec3d pointAtIndex(int idx) {
+    public Vec3 pointAtIndex(int idx) {
         if (cells.isEmpty()) return b;
-        int i = MathHelper.clamp(idx, 0, cells.size() - 1);
+        int i = Mth.clamp(idx, 0, cells.size() - 1);
         BlockPos c = cells.get(i);
         double t = cells.size() <= 1 ? 1.0 : (double) i / (double) (cells.size() - 1);
-        double y = MathHelper.lerp(t, a.y, b.y);
-        return new Vec3d(c.getX() + 0.5, y, c.getZ() + 0.5);
+        double y = Mth.lerp(t, a.y, b.y);
+        return new Vec3(c.getX() + 0.5, y, c.getZ() + 0.5);
     }
 
     public void placePendingUpTo(GoldGolemEntity golem, int boundCell, int maxOps) {
@@ -89,13 +89,13 @@ public class LineSeg {
             int j = jIndex - half;
             BlockPos cell = cells.get(cellIndex);
             double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
-            double y = MathHelper.lerp(t, a.y, b.y);
+            double y = Mth.lerp(t, a.y, b.y);
             double x = cell.getX() + 0.5;
             double z = cell.getZ() + 0.5;
             boolean xMajor = Math.abs(dirX) >= Math.abs(dirZ);
-            net.minecraft.util.math.Direction travelDir = xMajor
-                    ? (dirX >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST)
-                    : (dirZ >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH);
+            net.minecraft.core.Direction travelDir = xMajor
+                    ? (dirX >= 0 ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST)
+                    : (dirZ >= 0 ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH);
             golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
             processed.set(bit); // mark attempted (placed or skipped) to avoid thrash
             ops++;
@@ -119,26 +119,26 @@ public class LineSeg {
             int j = jIndex - half;
             BlockPos cell = cells.get(cellIndex);
             double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
-            double y = MathHelper.lerp(t, a.y, b.y);
+            double y = Mth.lerp(t, a.y, b.y);
             double x = cell.getX() + 0.5;
             double z = cell.getZ() + 0.5;
             boolean xMajor = Math.abs(dirX) >= Math.abs(dirZ);
-            net.minecraft.util.math.Direction travelDir = xMajor
-                    ? (dirX >= 0 ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST)
-                    : (dirZ >= 0 ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH);
+            net.minecraft.core.Direction travelDir = xMajor
+                    ? (dirX >= 0 ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST)
+                    : (dirZ >= 0 ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH);
 
             // Find the actual block position where we'll place
-            int bx = MathHelper.floor(x + px * j);
-            int bz = MathHelper.floor(z + pz * j);
-            int y0 = MathHelper.floor(y);
+            int bx = Mth.floor(x + px * j);
+            int bz = Mth.floor(z + pz * j);
+            int y0 = Mth.floor(y);
 
             // Find ground Y
-            var world = golem.getEntityWorld();
+            var world = golem.level();
             Integer groundY = null;
             for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
                 BlockPos test = new BlockPos(bx, yy, bz);
                 var st = world.getBlockState(test);
-                if (!st.isAir() && st.isFullCube(world, test)) {
+                if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) {
                     groundY = yy;
                     break;
                 }
@@ -150,10 +150,10 @@ public class LineSeg {
                 for (int dy = -1; dy <= 1; dy++) {
                     BlockPos rp = new BlockPos(bx, groundY + dy, bz);
                     var rs = world.getBlockState(rp);
-                    if (rs.isAir() || !rs.isFullCube(world, rp)) continue;
-                    BlockPos ap = rp.up();
+                    if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue;
+                    BlockPos ap = rp.above();
                     var as = world.getBlockState(ap);
-                    if (as.isFullCube(world, ap)) continue;
+                    if (as.isCollisionShapeFullBlock(world, ap)) continue;
                     result = rp;
                     break;
                 }
@@ -180,7 +180,7 @@ public class LineSeg {
             int j = jIndex - half;
             BlockPos cell = cells.get(cellIndex);
             double t = cells.size() <= 1 ? 1.0 : (double) cellIndex / (double) (cells.size() - 1);
-            double y = MathHelper.lerp(t, a.y, b.y);
+            double y = Mth.lerp(t, a.y, b.y);
 
             double len = Math.sqrt(dirX * dirX + dirZ * dirZ);
             double px = len > 1e-4 ? (-dirZ / len) : 0.0;
@@ -188,9 +188,9 @@ public class LineSeg {
             double x = cell.getX() + 0.5;
             double z = cell.getZ() + 0.5;
 
-            int bx = MathHelper.floor(x + px * j);
-            int bz = MathHelper.floor(z + pz * j);
-            int by = MathHelper.floor(y);
+            int bx = Mth.floor(x + px * j);
+            int bz = Mth.floor(z + pz * j);
+            int by = Mth.floor(y);
 
             return new BlockPos(bx, by, bz);
         }

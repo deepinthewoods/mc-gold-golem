@@ -1,9 +1,9 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
@@ -52,7 +52,7 @@ public interface BuildStrategy {
      * @param golem The golem entity
      * @param owner The owner player (may be null for non-tracking modes)
      */
-    void tick(GoldGolemEntity golem, PlayerEntity owner);
+    void tick(GoldGolemEntity golem, Player owner);
 
     /**
      * Called when the strategy is deactivated or the golem stops building.
@@ -74,13 +74,13 @@ public interface BuildStrategy {
      * Serialize strategy-specific state to NBT.
      * @param nbt The compound to write to
      */
-    void writeNbt(NbtCompound nbt);
+    void writeNbt(CompoundTag nbt);
 
     /**
      * Deserialize strategy-specific state from NBT.
      * @param nbt The compound to read from
      */
-    void readNbt(NbtCompound nbt);
+    void readNbt(CompoundTag nbt);
 
     /**
      * @return true if this strategy tracks the player's position (Path, Wall, Tower, Tree)
@@ -158,7 +158,7 @@ public interface BuildStrategy {
      * Called from GoldGolemEntity.writeCustomData() instead of instanceof checks.
      * @param view The WriteView to write to
      */
-    default void writeLegacyNbt(WriteView view) {
+    default void writeLegacyNbt(ValueOutput view) {
     }
 
     /**
@@ -166,7 +166,7 @@ public interface BuildStrategy {
      * Called from GoldGolemEntity.readCustomData() instead of instanceof checks.
      * @param view The ReadView to read from
      */
-    default void readLegacyNbt(ReadView view) {
+    default void readLegacyNbt(ValueInput view) {
     }
 
     /**
@@ -175,7 +175,7 @@ public interface BuildStrategy {
      * @param player The player feeding the golem
      * @return FeedResult indicating what happened
      */
-    default FeedResult handleFeedInteraction(PlayerEntity player) {
+    default FeedResult handleFeedInteraction(Player player) {
         return FeedResult.NOT_HANDLED;
     }
 
@@ -184,6 +184,14 @@ public interface BuildStrategy {
      * Replaces instanceof checks in damage().
      */
     default void handleOwnerDamage() {
+    }
+
+    /**
+     * Handle an owner player attack before the normal stop/damage behavior.
+     * @return true when the attack was consumed by the strategy
+     */
+    default boolean handleOwnerAttack(Player player) {
+        return false;
     }
 
     /**

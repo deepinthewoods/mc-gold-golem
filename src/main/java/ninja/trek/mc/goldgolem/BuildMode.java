@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
 
 /**
  * Build modes for the Gold Golem.
@@ -17,7 +16,9 @@ public enum BuildMode {
     TERRAFORMING,
     TREE,
     TUNNEL,
-    GRADIENT       // Alias for PATH (gradient-based building)
+    GRADIENT,      // Alias for PATH (gradient-based building)
+    PYRAMID,       // Tower-like building with progressive horizontal resampling
+    ROOM           // Reusable rooms connected through gold doorway sockets
     ;
 
     private static final BuildMode[] VALUES = values();
@@ -26,10 +27,10 @@ public enum BuildMode {
      * Packet codec for serializing BuildMode over the network.
      * Uses ordinal for efficiency (values must not be reordered).
      */
-    public static final PacketCodec<RegistryByteBuf, BuildMode> PACKET_CODEC =
-            new PacketCodec<RegistryByteBuf, BuildMode>() {
+    public static final StreamCodec<RegistryFriendlyByteBuf, BuildMode> PACKET_CODEC =
+            new StreamCodec<RegistryFriendlyByteBuf, BuildMode>() {
                 @Override
-                public BuildMode decode(RegistryByteBuf buf) {
+                public BuildMode decode(RegistryFriendlyByteBuf buf) {
                     int ordinal = buf.readVarInt();
                     if (ordinal >= 0 && ordinal < VALUES.length) {
                         return VALUES[ordinal];
@@ -38,7 +39,7 @@ public enum BuildMode {
                 }
 
                 @Override
-                public void encode(RegistryByteBuf buf, BuildMode value) {
+                public void encode(RegistryFriendlyByteBuf buf, BuildMode value) {
                     buf.writeVarInt(value.ordinal());
                 }
             };
@@ -47,7 +48,7 @@ public enum BuildMode {
      * Check if this mode uses the group-based UI (Wall, Tower, Tree).
      */
     public boolean isGroupMode() {
-        return this == WALL || this == TOWER || this == TREE;
+        return this == WALL || this == TOWER || this == TREE || this == PYRAMID || this == ROOM;
     }
 
     /**
@@ -55,5 +56,16 @@ public enum BuildMode {
      */
     public boolean isGradientMode() {
         return this == PATH || this == GRADIENT;
+    }
+
+    /**
+     * Whether a resource-starved golem should return to the position where this build started.
+     * Digging modes manage their own return and idle behavior.
+     */
+    public boolean returnsToBuildStartWhenOutOfBlocks() {
+        return switch (this) {
+            case PATH, WALL, TOWER, TERRAFORMING, TREE, GRADIENT, PYRAMID, ROOM -> true;
+            case MINING, EXCAVATION, TUNNEL -> false;
+        };
     }
 }

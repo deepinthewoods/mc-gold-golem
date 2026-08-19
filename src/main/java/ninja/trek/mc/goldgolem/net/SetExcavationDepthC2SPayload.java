@@ -1,23 +1,23 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
-public record SetExcavationDepthC2SPayload(int entityId, int depth) implements CustomPayload {
+public record SetExcavationDepthC2SPayload(int entityId, int depth) implements CustomPacketPayload {
 
     public SetExcavationDepthC2SPayload {
         depth = PayloadValidator.clampInt(depth, 1, 64, "depth");
     }
 
-    public static final Id<SetExcavationDepthC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_excavation_depth"));
-    public static final PacketCodec<RegistryByteBuf, SetExcavationDepthC2SPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, SetExcavationDepthC2SPayload::entityId,
-            PacketCodecs.VAR_INT, SetExcavationDepthC2SPayload::depth,
+    public static final Type<SetExcavationDepthC2SPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "set_excavation_depth"));
+    public static final StreamCodec<RegistryFriendlyByteBuf, SetExcavationDepthC2SPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, SetExcavationDepthC2SPayload::entityId,
+            ByteBufCodecs.VAR_INT, SetExcavationDepthC2SPayload::depth,
             SetExcavationDepthC2SPayload::new
     );
     @Override
-    public Id<SetExcavationDepthC2SPayload> getId() { return ID; }
+    public Type<SetExcavationDepthC2SPayload> type() { return ID; }
 }

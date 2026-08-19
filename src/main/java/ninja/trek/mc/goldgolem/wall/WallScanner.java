@@ -1,18 +1,17 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Summon-time wall-mode scanner.
@@ -32,9 +31,9 @@ public final class WallScanner {
         public boolean ok() { return def != null && (error == null || error.isEmpty()); }
     }
 
-    public static Result scan(World world, BlockPos goldPos, PlayerEntity summoner) {
+    public static Result scan(Level world, BlockPos goldPos, Player summoner) {
         // Determine the block the player is standing on (one below feet)
-        BlockPos playerGround = summoner == null ? null : summoner.getBlockPos().down();
+        BlockPos playerGround = summoner == null ? null : summoner.blockPosition().below();
 
         // Canonicalize ground-equivalence only if the player stands on a ground type
         boolean unifyGround = false;
@@ -59,11 +58,11 @@ public final class WallScanner {
         while (!queue.isEmpty()) {
             BlockPos cur = queue.removeFirst();
             for (Direction d : NEIGHBORS) {
-                BlockPos n = cur.offset(d);
+                BlockPos n = cur.relative(d);
                 if (visited.contains(n)) continue;
                 // exclude snow layers
                 BlockState st = world.getBlockState(n);
-                if (st.isOf(Blocks.SNOW)) continue;
+                if (st.is(Blocks.SNOW)) continue;
                 // Ignore the type of block the player is standing on (skip all of that type in the fill)
                 if (groundType != null) {
                     Block nb = st.getBlock();
@@ -85,7 +84,7 @@ public final class WallScanner {
                 max = new BlockPos(Math.max(max.getX(), n.getX()), Math.max(max.getY(), n.getY()), Math.max(max.getZ(), n.getZ()));
 
                 if (visited.size() > MAX_VOXELS) {
-                    return new Result(null, "Wall scan exceeded 4096 blocks");
+                    return new Result(null, "Wall scan exceeded " + MAX_VOXELS + " blocks");
                 }
                 if ((max.getX() - min.getX() + 1) > MAX_EXTENT ||
                         (max.getY() - min.getY() + 1) > MAX_EXTENT ||
@@ -104,10 +103,10 @@ public final class WallScanner {
         for (BlockPos abs : visited) {
             BlockState st = world.getBlockState(abs);
             Block b = st.getBlock();
-            String id = Registries.BLOCK.getId(b).toString();
+            String id = BuiltInRegistries.BLOCK.getKey(b).toString();
             // Unify ground ids if requested
             if (unifyGround && (b == Blocks.GRASS_BLOCK || b == Blocks.DIRT || b == Blocks.DIRT_PATH)) {
-                id = Registries.BLOCK.getId(Blocks.DIRT).toString();
+                id = BuiltInRegistries.BLOCK.getKey(Blocks.DIRT).toString();
             }
             if (uniqSet.add(id)) uniques.add(id);
             BlockPos r = abs.subtract(goldPos);
@@ -115,7 +114,7 @@ public final class WallScanner {
             if (b == Blocks.GOLD_BLOCK) golds.add(r);
         }
 
-        WallDefinition def = new WallDefinition(goldPos.toImmutable(), rel, golds, uniques);
+        WallDefinition def = new WallDefinition(goldPos.immutable(), rel, golds, uniques);
         return new Result(def, null);
     }
 

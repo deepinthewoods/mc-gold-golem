@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.util.math.BlockPos;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
 
 /**
  * Represents a single input module captured during Tree Mode scanning.
@@ -20,7 +19,7 @@ public final class TreeModule {
 
     private static BlockPos calculateCentroid(Set<BlockPos> voxels) {
         if (voxels.isEmpty()) {
-            return BlockPos.ORIGIN;
+            return BlockPos.ZERO;
         }
         long sumX = 0, sumY = 0, sumZ = 0;
         for (BlockPos pos : voxels) {

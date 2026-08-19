@@ -1,13 +1,13 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.particle.BlockStateParticleEffect;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.BlockParticleOption;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.Container;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.state.BlockState;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 /**
@@ -53,9 +53,9 @@ public class GradientMiningHelper {
      */
     public boolean tickMining(GoldGolemEntity entity, boolean isLeftHand) {
         if (target == null) return true;
-        if (entity.getEntityWorld().isClient()) return false;
+        if (entity.level().isClientSide()) return false;
 
-        BlockState state = entity.getEntityWorld().getBlockState(target);
+        BlockState state = entity.level().getBlockState(target);
         if (state.isAir()) {
             reset(entity);
             return true;
@@ -64,14 +64,14 @@ public class GradientMiningHelper {
         int breakId = isLeftHand ? entity.getId() : entity.getId() + 1000;
 
         // Find best tool if needed
-        if (tool.isEmpty() || !tool.isSuitableFor(state)) {
+        if (tool.isEmpty() || !tool.isCorrectToolForDrops(state)) {
             tool = findBestTool(entity, state);
         }
 
-        float breakSpeed = tool.isEmpty() ? 1.0f : tool.getMiningSpeedMultiplier(state);
+        float breakSpeed = tool.isEmpty() ? 1.0f : tool.getDestroySpeed(state);
         breakSpeed *= 0.25f; // 4x player time
 
-        float hardness = state.getHardness(entity.getEntityWorld(), target);
+        float hardness = state.getDestroySpeed(entity.level(), target);
         if (hardness < 0) {
             // Unbreakable block
             reset(entity);
@@ -91,10 +91,10 @@ public class GradientMiningHelper {
         }
 
         // Update breaking overlay (stages 0-9)
-        if (entity.getEntityWorld() instanceof ServerWorld sw) {
+        if (entity.level() instanceof ServerLevel sw) {
             int breakStage = (int) ((float) breakProgress / requiredTicks * 10.0f);
             breakStage = Math.min(9, Math.max(0, breakStage));
-            sw.setBlockBreakingInfo(breakId, target, breakStage);
+            sw.destroyBlockProgress(breakId, target, breakStage);
         }
 
         // Arm swing animation + particles
@@ -102,9 +102,9 @@ public class GradientMiningHelper {
             swingTick = 0;
             entity.beginHandAnimation(isLeftHand, target, null);
 
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
-                sw.spawnParticles(particleEffect,
+            if (entity.level() instanceof ServerLevel sw) {
+                BlockParticleOption particleEffect = new BlockParticleOption(ParticleTypes.BLOCK, state);
+                sw.sendParticles(particleEffect,
                         target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
                         3, 0.2, 0.2, 0.2, 0.05);
             }
@@ -112,33 +112,33 @@ public class GradientMiningHelper {
 
         if (breakProgress >= requiredTicks) {
             // Block fully broken
-            if (entity.getEntityWorld() instanceof ServerWorld sw) {
-                var drops = net.minecraft.block.Block.getDroppedStacks(state, sw, target,
-                        entity.getEntityWorld().getBlockEntity(target), entity, tool);
+            if (entity.level() instanceof ServerLevel sw) {
+                var drops = net.minecraft.world.level.block.Block.getDrops(state, sw, target,
+                        entity.level().getBlockEntity(target), entity, tool);
 
                 for (ItemStack drop : drops) {
                     addToInventory(entity, drop);
                 }
 
                 // Clear breaking overlay
-                sw.setBlockBreakingInfo(breakId, target, -1);
+                sw.destroyBlockProgress(breakId, target, -1);
 
                 // Burst of particles
-                BlockStateParticleEffect particleEffect = new BlockStateParticleEffect(ParticleTypes.BLOCK, state);
-                sw.spawnParticles(particleEffect,
+                BlockParticleOption particleEffect = new BlockParticleOption(ParticleTypes.BLOCK, state);
+                sw.sendParticles(particleEffect,
                         target.getX() + 0.5, target.getY() + 0.5, target.getZ() + 0.5,
                         30, 0.4, 0.4, 0.4, 0.15);
             }
 
-            entity.getEntityWorld().breakBlock(target, false);
+            entity.level().destroyBlock(target, false);
 
             // Damage tool
-            if (!tool.isEmpty() && tool.isDamageable()) {
-                tool.damage(1, entity, EquipmentSlot.MAINHAND);
-                Inventory inventory = entity.getInventory();
-                for (int i = 0; i < inventory.size(); i++) {
-                    if (inventory.getStack(i) == tool) {
-                        inventory.setStack(i, tool);
+            if (!tool.isEmpty() && tool.isDamageableItem()) {
+                tool.hurtAndBreak(1, entity, EquipmentSlot.MAINHAND);
+                Container inventory = entity.getInventory();
+                for (int i = 0; i < inventory.getContainerSize(); i++) {
+                    if (inventory.getItem(i) == tool) {
+                        inventory.setItem(i, tool);
                         break;
                     }
                 }
@@ -155,9 +155,9 @@ public class GradientMiningHelper {
      * Reset mining state and clear overlays.
      */
     public void reset(GoldGolemEntity entity) {
-        if (target != null && entity != null && entity.getEntityWorld() instanceof ServerWorld sw) {
-            sw.setBlockBreakingInfo(entity.getId(), target, -1);
-            sw.setBlockBreakingInfo(entity.getId() + 1000, target, -1);
+        if (target != null && entity != null && entity.level() instanceof ServerLevel sw) {
+            sw.destroyBlockProgress(entity.getId(), target, -1);
+            sw.destroyBlockProgress(entity.getId() + 1000, target, -1);
         }
         target = null;
         breakProgress = 0;
@@ -173,13 +173,13 @@ public class GradientMiningHelper {
         ItemStack bestTool = ItemStack.EMPTY;
         float bestSpeed = 1.0f;
 
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
         int[] cachedToolSlots = toolCache.getToolSlots(inventory, inventoryVersion);
 
         for (int i : cachedToolSlots) {
-            ItemStack stack = inventory.getStack(i);
-            if (stack.isEmpty() || !stack.isSuitableFor(state)) continue;
-            float speed = stack.getMiningSpeedMultiplier(state);
+            ItemStack stack = inventory.getItem(i);
+            if (stack.isEmpty() || !stack.isCorrectToolForDrops(state)) continue;
+            float speed = stack.getDestroySpeed(state);
             if (speed > bestSpeed) {
                 bestSpeed = speed;
                 bestTool = stack;
@@ -200,36 +200,36 @@ public class GradientMiningHelper {
     private static void addToInventory(GoldGolemEntity entity, ItemStack stack) {
         if (stack.isEmpty()) return;
 
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
 
         // Try stacking with existing items
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack slot = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack slot = inventory.getItem(i);
             if (slot.isEmpty()) continue;
 
-            if (ItemStack.areItemsAndComponentsEqual(stack, slot)) {
-                int space = slot.getMaxCount() - slot.getCount();
+            if (ItemStack.isSameItemSameComponents(stack, slot)) {
+                int space = slot.getMaxStackSize() - slot.getCount();
                 if (space > 0) {
                     int toAdd = Math.min(space, stack.getCount());
                     slot.setCount(slot.getCount() + toAdd);
-                    inventory.setStack(i, slot);
-                    stack.decrement(toAdd);
+                    inventory.setItem(i, slot);
+                    stack.shrink(toAdd);
                     if (stack.isEmpty()) return;
                 }
             }
         }
 
         // Try empty slots
-        for (int i = 0; i < inventory.size(); i++) {
-            if (inventory.getStack(i).isEmpty()) {
-                inventory.setStack(i, stack.copy());
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (inventory.getItem(i).isEmpty()) {
+                inventory.setItem(i, stack.copy());
                 return;
             }
         }
 
         // Inventory full - drop on ground
-        if (entity.getEntityWorld() instanceof ServerWorld sw) {
-            entity.dropStack(sw, stack);
+        if (entity.level() instanceof ServerLevel sw) {
+            entity.spawnAtLocation(sw, stack);
         }
     }
 }

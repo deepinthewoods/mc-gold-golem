@@ -1,10 +1,9 @@
 package ninja.trek.mc.goldgolem.terraforming;
 
-import net.minecraft.block.Block;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.List;
 import java.util.Set;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.Block;
 
 /**
  * Holds the terraforming skeleton definition captured during scanning.

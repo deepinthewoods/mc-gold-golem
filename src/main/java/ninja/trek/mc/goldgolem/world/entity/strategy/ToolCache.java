@@ -1,13 +1,12 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.Blocks;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.registry.Registries;
-
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.Container;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
 
 /**
  * Cache for tool slot positions in an inventory.
@@ -35,7 +34,7 @@ public class ToolCache {
      * @param currentVersion A version number that changes when inventory is modified
      * @return Array of slot indices containing tools
      */
-    public int[] getToolSlots(Inventory inventory, int currentVersion) {
+    public int[] getToolSlots(Container inventory, int currentVersion) {
         if (toolSlots == null || currentVersion != inventoryVersion) {
             toolSlots = scanForTools(inventory);
             inventoryVersion = currentVersion;
@@ -46,10 +45,10 @@ public class ToolCache {
     /**
      * Scan the inventory for tools and return their slot indices.
      */
-    private int[] scanForTools(Inventory inventory) {
+    private int[] scanForTools(Container inventory) {
         List<Integer> slots = new ArrayList<>();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (isTool(stack)) {
                 slots.add(i);
             }
@@ -72,14 +71,14 @@ public class ToolCache {
         }
 
         // Check for tools by item ID pattern (covers vanilla and modded tools)
-        String itemId = Registries.ITEM.getId(item).toString();
+        String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
         if (itemId.contains("_pickaxe") || itemId.contains("_shovel") ||
             itemId.contains("_axe") || itemId.contains("_hoe") || itemId.contains("_sword")) {
             return true;
         }
 
         // Fallback: check if item has mining speed bonus on stone (catches unconventional tools)
-        float miningSpeed = stack.getMiningSpeedMultiplier(Blocks.STONE.getDefaultState());
+        float miningSpeed = stack.getDestroySpeed(Blocks.STONE.defaultBlockState());
         if (miningSpeed > 1.0f) {
             return true;
         }

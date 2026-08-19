@@ -1,6 +1,6 @@
 package ninja.trek.mc.goldgolem.client.screen.layout;
 
-import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 
 /**
  * Represents a self-contained UI section that knows its own size and can render itself.
@@ -45,7 +45,7 @@ public interface GuiSection {
      * @param guiX X position of the GUI on screen
      * @param guiY Y position of the GUI on screen
      */
-    void renderBackground(DrawContext context, int guiX, int guiY);
+    void renderBackground(GuiGraphicsExtractor context, int guiX, int guiY);
 
     /**
      * Render the foreground elements of this section (text, tooltips, etc.).
@@ -56,7 +56,7 @@ public interface GuiSection {
      * @param mouseX Mouse X position
      * @param mouseY Mouse Y position
      */
-    void renderForeground(DrawContext context, int guiX, int guiY, int mouseX, int mouseY);
+    void renderForeground(GuiGraphicsExtractor context, int guiX, int guiY, int mouseX, int mouseY);
 
     /**
      * Handle mouse click events in this section.
@@ -67,6 +67,26 @@ public interface GuiSection {
      * @return true if the click was handled, false otherwise
      */
     boolean handleClick(int mouseX, int mouseY, int button);
+
+    /**
+     * Handle mouse release events in this section.
+     *
+     * @param mouseX Mouse X position on screen
+     * @param mouseY Mouse Y position on screen
+     * @param button Mouse button released
+     * @return true if the release was handled, false otherwise
+     */
+    boolean handleMouseRelease(int mouseX, int mouseY, int button);
+
+    /**
+     * Handle mouse scroll events in this section.
+     *
+     * @param mouseX Mouse X position on screen
+     * @param mouseY Mouse Y position on screen
+     * @param amount Scroll amount
+     * @return true if the scroll was handled, false otherwise
+     */
+    boolean handleMouseScroll(double mouseX, double mouseY, double amount);
 
     /**
      * Check if this section can be paginated (content scrollable when space is limited).

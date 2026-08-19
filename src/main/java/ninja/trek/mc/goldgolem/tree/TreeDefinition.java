@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.util.math.BlockPos;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
 
 /**
  * Captured Tree Mode data from summon-time scan.
@@ -13,12 +12,20 @@ public final class TreeDefinition {
     public final BlockPos origin; // second gold block position used as scan origin
     public final List<TreeModule> modules; // individual input modules
     public final List<String> uniqueBlockIds; // block registry IDs across all modules (e.g. minecraft:oak_log)
+    public final String groundBlockId; // nullable — registry ID of the ground block (e.g. "minecraft:grass_block")
+
+    /**
+     * Backward-compat 3-arg constructor (groundBlockId = null).
+     */
+    public TreeDefinition(BlockPos origin, List<TreeModule> modules, List<String> uniqueBlockIds) {
+        this(origin, modules, uniqueBlockIds, null);
+    }
 
     /**
      * E7: Constructor with validation to ensure all required fields are present and valid.
      * @throws IllegalArgumentException if any argument is null or empty
      */
-    public TreeDefinition(BlockPos origin, List<TreeModule> modules, List<String> uniqueBlockIds) {
+    public TreeDefinition(BlockPos origin, List<TreeModule> modules, List<String> uniqueBlockIds, String groundBlockId) {
         // E7: Validate all parameters
         if (origin == null) {
             throw new IllegalArgumentException("Tree origin cannot be null");
@@ -45,9 +52,10 @@ public final class TreeDefinition {
             }
         }
 
-        this.origin = origin.toImmutable();
+        this.origin = origin.immutable();
         this.modules = Collections.unmodifiableList(new ArrayList<>(modules));
         this.uniqueBlockIds = Collections.unmodifiableList(new ArrayList<>(uniqueBlockIds));
+        this.groundBlockId = groundBlockId;
     }
 
     public int getTotalVoxelCount() {

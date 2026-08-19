@@ -1,11 +1,5 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.util.math.BlockPos;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tower.TowerModuleTemplate;
 import ninja.trek.mc.goldgolem.util.GradientGroupManager;
@@ -16,6 +10,12 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 /**
  * Strategy for Tower building mode.
@@ -30,7 +30,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     private final GradientGroupManager groups = new GradientGroupManager();
 
     // Gradient mining helper for mine-action slots
-    private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
+    protected final GradientMiningHelper gradientMiner = new GradientMiningHelper();
 
     // Tower building state
     private int currentLayerY = 0;           // Current Y layer being processed
@@ -60,7 +60,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         tickTowerMode(golem, owner);
     }
 
@@ -77,7 +77,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         nbt.putInt("CurrentLayerY", currentLayerY);
         nbt.putBoolean("LayerInitialized", layerInitialized);
         nbt.putInt("TotalHeight", totalHeight);
@@ -86,7 +86,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
         // Save planner state
         if (planner != null) {
-            NbtCompound plannerNbt = new NbtCompound();
+            CompoundTag plannerNbt = new CompoundTag();
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
@@ -96,12 +96,12 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
-        currentLayerY = nbt.getInt("CurrentLayerY", 0);
-        layerInitialized = nbt.getBoolean("LayerInitialized", false);
-        totalHeight = nbt.getInt("TotalHeight", 0);
-        lowestLoadedY = nbt.getInt("LowestLoadedY", 0);
-        highestLoadedY = nbt.getInt("HighestLoadedY", -1);
+    public void readNbt(CompoundTag nbt) {
+        currentLayerY = nbt.getIntOr("CurrentLayerY", 0);
+        layerInitialized = nbt.getBooleanOr("LayerInitialized", false);
+        totalHeight = nbt.getIntOr("TotalHeight", 0);
+        lowestLoadedY = nbt.getIntOr("LowestLoadedY", 0);
+        highestLoadedY = nbt.getIntOr("HighestLoadedY", -1);
 
         if (planner != null) {
             nbt.getCompound("Planner").ifPresent(planner::readNbt);
@@ -156,7 +156,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     // ========== Polymorphic Dispatch Methods ==========
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
@@ -173,35 +173,40 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
     @Override
     public void onConfigurationChanged(String configKey) {
-        if ("towerOrigin".equals(configKey)) {
+        if ("towerOrigin".equals(configKey)
+                || "towerHeight".equals(configKey)
+                || "towerGradient".equals(configKey)) {
             clearState();
+            if (entity != null) {
+                totalHeight = entity.getTowerHeight();
+            }
         }
     }
 
     @Override
-    public void writeLegacyNbt(WriteView view) {
+    public void writeLegacyNbt(ValueOutput view) {
         view.putInt("TowerCurrentY", currentLayerY);
         view.putBoolean("TowerLayerInitialized", layerInitialized);
         if (planner != null) {
-            planner.writeView(view.get("TowerPlanner"));
+            planner.writeView(view.child("TowerPlanner"));
         }
     }
 
     @Override
-    public void readLegacyNbt(ReadView view) {
-        currentLayerY = view.getInt("TowerCurrentY", 0);
-        layerInitialized = view.getBoolean("TowerLayerInitialized", false);
+    public void readLegacyNbt(ValueInput view) {
+        currentLayerY = view.getIntOr("TowerCurrentY", 0);
+        layerInitialized = view.getBooleanOr("TowerLayerInitialized", false);
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
-            view.getOptionalReadView("TowerPlanner").ifPresent(planner::readView);
+            view.child("TowerPlanner").ifPresent(planner::readView);
         }
     }
 
     // ========== Main tick logic ==========
 
-    private void tickTowerMode(GoldGolemEntity golem, PlayerEntity owner) {
+    private void tickTowerMode(GoldGolemEntity golem, Player owner) {
         if (!golem.isBuildingPaths()) return;
 
         TowerModuleTemplate template = golem.getTowerTemplate();
@@ -265,7 +270,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
             // Set up exclusion zone filter (inverted pyramid above golem)
             planner.setBlockFilter(pos -> {
-                BlockPos golemFeet = golem.getBlockPos();
+                BlockPos golemFeet = golem.blockPosition();
                 int dy = pos.getY() - golemFeet.getY();
                 if (dy <= 0) return false; // Only exclude above
                 int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
@@ -276,13 +281,13 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
             // Set up neighbor scorer
             planner.setBlockScorer(pos -> {
-                var world = golem.getEntityWorld();
+                var world = golem.level();
                 int neighbors = 0;
                 if (!world.getBlockState(pos.north()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.south()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.east()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.west()).isAir()) neighbors++;
-                if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.below()).isAir()) neighbors++;
                 return neighbors;
             });
 
@@ -313,7 +318,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             case PLACED_BLOCK:
                 alternateHand();
                 // Check if lowest loaded layer is now complete — slide window up
-                if (!planner.hasBlocksAtY(lowestLoadedY)) {
+                int lowestLoadedWorldY = getBuildBaseY(origin) + lowestLoadedY;
+                if (!planner.hasBlocksAtY(lowestLoadedWorldY)) {
                     lowestLoadedY++;
                     currentLayerY = lowestLoadedY;
                     // Load next layer at highestLoadedY + 1 if available
@@ -370,7 +376,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     /**
      * Get all voxels for a specific Y layer.
      */
-    private List<BlockPos> getLayerVoxels(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, int layerY) {
+    protected List<BlockPos> getLayerVoxels(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, int layerY) {
         if (template == null) return List.of();
 
         List<BlockPos> layerVoxels = new ArrayList<>();
@@ -378,7 +384,6 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         if (moduleHeight == 0) return layerVoxels;
 
         // Determine which module repetition we're in and the Y offset within that module
-        int moduleIndex = layerY / moduleHeight;
         int yWithinModule = layerY % moduleHeight;
         int relYTarget = template.minY + yWithinModule;
 
@@ -386,8 +391,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         for (var voxel : template.voxels) {
             int relY = voxel.rel.getY();
             if (relY == relYTarget) {
-                // Calculate absolute position: origin + module offset + voxel relative position
-                int absoluteY = origin.getY() + (moduleIndex * moduleHeight) + relY;
+                // Layer zero replaces the supporting base block. The requested height therefore
+                // includes that base instead of starting in the air above it.
+                int absoluteY = getBuildBaseY(origin) + layerY;
                 BlockPos absPos = new BlockPos(
                         origin.getX() + voxel.rel.getX(),
                         absoluteY,
@@ -404,8 +410,8 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
      * Place a tower block with gradient sampling.
      * @return true if the block was placed
      */
-    private boolean placeTowerBlock(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos, BlockPos nextPos) {
-        if (golem.getEntityWorld().isClient()) return false;
+    protected boolean placeTowerBlock(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos, BlockPos nextPos) {
+        if (golem.level().isClientSide()) return false;
 
         // Get the original block state from the template
         BlockState templateState = getTowerBlockStateAt(template, origin, pos);
@@ -414,55 +420,43 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             return false;
         }
 
-        // Use gradient sampling to potentially replace with a different block
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(templateState.getBlock()).toString();
-        Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
-        if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
-            // No group mapping, place original block
-            return golem.placeBlockFromInventoryWithTemplate(pos, templateState, templateState, nextPos, isLeftHandActive());
-        }
-
-        // Sample gradient based on Y position in total tower (not module)
-        String[] slots = golem.getTowerGroupSlots().get(groupIdx);
-        float window = (groupIdx < golem.getTowerGroupWindows().size()) ? golem.getTowerGroupWindows().get(groupIdx) : 1.0f;
-        int noiseScale = (groupIdx < golem.getTowerGroupNoiseScales().size()) ? golem.getTowerGroupNoiseScales().get(groupIdx) : 1;
-        int sampledIndex = sampleTowerGradient(golem, slots, window, noiseScale, pos);
-
-        if (sampledIndex >= 0 && sampledIndex < 9) {
-            String sampledId = slots[sampledIndex];
-            if (sampledId != null && !sampledId.isEmpty()) {
-                // Check for mine action
-                if (GradientSlotUtil.isMineAction(sampledId)) {
-                    gradientMiner.startMining(pos);
-                    return false; // will mine over subsequent ticks
+        TowerTarget target = resolveTowerTarget(golem, template, origin, pos, templateState);
+        return switch (target.action()) {
+            case PLACE -> golem.placeBlockFromInventoryWithTemplate(
+                    pos, templateState, target.state(), nextPos, isLeftHandActive());
+            case REMOVE -> golem.removeBlockToInventory(pos, nextPos, isLeftHandActive());
+            case MINE -> {
+                if (golem.level().getBlockState(pos).isAir()) {
+                    yield true;
                 }
-                BlockState sampledState = golem.getBlockStateFromId(sampledId);
-                if (sampledState != null) {
-                    // Pass both template state and sampled state for proper block state preservation
-                    return golem.placeBlockFromInventoryWithTemplate(pos, templateState, sampledState, nextPos, isLeftHandActive());
-                }
+                gradientMiner.startMining(pos);
+                yield false;
             }
-            // Sampled slot is empty - skip this block entirely (don't fall back to original)
-            return true;
-        }
-
-        // No valid sample index (G == 0, all slots empty) - skip this block entirely
-        return true;
+            case SKIP -> true;
+        };
     }
 
-    private BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
+    protected int getBuildBaseY(BlockPos origin) {
+        return origin.getY() - 1;
+    }
+
+    protected int getLayerY(BlockPos origin, BlockPos pos) {
+        return pos.getY() - getBuildBaseY(origin);
+    }
+
+    protected BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
         if (template == null || origin == null) return null;
 
         int moduleHeight = template.moduleHeight;
         if (moduleHeight == 0) return null;
 
-        // Calculate relative position from tower origin
+        // Calculate relative position from the footprint and base-inclusive layer zero.
         int relX = pos.getX() - origin.getX();
-        int relY = pos.getY() - origin.getY();
+        int layerY = getLayerY(origin, pos);
         int relZ = pos.getZ() - origin.getZ();
 
         // Determine Y within module
-        int yWithinModule = Math.floorMod(relY - template.minY, moduleHeight) + template.minY;
+        int yWithinModule = Math.floorMod(layerY, moduleHeight) + template.minY;
 
         // Find matching voxel in template
         for (var voxel : template.voxels) {
@@ -478,59 +472,72 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
      * Check if the correct block is already at the given position.
      * Used to skip blocks when resuming a build.
      */
-    private boolean isBlockAlreadyCorrect(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
-        BlockState expectedState = getExpectedBlockState(golem, template, origin, pos);
-        if (expectedState == null) {
-            // No expected state means this position should be skipped anyway
-            return true;
-        }
-
-        BlockState currentState = golem.getEntityWorld().getBlockState(pos);
-        return currentState.getBlock() == expectedState.getBlock();
+    protected boolean isBlockAlreadyCorrect(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
+        BlockState templateState = getTowerBlockStateAt(template, origin, pos);
+        if (templateState == null) return true;
+        TowerTarget target = resolveTowerTarget(golem, template, origin, pos, templateState);
+        BlockState currentState = golem.level().getBlockState(pos);
+        return switch (target.action()) {
+            case PLACE -> currentState.getBlock() == target.state().getBlock();
+            case REMOVE, MINE -> currentState.isAir();
+            case SKIP -> true;
+        };
     }
 
     /**
      * Get the expected block state at a position, applying gradient sampling.
-     * Returns null if the position should be skipped (empty gradient slot).
+     * Returns null for remove, mine, and no-op gradient targets.
      */
-    private BlockState getExpectedBlockState(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
-        // Get the original block state from the template
-        BlockState targetState = getTowerBlockStateAt(template, origin, pos);
-        if (targetState == null) {
-            return null;
-        }
+    protected BlockState getExpectedBlockState(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
+        BlockState templateState = getTowerBlockStateAt(template, origin, pos);
+        if (templateState == null) return null;
+        TowerTarget target = resolveTowerTarget(golem, template, origin, pos, templateState);
+        return target.action() == TowerTargetAction.PLACE ? target.state() : null;
+    }
 
-        // Check if gradient sampling applies
-        String blockId = net.minecraft.registry.Registries.BLOCK.getId(targetState.getBlock()).toString();
+    private TowerTarget resolveTowerTarget(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin,
+                                            BlockPos pos, BlockState templateState) {
+        String blockId = net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                .getKey(templateState.getBlock()).toString();
         Integer groupIdx = golem.getTowerBlockGroup().get(blockId);
         if (groupIdx == null || groupIdx < 0 || groupIdx >= golem.getTowerGroupSlots().size()) {
-            // No group mapping, use original block
-            return targetState;
+            return new TowerTarget(TowerTargetAction.PLACE, templateState);
         }
 
-        // Sample gradient based on Y position in total tower
         String[] slots = golem.getTowerGroupSlots().get(groupIdx);
         float window = (groupIdx < golem.getTowerGroupWindows().size()) ? golem.getTowerGroupWindows().get(groupIdx) : 1.0f;
         int noiseScale = (groupIdx < golem.getTowerGroupNoiseScales().size()) ? golem.getTowerGroupNoiseScales().get(groupIdx) : 1;
-        int sampledIndex = sampleTowerGradient(golem, slots, window, noiseScale, pos);
-
-        if (sampledIndex >= 0 && sampledIndex < 9) {
-            String sampledId = slots[sampledIndex];
-            if (sampledId != null && !sampledId.isEmpty()) {
-                BlockState sampledState = golem.getBlockStateFromId(sampledId);
-                if (sampledState != null) {
-                    return sampledState;
-                }
-            }
-            // Sampled slot is empty - this position should be skipped
-            return null;
+        int sampledIndex = sampleTowerGradient(golem, template, origin, slots, window, noiseScale, pos);
+        if (sampledIndex < 0 || sampledIndex >= slots.length) {
+            // A completely unconfigured group is a no-op, not an instruction to erase its blocks.
+            return new TowerTarget(TowerTargetAction.SKIP, null);
         }
 
-        // No valid sample index (G == 0, all slots empty) - should be skipped
-        return null;
+        String sampledId = slots[sampledIndex];
+        if (sampledId == null || sampledId.isEmpty()) {
+            return new TowerTarget(TowerTargetAction.REMOVE, null);
+        }
+        if (GradientSlotUtil.isMineAction(sampledId)) {
+            return new TowerTarget(TowerTargetAction.MINE, null);
+        }
+        BlockState sampledState = golem.getBlockStateFromId(sampledId);
+        return sampledState == null
+                ? new TowerTarget(TowerTargetAction.SKIP, null)
+                : new TowerTarget(TowerTargetAction.PLACE, sampledState);
     }
 
-    private int sampleTowerGradient(GoldGolemEntity golem, String[] slots, float window, int noiseScale, BlockPos pos) {
+    private enum TowerTargetAction {
+        PLACE,
+        REMOVE,
+        MINE,
+        SKIP
+    }
+
+    private record TowerTarget(TowerTargetAction action, BlockState state) {
+    }
+
+    protected int sampleTowerGradient(GoldGolemEntity golem, TowerModuleTemplate template, BlockPos origin,
+                                    String[] slots, float window, int noiseScale, BlockPos pos) {
         int height = golem.getTowerHeight();
         if (height == 0) return -1;
 
@@ -544,8 +551,14 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         }
         if (G == 0) return -1;
 
-        // Map Y position in tower to gradient space [0, G-1]
-        double s = ((double) currentLayerY / (double) height) * (G - 1);
+        // Derive the layer from the position itself. The planner holds several layers at once,
+        // so using the moving currentLayerY cursor made a queued block's expected material change.
+        int layerY = getLayerY(origin, pos);
+        layerY = Math.max(0, Math.min(height - 1, layerY));
+
+        // Map the full tower height to gradient space [0, G-1].
+        double heightFraction = height == 1 ? 0.0 : (double) layerY / (double) (height - 1);
+        double s = heightFraction * (G - 1);
 
         // Apply windowing
         float W = Math.min(window, G);
