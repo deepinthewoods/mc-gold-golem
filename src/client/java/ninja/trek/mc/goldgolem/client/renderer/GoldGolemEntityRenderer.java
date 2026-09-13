@@ -1,43 +1,42 @@
 package ninja.trek.mc.goldgolem.client.renderer;
 
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import net.minecraft.client.gl.RenderPipelines;
-import net.minecraft.client.render.OverlayTexture;
-import net.minecraft.client.render.RenderLayer;
-import net.minecraft.client.render.RenderPhase;
-import net.minecraft.client.render.VertexConsumer;
-import net.minecraft.client.render.VertexFormats;
-import net.minecraft.client.render.command.OrderedRenderCommandQueue;
-import net.minecraft.client.render.entity.EntityRenderer;
-import net.minecraft.client.render.entity.EntityRendererFactory;
-import net.minecraft.client.render.entity.state.EntityRenderState;
-import net.minecraft.client.item.ItemModelManager;
-import net.minecraft.client.render.item.ItemRenderState;
-import net.minecraft.client.render.state.CameraRenderState;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.item.ItemDisplayContext;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.RotationAxis;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.math.Axis;
+import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.client.renderer.SubmitNodeCollector;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.EntityRendererProvider;
+import net.minecraft.client.renderer.entity.state.EntityRenderState;
+import net.minecraft.client.renderer.item.ItemModelResolver;
+import net.minecraft.client.renderer.item.ItemStackRenderState;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.client.renderer.texture.OverlayTexture;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
+import net.minecraft.world.item.ItemDisplayContext;
+import net.minecraft.world.item.ItemStack;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.client.model.GoldGolemModelLoader;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
 public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, GoldGolemEntityRenderer.GoldGolemRenderState> {
-    private static final Identifier TEXTURE = Identifier.of("gold-golem", "textures/entity/goldgolem.png");
-    private static final RenderLayer GOLD_GOLEM_TRIANGLES_LAYER = createLayer();
+    private static final Identifier TEXTURE = Identifier.fromNamespaceAndPath("gold-golem", "textures/entity/goldgolem.png");
+    private static final RenderType GOLD_GOLEM_TRIANGLES_LAYER = RenderTypes.entitySolid(TEXTURE);
+    private static final float DEATH_TRANSFORM_FINAL_SCALE = 0.28f;
+    private static final float DEATH_TRANSFORM_SPIN_DEGREES = 720.0f;
 
     // Relative rotation speeds for each wheel set (inversely proportional to wheel diameter)
     // Calculated on first render based on actual mesh extents
     private static float[] wheelSpeedMultipliers = null;
 
     // Item rendering
-    private final ItemModelManager itemModelManager;
+    private final ItemModelResolver itemModelManager;
 
-    public GoldGolemEntityRenderer(EntityRendererFactory.Context ctx) {
+    public GoldGolemEntityRenderer(EntityRendererProvider.Context ctx) {
         super(ctx);
-        this.itemModelManager = ctx.getItemModelManager();
+        this.itemModelManager = ctx.getItemModelResolver();
     }
 
     public static class GoldGolemRenderState extends EntityRenderState {
@@ -54,10 +53,11 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         public float rightArmRotation;
         public float leftArmYaw;
         public float rightArmYaw;
+        public float deathAnimationTicks;
         public ItemStack leftHandItem = ItemStack.EMPTY;
         public ItemStack rightHandItem = ItemStack.EMPTY;
-        public final ItemRenderState leftItemRenderState = new ItemRenderState();
-        public final ItemRenderState rightItemRenderState = new ItemRenderState();
+        public final ItemStackRenderState leftItemRenderState = new ItemStackRenderState();
+        public final ItemStackRenderState rightItemRenderState = new ItemStackRenderState();
     }
 
     @Override
@@ -66,23 +66,23 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
     }
 
     @Override
-    public void updateRenderState(GoldGolemEntity entity, GoldGolemRenderState state, float tickDelta) {
-        super.updateRenderState(entity, state, tickDelta);
+    public void extractRenderState(GoldGolemEntity entity, GoldGolemRenderState state, float tickDelta) {
+        super.extractRenderState(entity, state, tickDelta);
         state.wheelRotation = entity.getWheelRotation();
         // Map BuildMode to wheel set (6 sets available: 0-5)
         state.activeWheelSet = switch (entity.getBuildMode()) {
             case PATH, GRADIENT -> 0;  // 4-wheel config for general path building
-            case WALL -> 1;             // 2-wheel config for wall building
-            case TOWER -> 2;            // 4-wheel config for stable tower building
+            case WALL, ROOM -> 1;       // 2-wheel config for wall/room building
+            case TOWER, PYRAMID -> 2;   // 4-wheel config for stable vertical building
             case MINING -> 3;           // 2-wheel config for mining
             case EXCAVATION -> 4;       // 2-wheel config for excavation
             case TERRAFORMING -> 5;     // 1-wheel config (right side) for terraforming
             case TREE -> 0;             // Shares with PATH (4-wheel config for tree building)
             case TUNNEL -> 4;           // Shares with EXCAVATION (2-wheel config for tunnel mining)
         };
-        state.bodyYaw = entity.getBodyYaw();
-        state.pitch = entity.getPitch();
-        state.yaw = entity.getYaw();
+        state.bodyYaw = entity.yBodyRot;
+        state.pitch = entity.getXRot();
+        state.yaw = entity.getYRot();
         state.leftEyeYaw = entity.getLeftEyeYaw();
         state.leftEyePitch = entity.getLeftEyePitch();
         state.rightEyeYaw = entity.getRightEyeYaw();
@@ -91,17 +91,18 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         state.rightArmRotation = entity.getRightArmRotation();
         state.leftArmYaw = entity.getLeftArmYaw();
         state.rightArmYaw = entity.getRightArmYaw();
+        state.deathAnimationTicks = entity.isDeadOrDying() ? entity.deathTime + tickDelta : 0.0f;
         state.leftHandItem = entity.getLeftHandItem();
         state.rightHandItem = entity.getRightHandItem();
 
         // Update item render states for MC 1.21 rendering
-        this.itemModelManager.updateForLivingEntity(
+        this.itemModelManager.updateForLiving(
             state.leftItemRenderState,
             state.leftHandItem,
             ItemDisplayContext.THIRD_PERSON_LEFT_HAND,
             entity
         );
-        this.itemModelManager.updateForLivingEntity(
+        this.itemModelManager.updateForLiving(
             state.rightItemRenderState,
             state.rightHandItem,
             ItemDisplayContext.THIRD_PERSON_RIGHT_HAND,
@@ -230,15 +231,16 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         return new EyeRotation(yRotation, zRotation);
     }
 
-    public void render(
+    @Override
+    public void submit(
             GoldGolemRenderState state,
-            MatrixStack matrices,
-            OrderedRenderCommandQueue queue,
+            PoseStack matrices,
+            SubmitNodeCollector queue,
             CameraRenderState cameraState
     ) {
         var meshParts = GoldGolemModelLoader.getMeshes();
         if (meshParts.isEmpty()) {
-            super.render(state, matrices, queue, cameraState);
+            super.submit(state, matrices, queue, cameraState);
             return;
         }
 
@@ -247,15 +249,15 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
             wheelSpeedMultipliers = calculateWheelSpeedMultipliers(meshParts);
         }
 
-        matrices.push();
-        matrices.translate(0.0f, 0.0f, 0.0f);
+        matrices.pushPose();
+        applyDeathTransformation(state, matrices);
         // Rotate the entire mesh based on body yaw (movement direction)
         // Additional 180° rotation to face the correct direction
-        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(360.0f - state.bodyYaw));
+        matrices.mulPose(Axis.YP.rotationDegrees(360.0f - state.bodyYaw));
 
         var layer = GOLD_GOLEM_TRIANGLES_LAYER;
-        int overlay = OverlayTexture.DEFAULT_UV;
-        int light = state.light;
+        int overlay = OverlayTexture.NO_OVERLAY;
+        int light = state.lightCoords;
 
         // Calculate head rotation relative to body (based on look direction)
         float headYawRotation = state.yaw - state.bodyYaw;
@@ -294,7 +296,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 // Apply wheel rotation around pivot point
                 // Matrix operations are post-multiplied, so they apply right-to-left:
                 // This creates: T(+pivot) * R * T(-pivot), which gives R*(v - pivot) + pivot
-                matrices.push();
+                matrices.pushPose();
 
                 matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
@@ -306,15 +308,15 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 if (wheelInfo.part == 'b') {
                     rotationDegrees += 45.0f; // 45° offset for part 'b'
                 }
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(rotationDegrees));
+                matrices.mulPose(Axis.XP.rotationDegrees(rotationDegrees));
 
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
-                matrices.pop();
+                matrices.popPose();
             } else if (isEyeMesh) {
                 // Eye mesh: parent to head, then apply independent eye rotation
-                matrices.push();
+                matrices.pushPose();
 
                 // Determine if this is left or right eye based on pivot X position
                 // Negative X = left side, Positive X = right side
@@ -325,8 +327,8 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
 
                 // STEP 1: Apply head rotation around head's pivot (this moves the eye with the head)
                 matrices.translate(headPivotX, headPivotY, headPivotZ);
-                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(headYawRotation));
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(headPitchRotation));
+                matrices.mulPose(Axis.YP.rotationDegrees(headYawRotation));
+                matrices.mulPose(Axis.XP.rotationDegrees(headPitchRotation));
                 matrices.translate(-headPivotX, -headPivotY, -headPivotZ);
 
                 // STEP 2: Apply eye's own rotation around its own pivot
@@ -340,15 +342,15 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 EyeRotation eyeRotation = calculateEyeRotation(isLeftEye, eyeYaw, eyePitch);
 
                 // Apply Y-rotation first (0° for forward, ±90° for sideways)
-                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(eyeRotation.yRotation));
+                matrices.mulPose(Axis.YP.rotationDegrees(eyeRotation.yRotation));
 
                 // Then apply Z-rotation for quadrant selection
-                matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(eyeRotation.zRotation));
+                matrices.mulPose(Axis.ZP.rotationDegrees(eyeRotation.zRotation));
 
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
-                matrices.pop();
+                matrices.popPose();
             } else if (meshName != null && meshName.toLowerCase().contains("arm")) {
                 // Arm mesh: apply yaw (left/right) then pitch (up/down) rotation
                 boolean isLeftArm = meshName.toLowerCase().contains("arm_l");
@@ -356,27 +358,27 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                 float armYaw = isLeftArm ? state.leftArmYaw : state.rightArmYaw;
 
                 // Render the arm mesh
-                matrices.push();
+                matrices.pushPose();
                 matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
                 // First apply yaw (rotate around Y to face direction)
-                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(armYaw));
+                matrices.mulPose(Axis.YP.rotationDegrees(armYaw));
                 // Then apply pitch (rotate around X to tilt up/down)
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armPitch));
+                matrices.mulPose(Axis.XP.rotationDegrees(armPitch));
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
-                matrices.pop();
+                matrices.popPose();
 
                 // Render held item in hand - completely separate transform from base
-                ItemRenderState itemState = isLeftArm ? state.leftItemRenderState : state.rightItemRenderState;
+                ItemStackRenderState itemState = isLeftArm ? state.leftItemRenderState : state.rightItemRenderState;
                 if (itemState != null && !itemState.isEmpty()) {
-                    matrices.push();
+                    matrices.pushPose();
 
                     // Start fresh: translate to arm pivot
                     matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
                     // Apply arm rotations (yaw then pitch)
-                    matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(armYaw));
-                    matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(armPitch));
+                    matrices.mulPose(Axis.YP.rotationDegrees(armYaw));
+                    matrices.mulPose(Axis.XP.rotationDegrees(armPitch));
 
                     // Translate down the rotated arm to reach hand position
                     float armLength = 6.0f / 16.0f;  // Adjusted for pixel-to-meter scaling
@@ -386,9 +388,9 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                     matrices.translate(0.0f, 0.0f, 1.0f / 16.0f);
 
                     // Orient the item for proper grip
-                    matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(-90.0f));
+                    matrices.mulPose(Axis.XP.rotationDegrees(-90.0f));
                     if (isLeftArm) {
-                        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0f));
+                        matrices.mulPose(Axis.YP.rotationDegrees(180.0f));
                     }
 
                     // Scale item appropriately
@@ -396,42 +398,62 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
                     matrices.scale(itemScale, itemScale, itemScale);
 
                     // Render the item
-                    itemState.render(matrices, queue, light, overlay, 0);
+                    itemState.submit(matrices, queue, light, overlay, 0);
 
-                    matrices.pop();
+                    matrices.popPose();
                 }
             } else if (isHeadMesh) {
                 // Head mesh: rotate based on look direction
-                matrices.push();
+                matrices.pushPose();
 
                 matrices.translate(mesh.pivotX(), mesh.pivotY(), mesh.pivotZ());
 
                 // Apply head rotation based on look direction
-                matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(headYawRotation));
-                matrices.multiply(RotationAxis.POSITIVE_X.rotationDegrees(headPitchRotation));
+                matrices.mulPose(Axis.YP.rotationDegrees(headYawRotation));
+                matrices.mulPose(Axis.XP.rotationDegrees(headPitchRotation));
 
                 matrices.translate(-mesh.pivotX(), -mesh.pivotY(), -mesh.pivotZ());
 
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
-                matrices.pop();
+                matrices.popPose();
             } else {
                 // Non-wheel, non-eye, non-head mesh: render normally
                 renderMesh(matrices, queue, layer, mesh, overlay, light);
             }
         }
 
-        matrices.pop();
-        super.render(state, matrices, queue, cameraState);
+        matrices.popPose();
+        super.submit(state, matrices, queue, cameraState);
     }
 
-    private void renderMesh(MatrixStack matrices, OrderedRenderCommandQueue queue, RenderLayer layer,
+    private static void applyDeathTransformation(GoldGolemRenderState state, PoseStack matrices) {
+        if (state.deathAnimationTicks <= 0.0f) {
+            return;
+        }
+
+        float lastVisibleTick = GoldGolemEntity.DEATH_TRANSFORM_DURATION_TICKS - 1.0f;
+        float progress = Mth.clamp(state.deathAnimationTicks / lastVisibleTick, 0.0f, 1.0f);
+        float smoothProgress = progress * progress * (3.0f - 2.0f * progress);
+        float spinProgress = progress * progress;
+        float scale = Mth.lerp(smoothProgress, 1.0f, DEATH_TRANSFORM_FINAL_SCALE);
+        float pivotY = state.boundingBoxHeight * 0.5f;
+
+        matrices.translate(0.0f, pivotY, 0.0f);
+        matrices.mulPose(Axis.YP.rotationDegrees(DEATH_TRANSFORM_SPIN_DEGREES * spinProgress));
+        matrices.scale(scale, scale, scale);
+        matrices.translate(0.0f, -pivotY, 0.0f);
+    }
+
+    private void renderMesh(PoseStack matrices, SubmitNodeCollector queue, RenderType layer,
                            GoldGolemModelLoader.MeshPart mesh, int overlay, int light) {
-        queue.submitCustom(matrices, layer, (entry, consumer) -> {
+        queue.submitCustomGeometry(matrices, layer, (entry, consumer) -> {
             int[] indices = mesh.indices();
             if (indices.length < 3) return;
             for (int i = 0; i <= indices.length - 3; i += 3) {
+                // Emit triangle as degenerate quad (duplicate last vertex)
                 emitVertex(entry, consumer, mesh, indices[i], overlay, light);
                 emitVertex(entry, consumer, mesh, indices[i + 1], overlay, light);
+                emitVertex(entry, consumer, mesh, indices[i + 2], overlay, light);
                 emitVertex(entry, consumer, mesh, indices[i + 2], overlay, light);
             }
         });
@@ -522,20 +544,7 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         }
     }
 
-    private static RenderLayer createLayer() {
-        RenderPipeline pipeline = RenderPipeline.builder(RenderPipelines.ENTITY_SNIPPET)
-                .withLocation(Identifier.of("gold-golem", "pipeline/gold_golem_triangles"))
-                .withVertexFormat(VertexFormats.POSITION_COLOR_TEXTURE_OVERLAY_LIGHT_NORMAL, VertexFormat.DrawMode.TRIANGLES)
-                .build();
-        RenderLayer.MultiPhaseParameters params = RenderLayer.MultiPhaseParameters.builder()
-                .texture(new RenderPhase.Texture(TEXTURE, false))
-                .lightmap(RenderLayer.ENABLE_LIGHTMAP)
-                .overlay(RenderLayer.ENABLE_OVERLAY_COLOR)
-                .build(true);
-        return RenderLayer.of("gold_golem_triangles", 1536, true, true, pipeline, params);
-    }
-
-    private static void emitVertex(MatrixStack.Entry entry, VertexConsumer consumer,
+    private static void emitVertex(PoseStack.Pose entry, VertexConsumer consumer,
                                    GoldGolemModelLoader.MeshPart mesh, int vertexIndex, int overlay, int light) {
         float[] positions = mesh.positions();
         float[] normals = mesh.normals();
@@ -551,11 +560,11 @@ public class GoldGolemEntityRenderer extends EntityRenderer<GoldGolemEntity, Gol
         float u = uvs[uvBase];
         float v = uvs[uvBase + 1];
 
-        consumer.vertex(entry, px, py, pz)
-                .color(255, 255, 255, 255)
-                .texture(u, v)
-                .overlay(overlay)
-                .light(light)
-                .normal(entry, nx, ny, nz);
+        consumer.addVertex(entry, px, py, pz)
+                .setColor(255, 255, 255, 255)
+                .setUv(u, v)
+                .setOverlay(overlay)
+                .setLight(light)
+                .setNormal(entry, nx, ny, nz);
     }
 }

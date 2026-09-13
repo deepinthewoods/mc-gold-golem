@@ -2,7 +2,6 @@ package ninja.trek.mc.goldgolem.client.screen.layout;
 
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.client.screen.GolemHandledScreen;
-import ninja.trek.mc.goldgolem.client.screen.GroupModeStrategy;
 import ninja.trek.mc.goldgolem.client.screen.layout.sections.*;
 
 import java.util.ArrayList;
@@ -60,7 +59,7 @@ public class SectionFactory {
         // All modes have an inventories section at the end
         InventoriesSection inventories = new InventoriesSection(
                 golemRows,
-                screen.getTextRenderer(),
+                screen.getFont(),
                 screen.getPlayerInventoryTitle());
 
         switch (mode) {
@@ -70,7 +69,7 @@ public class SectionFactory {
                 gradientsSection = new GradientsSection(
                         GradientsSection.GradientMode.PATH,
                         screen,
-                        screen.getTextRenderer());
+                        screen.getFont());
                 sections.add(gradientsSection);
 
                 // SettingsSection for width slider (will be populated during init)
@@ -85,7 +84,7 @@ public class SectionFactory {
                 gradientsSection = new GradientsSection(
                         GradientsSection.GradientMode.TERRAFORMING,
                         screen,
-                        screen.getTextRenderer());
+                        screen.getFont());
                 sections.add(gradientsSection);
 
                 // SettingsSection for radius slider (will be populated during init)
@@ -121,13 +120,12 @@ public class SectionFactory {
 
             case WALL:
             case TOWER:
+            case PYRAMID:
             case TREE:
-                // GroupModeSection (paginable)
-                GroupModeStrategy strategy = screen.getGroupModeStrategy();
-                if (strategy != null) {
-                    groupModeSection = new GroupModeSection(strategy, screen.getTextRenderer());
-                    sections.add(groupModeSection);
-                }
+            case ROOM:
+                // GroupModeSection (paginable) - always create; it fetches strategy dynamically
+                groupModeSection = new GroupModeSection(null, screen, screen.getFont());
+                sections.add(groupModeSection);
 
                 // SettingsSection (mode-specific - will be populated during init)
                 settingsSection = new SettingsSection();
@@ -145,4 +143,3 @@ public class SectionFactory {
         return new SectionConfiguration(sections, gradientsSection, groupModeSection, settingsSection, inventories);
     }
 }
-

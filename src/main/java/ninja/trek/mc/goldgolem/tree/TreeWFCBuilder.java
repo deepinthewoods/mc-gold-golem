@@ -1,15 +1,15 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Implements Wave Function Collapse as a flood-fill algorithm for Tree Mode.
@@ -19,8 +19,10 @@ public final class TreeWFCBuilder {
     private static final Logger LOGGER = LoggerFactory.getLogger(TreeWFCBuilder.class);
 
     private final TreeTileCache tileCache;
-    private final World world;
+    private final Level world;
     private final Set<Block> stopBlocks; // blocks that act as boundaries
+    private final Set<Block> groundBlocks; // ground blocks for initial candidate filtering
+    private final Set<BlockPos> nonStopOverrides; // positions that bypass stop-block checks
     private final Random random;
 
     // Wave function: for each position, track possible tile IDs
@@ -37,10 +39,25 @@ public final class TreeWFCBuilder {
     // Queue of positions to process for building
     private final ArrayDeque<BlockPos> buildQueue;
 
-    public TreeWFCBuilder(TreeTileCache tileCache, World world, BlockPos startPos, Set<Block> stopBlocks, Random random) {
+    // Shadow map: positions that will be filled by collapsed tiles (prevents premature air-boundary stops)
+    private final Set<BlockPos> plannedBlocks;
+
+    public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks, Random random) {
+        this(tileCache, world, startPos, stopBlocks, Collections.emptySet(), random, Collections.emptySet());
+    }
+
+    public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks,
+                          Set<Block> groundBlocks, Random random) {
+        this(tileCache, world, startPos, stopBlocks, groundBlocks, random, Collections.emptySet());
+    }
+
+    public TreeWFCBuilder(TreeTileCache tileCache, Level world, BlockPos startPos, Set<Block> stopBlocks,
+                          Set<Block> groundBlocks, Random random, Set<BlockPos> nonStopOverrides) {
         this.tileCache = tileCache;
         this.world = world;
         this.stopBlocks = new HashSet<>(stopBlocks);
+        this.groundBlocks = new HashSet<>(groundBlocks);
+        this.nonStopOverrides = new HashSet<>(nonStopOverrides);
         this.random = random;
 
         this.waveFunction = new HashMap<>();
@@ -52,6 +69,7 @@ public final class TreeWFCBuilder {
         }));
         this.collapsed = new HashMap<>();
         this.buildQueue = new ArrayDeque<>();
+        this.plannedBlocks = new HashSet<>();
 
         // Initialize with start position
         initialize(startPos);
@@ -59,11 +77,35 @@ public final class TreeWFCBuilder {
 
     /**
      * Initializes the WFC algorithm with the starting position.
+     * When ground blocks are present around the seed, filters initial candidates
+     * to "base" tiles that sit on ground.
      */
     private void initialize(BlockPos startPos) {
-        // Start position can have any tile
-        Set<String> allTiles = new HashSet<>(tileCache.getAllTileIds());
-        waveFunction.put(startPos, allTiles);
+        Set<String> candidates;
+        if (!groundBlocks.isEmpty()) {
+            // Check if ground is present below the start position
+            boolean groundBelow = false;
+            int tileSize = tileCache.tileSize;
+            for (int dx = 0; dx < tileSize && !groundBelow; dx++) {
+                for (int dz = 0; dz < tileSize && !groundBelow; dz++) {
+                    BlockState below = world.getBlockState(startPos.offset(dx, -1, dz));
+                    if (groundBlocks.contains(below.getBlock())) {
+                        groundBelow = true;
+                    }
+                }
+            }
+            if (groundBelow) {
+                Set<String> baseTiles = tileCache.getBottomGroundTileIds();
+                candidates = baseTiles.isEmpty()
+                        ? new HashSet<>(tileCache.getAllTileIds())
+                        : new HashSet<>(baseTiles);
+            } else {
+                candidates = new HashSet<>(tileCache.getAllTileIds());
+            }
+        } else {
+            candidates = new HashSet<>(tileCache.getAllTileIds());
+        }
+        waveFunction.put(startPos, candidates);
         addToFrontier(startPos);
     }
 
@@ -176,6 +218,24 @@ public final class TreeWFCBuilder {
         collapsed.put(pos, chosenTile);
         waveFunction.put(pos, Collections.singleton(chosenTile));
 
+        // Register non-air positions in shadow map so frontier expansion
+        // doesn't treat them as air boundaries before they're actually built.
+        // Skip GROUND_MARKER positions — ground is already placed and shouldn't
+        // prevent stop-block detection.
+        TreeTile tile = tileCache.getTile(chosenTile);
+        if (tile != null) {
+            for (int dx = 0; dx < tile.size; dx++) {
+                for (int dy = 0; dy < tile.size; dy++) {
+                    for (int dz = 0; dz < tile.size; dz++) {
+                        BlockState bs = tile.blocks[dx][dy][dz];
+                        if (!bs.isAir() && bs != TreeTileExtractor.GROUND_MARKER) {
+                            plannedBlocks.add(pos.offset(dx, dy, dz));
+                        }
+                    }
+                }
+            }
+        }
+
         // Add to build queue
         buildQueue.add(pos);
     }
@@ -212,7 +272,7 @@ public final class TreeWFCBuilder {
 
             // Check each neighbor
             for (Direction dir : Direction.values()) {
-                BlockPos neighborPos = current.offset(dir);
+                BlockPos neighborPos = current.relative(dir);
 
                 // Skip if already collapsed
                 if (collapsed.containsKey(neighborPos)) continue;
@@ -271,7 +331,7 @@ public final class TreeWFCBuilder {
      */
     private void expandFrontier(BlockPos pos) {
         for (Direction dir : Direction.values()) {
-            BlockPos neighborPos = pos.offset(dir);
+            BlockPos neighborPos = pos.relative(dir);
 
             // Skip if already collapsed or in frontier
             if (collapsed.containsKey(neighborPos) || frontierSet.contains(neighborPos)) {
@@ -295,6 +355,13 @@ public final class TreeWFCBuilder {
      * Checks if a position contains a stop block (boundary).
      */
     private boolean isStopBlock(BlockPos pos) {
+        // Non-stop overrides: positions that should never be treated as boundaries
+        // (e.g. gold blocks from partial scan, whether still present or already mined to air)
+        if (nonStopOverrides.contains(pos)) return false;
+
+        // Shadow map: position will be filled by a collapsed tile, not a real boundary
+        if (plannedBlocks.contains(pos)) return false;
+
         BlockState state = world.getBlockState(pos);
         Block block = state.getBlock();
 

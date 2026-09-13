@@ -1,10 +1,8 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.util.math.BlockPos;
-
 import java.util.Objects;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Represents a single NxNxN tile pattern extracted from an input module.
@@ -29,7 +27,7 @@ public final class TreeTile {
      */
     public BlockState getBlock(int x, int y, int z) {
         if (x < 0 || x >= size || y < 0 || y >= size || z < 0 || z >= size) {
-            return Blocks.AIR.getDefaultState();
+            return Blocks.AIR.defaultBlockState();
         }
         return blocks[x][y][z];
     }

@@ -1,14 +1,13 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
-
 import java.util.List;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
-public record TowerBlockCountsS2CPayload(int entityId, List<String> blockIds, List<Integer> counts, int towerHeight) implements CustomPayload {
+public record TowerBlockCountsS2CPayload(int entityId, List<String> blockIds, List<Integer> counts, int towerHeight) implements CustomPacketPayload {
 
     public TowerBlockCountsS2CPayload {
         blockIds = PayloadValidator.validateList(blockIds, 0, "blockIds");
@@ -20,16 +19,16 @@ public record TowerBlockCountsS2CPayload(int entityId, List<String> blockIds, Li
         }
     }
 
-    public static final Id<TowerBlockCountsS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "tower_block_counts"));
+    public static final Type<TowerBlockCountsS2CPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "tower_block_counts"));
 
-    public static final PacketCodec<RegistryByteBuf, TowerBlockCountsS2CPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, TowerBlockCountsS2CPayload::entityId,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), TowerBlockCountsS2CPayload::blockIds,
-            PacketCodecs.VAR_INT.collect(PacketCodecs.toList()), TowerBlockCountsS2CPayload::counts,
-            PacketCodecs.VAR_INT, TowerBlockCountsS2CPayload::towerHeight,
+    public static final StreamCodec<RegistryFriendlyByteBuf, TowerBlockCountsS2CPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, TowerBlockCountsS2CPayload::entityId,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), TowerBlockCountsS2CPayload::blockIds,
+            ByteBufCodecs.VAR_INT.apply(ByteBufCodecs.list()), TowerBlockCountsS2CPayload::counts,
+            ByteBufCodecs.VAR_INT, TowerBlockCountsS2CPayload::towerHeight,
             TowerBlockCountsS2CPayload::new
     );
 
     @Override
-    public Id<TowerBlockCountsS2CPayload> getId() { return ID; }
+    public Type<TowerBlockCountsS2CPayload> type() { return ID; }
 }

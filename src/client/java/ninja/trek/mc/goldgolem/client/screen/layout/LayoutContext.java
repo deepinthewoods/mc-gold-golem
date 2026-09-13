@@ -26,13 +26,17 @@ public class LayoutContext {
     /** Bottom margin for GUI positioning */
     public final int bottomMargin;
 
+    /** Controls margin - hard ceiling for non-inventory content height */
+    public final int controlsMargin;
+
     /**
      * Create a new layout context.
      *
      * @param screenWidth Total screen width
      * @param screenHeight Total screen height
+     * @param controlsMargin The server-computed controls margin
      */
-    public LayoutContext(int screenWidth, int screenHeight) {
+    public LayoutContext(int screenWidth, int screenHeight, int controlsMargin) {
         this.screenWidth = screenWidth;
         this.screenHeight = screenHeight;
         this.guiWidth = 176;
@@ -40,6 +44,7 @@ public class LayoutContext {
         this.titleAreaHeight = 20; // 6 + 10 + 4
         this.topMargin = 20;
         this.bottomMargin = 20;
+        this.controlsMargin = controlsMargin;
     }
 
     /**

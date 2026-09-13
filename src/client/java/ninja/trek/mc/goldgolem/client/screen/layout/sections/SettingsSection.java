@@ -1,8 +1,5 @@
 package ninja.trek.mc.goldgolem.client.screen.layout.sections;
 
-import net.minecraft.client.gui.Drawable;
-import net.minecraft.client.gui.Element;
-import net.minecraft.client.gui.Selectable;
 import ninja.trek.mc.goldgolem.client.screen.layout.AbstractGuiSection;
 import ninja.trek.mc.goldgolem.client.screen.layout.LayoutContext;
 import ninja.trek.mc.goldgolem.client.screen.layout.WidgetAdder;
@@ -10,6 +7,9 @@ import ninja.trek.mc.goldgolem.client.screen.layout.WidgetAdder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiFunction;
+import net.minecraft.client.gui.components.Renderable;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.narration.NarratableEntry;
 
 /**
  * Section for mode-specific settings (sliders, buttons, text fields).
@@ -18,7 +18,7 @@ import java.util.function.BiFunction;
  */
 public class SettingsSection extends AbstractGuiSection {
     private final List<WidgetFactory> widgetFactories = new ArrayList<>();
-    private final List<Element> createdWidgets = new ArrayList<>();
+    private final List<GuiEventListener> createdWidgets = new ArrayList<>();
     private int totalHeight = 0;
     private int guiX = 0;
     private int guiY = 0;
@@ -31,7 +31,7 @@ public class SettingsSection extends AbstractGuiSection {
      * @param gap Gap after this widget in pixels
      * @return this for method chaining
      */
-    public <T extends Element & Drawable & Selectable> SettingsSection withWidgetFactory(
+    public <T extends GuiEventListener & Renderable & NarratableEntry> SettingsSection withWidgetFactory(
             BiFunction<Integer, Integer, T> factory, int height, int gap) {
         widgetFactories.add(new WidgetFactory(factory, height, gap));
         totalHeight += height + gap;
@@ -45,7 +45,7 @@ public class SettingsSection extends AbstractGuiSection {
      * @param height Height of the widget in pixels
      * @return this for method chaining
      */
-    public <T extends Element & Drawable & Selectable> SettingsSection withWidgetFactory(
+    public <T extends GuiEventListener & Renderable & NarratableEntry> SettingsSection withWidgetFactory(
             BiFunction<Integer, Integer, T> factory, int height) {
         return withWidgetFactory(factory, height, 0);
     }
@@ -82,11 +82,11 @@ public class SettingsSection extends AbstractGuiSection {
 
         for (WidgetFactory factory : widgetFactories) {
             Object widgetObj = factory.factory.apply(guiX, currentY);
-            if (widgetObj instanceof Element) {
-                Element widget = (Element) widgetObj;
+            if (widgetObj instanceof GuiEventListener) {
+                GuiEventListener widget = (GuiEventListener) widgetObj;
                 createdWidgets.add(widget);
                 // The factory should only return widgets that implement all three interfaces
-                widgetAdder.addWidget((Element & Drawable & Selectable) widget);
+                widgetAdder.addWidget((GuiEventListener & Renderable & NarratableEntry) widget);
             }
             currentY += factory.height + factory.gap;
         }
@@ -98,7 +98,7 @@ public class SettingsSection extends AbstractGuiSection {
      * @param index Widget index
      * @return The widget, or null if index is invalid
      */
-    public Element getWidget(int index) {
+    public GuiEventListener getWidget(int index) {
         if (index >= 0 && index < createdWidgets.size()) {
             return createdWidgets.get(index);
         }

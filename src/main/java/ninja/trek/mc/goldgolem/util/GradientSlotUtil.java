@@ -1,8 +1,8 @@
 package ninja.trek.mc.goldgolem.util;
 
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.item.Item;
 
 /**
  * Utility for detecting "mine" actions stored in gradient slot arrays.
@@ -32,7 +32,7 @@ public final class GradientSlotUtil {
      * "gold-golem:mine/namespace/path".
      */
     public static Identifier mineIdentifier(Identifier toolItemId) {
-        return Identifier.of("gold-golem", "mine/" + toolItemId.getNamespace() + "/" + toolItemId.getPath());
+        return Identifier.fromNamespaceAndPath("gold-golem", "mine/" + toolItemId.getNamespace() + "/" + toolItemId.getPath());
     }
 
     /**
@@ -49,7 +49,7 @@ public final class GradientSlotUtil {
         if (sep < 0) return null;
         String namespace = afterPrefix.substring(0, sep);
         String path = afterPrefix.substring(sep + 1);
-        Identifier itemId = Identifier.of(namespace, path);
-        return Registries.ITEM.get(itemId);
+        Identifier itemId = Identifier.fromNamespaceAndPath(namespace, path);
+        return BuiltInRegistries.ITEM.getValue(itemId);
     }
 }

@@ -1,5 +1,5 @@
 plugins {
-	id 'fabric-loom' version "${loom_version}"
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 	id 'maven-publish'
 }
 
@@ -39,12 +39,11 @@ fabricApi {
 dependencies {
 	// To change the versions see the gradle.properties file
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	def lwjglVersion = "3.3.3"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	def lwjglVersion = "3.4.1"
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 	// Minecraft does not ship LWJGL Assimp; bundle it so production launches (e.g. ATLauncher) have it available.
 	clientImplementation(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}"))
 	clientRuntimeOnly(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-windows"))
@@ -52,6 +51,8 @@ dependencies {
 	clientRuntimeOnly(include("org.lwjgl:lwjgl-assimp:${lwjglVersion}:natives-macos"))
 
 	testImplementation "org.junit.jupiter:junit-jupiter-api:5.10.2"
+	testImplementation "org.mockito:mockito-core:5.23.0"
+	testImplementation sourceSets.client.output
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.10.2"
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.10.2"
 }
@@ -65,7 +66,7 @@ processResources {
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+	it.options.release = 25
 }
 
 java {
@@ -74,8 +75,8 @@ java {
 	// If you remove this line, sources will not be generated.
 	withSourcesJar()
 
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
 }
 
 jar {

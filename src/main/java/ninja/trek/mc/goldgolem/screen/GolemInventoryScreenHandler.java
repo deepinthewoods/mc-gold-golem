@@ -1,16 +1,17 @@
 package ninja.trek.mc.goldgolem.screen;
 
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.inventory.SimpleInventory;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
+import net.minecraft.world.Container;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
 import ninja.trek.mc.goldgolem.registry.ModScreenHandlers;
-import net.minecraft.item.ItemStack;
+import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 
-public class GolemInventoryScreenHandler extends ScreenHandler {
-    private final Inventory golemInventory;
+public class GolemInventoryScreenHandler extends AbstractContainerMenu {
+    private final Container golemInventory;
     private final int entityId;
     private final int golemSlotCount;
     private final int controlsMargin;
@@ -20,7 +21,7 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     private final String jsonName;
 
     // Client-side constructor (from ExtendedScreenHandlerType buffer)
-    public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, GolemOpenData data) {
+    public GolemInventoryScreenHandler(int syncId, Inventory playerInventory, GolemOpenData data) {
         super(ModScreenHandlers.GOLEM_SCREEN_HANDLER, syncId);
         this.entityId = data.entityId();
         this.golemSlotCount = Math.max(0, data.golemSlots());
@@ -30,27 +31,27 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
         this.sliderEnabled = data.sliderEnabled();
         this.sliderMode = data.slider();
         this.jsonName = data.jsonName() == null ? "" : data.jsonName();
-        this.golemInventory = new SimpleInventory(this.golemSlotCount);
-        this.golemInventory.onOpen(playerInventory.player);
+        this.golemInventory = new SimpleContainer(this.golemSlotCount);
+        this.golemInventory.startOpen(playerInventory.player);
         setupSlots(playerInventory);
     }
 
     // Server-side constructor: use the actual golem inventory
-    public GolemInventoryScreenHandler(int syncId, PlayerInventory playerInventory, Inventory golemInventory, GolemOpenData data) {
+    public GolemInventoryScreenHandler(int syncId, Inventory playerInventory, Container golemInventory, GolemOpenData data) {
         super(ModScreenHandlers.GOLEM_SCREEN_HANDLER, syncId);
         this.entityId = data.entityId();
-        this.golemSlotCount = Math.min(golemInventory.size(), Math.max(0, data.golemSlots()));
+        this.golemSlotCount = Math.min(golemInventory.getContainerSize(), Math.max(0, data.golemSlots()));
         this.golemRows = (this.golemSlotCount + 8) / 9;
         this.controlsMargin = GolemOpenData.computeControlsMargin(data.gradientRows(), data.slider(), 10);
         this.sliderEnabled = data.sliderEnabled();
         this.sliderMode = data.slider();
         this.jsonName = data.jsonName() == null ? "" : data.jsonName();
         this.golemInventory = golemInventory;
-        this.golemInventory.onOpen(playerInventory.player);
+        this.golemInventory.startOpen(playerInventory.player);
         setupSlots(playerInventory);
     }
 
-    private void setupSlots(PlayerInventory playerInventory) {
+    private void setupSlots(Inventory playerInventory) {
         // Layout golem inventory in a chest-like 9-column grid (rows = ceil(56/9) = 7)
         int index = 0;
         for (int row = 0; row < golemRows; row++) {
@@ -75,8 +76,17 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     }
 
     @Override
-    public boolean canUse(PlayerEntity player) {
-        return true;
+    public boolean stillValid(Player player) {
+        // The client uses a temporary inventory and relies on the server to enforce validity.
+        if (player.level().isClientSide()) return true;
+
+        var entity = player.level().getEntity(entityId);
+        return entity instanceof GoldGolemEntity golem
+                && golem.isAlive()
+                && !golem.isRemoved()
+                && golem.isOwner(player)
+                && golem.getInventory() == golemInventory
+                && player.distanceToSqr(golem) <= 64.0;
     }
 
     public int getEntityId() {
@@ -91,11 +101,12 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     public String getJsonName() { return jsonName; }
 
     @Override
-    public void onClosed(PlayerEntity player) {
-        super.onClosed(player);
+    public void removed(Player player) {
+        super.removed(player);
+        golemInventory.stopOpen(player);
         // Clear GUI viewer tracking on the golem entity
-        if (!player.getEntityWorld().isClient()) {
-            var entity = player.getEntityWorld().getEntityById(this.entityId);
+        if (!player.level().isClientSide()) {
+            var entity = player.level().getEntity(this.entityId);
             if (entity instanceof ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity golem) {
                 golem.clearGuiViewer();
             }
@@ -103,21 +114,21 @@ public class GolemInventoryScreenHandler extends ScreenHandler {
     }
 
     @Override
-    public ItemStack quickMove(PlayerEntity player, int index) {
+    public ItemStack quickMoveStack(Player player, int index) {
         // Basic shift-click behavior between golem inventory and player inventory
         ItemStack newStack = ItemStack.EMPTY;
         Slot slot = this.slots.get(index);
-        if (slot != null && slot.hasStack()) {
-            ItemStack stack = slot.getStack();
+        if (slot != null && slot.hasItem()) {
+            ItemStack stack = slot.getItem();
             newStack = stack.copy();
             int golemEnd = this.golemSlotCount;
             if (index < golemEnd) {
-                if (!this.insertItem(stack, golemEnd, this.slots.size(), true)) return ItemStack.EMPTY;
+                if (!this.moveItemStackTo(stack, golemEnd, this.slots.size(), true)) return ItemStack.EMPTY;
             } else {
-                if (!this.insertItem(stack, 0, golemEnd, false)) return ItemStack.EMPTY;
+                if (!this.moveItemStackTo(stack, 0, golemEnd, false)) return ItemStack.EMPTY;
             }
-            if (stack.isEmpty()) slot.setStack(ItemStack.EMPTY);
-            else slot.markDirty();
+            if (stack.isEmpty()) slot.setByPlayer(ItemStack.EMPTY);
+            else slot.setChanged();
         }
         return newStack;
     }

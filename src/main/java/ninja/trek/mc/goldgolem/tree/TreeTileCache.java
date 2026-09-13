@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.tree;
 
-import net.minecraft.util.math.Direction;
-
 import java.util.*;
+import net.minecraft.core.Direction;
 
 /**
  * Cache of extracted tiles and their adjacency constraints for WFC algorithm.
@@ -94,5 +93,30 @@ public final class TreeTileCache {
      */
     public boolean isEmpty() {
         return tiles.isEmpty();
+    }
+
+    // Lazy-cached set of tile IDs that contain GROUND_MARKER at y=0
+    private Set<String> bottomGroundTileIds;
+
+    /**
+     * Returns tile IDs where GROUND_MARKER appears at y=0 of the tile.
+     * These are "base" tiles that sit on ground. Computed once and cached.
+     */
+    public Set<String> getBottomGroundTileIds() {
+        if (bottomGroundTileIds != null) return bottomGroundTileIds;
+        Set<String> result = new HashSet<>();
+        for (TreeTile tile : tiles) {
+            outer:
+            for (int dx = 0; dx < tile.size; dx++) {
+                for (int dz = 0; dz < tile.size; dz++) {
+                    if (tile.blocks[dx][0][dz] == TreeTileExtractor.GROUND_MARKER) {
+                        result.add(tile.id);
+                        break outer;
+                    }
+                }
+            }
+        }
+        bottomGroundTileIds = Collections.unmodifiableSet(result);
+        return bottomGroundTileIds;
     }
 }

@@ -1,155 +1,211 @@
 package ninja.trek.mc.goldgolem.wall;
 
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
-/**
- * Validates wall modules by ensuring all gold markers yield an equivalent join slice (under rotation/mirror/±1 offset).
- * If any marker has ambiguous orientation (both X and Z planes with non-empty components), or slices do not match, it fails.
- * Per requirement: if multiple paths exist, fail to summon (we treat multiple orientations per marker as ambiguity).
- */
+/** Validates and classifies the local join component at every gold marker. */
 public final class WallModuleValidator {
-    public record Validation(String signature, WallJoinSlice.Axis axis, int uSize, String error) {
-        public boolean ok() { return signature != null && (error == null || error.isEmpty()); }
+    public record Validation(String signature, WallJoinSlice.Axis axis, int uSize, boolean symmetric,
+                             WallJoinSlice referenceSlice,
+                             List<WallJoinSlice.Axis> markerAxes,
+                             List<WallJoinSlice.Capture> markerCaptures, String error) {
+        public Validation {
+            markerAxes = markerAxes == null ? List.of() : List.copyOf(markerAxes);
+            markerCaptures = markerCaptures == null ? List.of() : List.copyOf(markerCaptures);
+        }
+
+        public boolean ok() {
+            return signature != null && error == null;
+        }
+
+        static Validation error(String message) {
+            return new Validation(null, null, 0, false, null, List.of(), List.of(), message);
+        }
     }
 
-    public static Validation validate(World world, BlockPos originAbs, Set<BlockPos> voxelsRel, List<BlockPos> goldMarkersRel, @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
-        if (goldMarkersRel == null || goldMarkersRel.size() < 2) return new Validation(null, null, 0, "Need at least two gold markers");
-        // Heuristic preferred axis: choose slice plane perpendicular to the dominant horizontal extent of the combined module
-        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
-        for (BlockPos r : voxelsRel) { minX = Math.min(minX, r.getX()); maxX = Math.max(maxX, r.getX()); minZ = Math.min(minZ, r.getZ()); maxZ = Math.max(maxZ, r.getZ()); }
-        int spreadX = maxX - minX;
-        int spreadZ = maxZ - minZ;
-        WallJoinSlice.Axis preferred = (spreadX >= spreadZ) ? WallJoinSlice.Axis.X_THICK : WallJoinSlice.Axis.Z_THICK;
+    private record Selection(List<WallJoinSlice.Axis> axes, List<WallJoinSlice.Capture> captures,
+                             int score) {}
 
-        java.util.ArrayList<WallJoinSlice> slices = new java.util.ArrayList<>(goldMarkersRel.size());
-        java.util.ArrayList<WallJoinSlice.Axis> axes = new java.util.ArrayList<>(goldMarkersRel.size());
-        java.util.ArrayList<Boolean> isSummon = new java.util.ArrayList<>(goldMarkersRel.size());
-        // removed console logging
-        for (int i = 0; i < goldMarkersRel.size(); i++) {
-            BlockPos g = goldMarkersRel.get(i);
-            BlockPos markerAbs = originAbs.add(g);
-            // Ignore the pumpkin slot only for the summoning marker; compare others exactly
-            BlockPos ignoreAbsMarker = (summonGoldAbs != null && markerAbs.equals(summonGoldAbs)) ? markerAbs.up() : null;
-            var sx = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.X_THICK, ignoreAbsMarker);
-            var sz = WallJoinSlice.fromIgnoring(world, originAbs, voxelsRel, g, WallJoinSlice.Axis.Z_THICK, ignoreAbsMarker);
-            if (sx.isEmpty() && sz.isEmpty()) {
-                return new Validation(null, null, 0, "Gold marker has no join slice at rel=" + g);
-            }
-            WallJoinSlice current;
-            WallJoinSlice.Axis ax;
-            if (sx.isPresent() && sz.isPresent()) {
-                int cx = sx.get().points.size();
-                int cz = sz.get().points.size();
-                if (cx > cz) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
-                else if (cz > cx) { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
-                else {
-                    if (preferred == WallJoinSlice.Axis.X_THICK) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
-                    else { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
-                }
-            } else if (sx.isPresent()) { current = sx.get(); ax = WallJoinSlice.Axis.X_THICK; }
-            else { current = sz.get(); ax = WallJoinSlice.Axis.Z_THICK; }
-            slices.add(current);
-            axes.add(ax);
-            isSummon.add(Boolean.valueOf(ignoreAbsMarker != null));
-            // removed per-slice debug logging
-        }
-        if (slices.isEmpty()) return new Validation(null, null, 0, "No join slice detected");
-        // Choose base slice: prefer a non-summon slice with largest shape, else largest overall
-        int baseIdx = -1;
-        int bestSize = -1;
-        for (int i = 0; i < slices.size(); i++) {
-            if (Boolean.TRUE.equals(isSummon.get(i))) continue;
-            int szPoints = slices.get(i).points.size();
-            if (szPoints > bestSize) { bestSize = szPoints; baseIdx = i; }
-        }
-        if (baseIdx < 0) {
-            for (int i = 0; i < slices.size(); i++) {
-                int szPoints = slices.get(i).points.size();
-                if (szPoints > bestSize) { bestSize = szPoints; baseIdx = i; }
-            }
-        }
-        WallJoinSlice base = slices.get(baseIdx);
-        WallJoinSlice.Axis baseAxis = axes.get(baseIdx);
-        for (int i = 0; i < slices.size(); i++) {
-            if (i == baseIdx) continue;
-            var cur = slices.get(i);
-            boolean curIsSummon = Boolean.TRUE.equals(isSummon.get(i));
-            boolean baseIsSummon = Boolean.TRUE.equals(isSummon.get(baseIdx));
+    private WallModuleValidator() {}
 
-            if (!curIsSummon && !baseIsSummon) {
-                // Non-summon slices must be exactly equal under rotation/mirror/±1 shift
-                if (!base.matches(cur)) {
-                    // removed mismatch debug logging
-                    BlockPos g = goldMarkersRel.get(i);
-                    return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
-                }
-            } else {
-                // Allow a single missing cell (pumpkin hole) on the summoning slice only
-                // Evaluate against the non-summon as canonical where possible
-                WallJoinSlice canonical = baseIsSummon ? cur : base;
-                WallJoinSlice candidate = baseIsSummon ? base : cur;
-                if (!matchesWithSingleHole(canonical, candidate)) {
-                    // removed mismatch debug logging
-                    BlockPos g = goldMarkersRel.get(i);
-                    return new Validation(null, null, 0, "Join slice mismatch at rel=" + g);
-                }
-            }
-        }
-        int maxU = base.points.stream().mapToInt(p -> p.du()).max().orElse(0);
-        int uSize = maxU + 1;
-        return new Validation(base.signature(), baseAxis, uSize, null);
+    public static Validation validate(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel,
+                                      List<BlockPos> goldMarkersRel,
+                                      @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
+        List<Integer> identityChain = new ArrayList<>();
+        for (int i = 0; i < goldMarkersRel.size(); i++) identityChain.add(i);
+        return validate(world, originAbs, voxelsRel, goldMarkersRel, identityChain, summonGoldAbs);
     }
 
     /**
-     * Returns true if 'candidate' equals 'canonical' under rotation/mirror/±1 du shift,
-     * except for exactly one missing point in candidate (the pumpkin hole). IDs must match everywhere else.
+     * Validate joins in chain order. Axis ambiguity is resolved from local connectivity and marker
+     * direction; an exact tie is rejected instead of silently choosing the wrong cut orientation.
      */
-    private static boolean matchesWithSingleHole(WallJoinSlice canonical, WallJoinSlice candidate) {
-        // Try both same-axis and rotated comparison
-        for (boolean rotated : new boolean[]{false, true}) {
-            if (!rotated && canonical.axis != candidate.axis) continue;
-            if (rotated && canonical.axis == candidate.axis) continue;
+    public static Validation validate(Level world, BlockPos originAbs, Set<BlockPos> voxelsRel,
+                                      List<BlockPos> goldMarkersRel, List<Integer> chain,
+                                      @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
+        if (goldMarkersRel == null || goldMarkersRel.size() < 2) {
+            return Validation.error("Need at least two gold markers");
+        }
+        if (chain == null || chain.size() != goldMarkersRel.size()) {
+            return Validation.error("Marker chain does not contain every gold marker");
+        }
 
-            var A = canonical.points;   // canonical reference
-            var B = candidate.points;   // candidate with one missing cell
-            int aMaxU = A.stream().mapToInt(p -> p.du()).max().orElse(0);
+        List<BlockPos> orderedMarkers = new ArrayList<>(chain.size());
+        for (int index : chain) orderedMarkers.add(goldMarkersRel.get(index));
+        BlockState pumpkinOverride = inferPumpkinOverride(
+                world, originAbs, orderedMarkers, summonGoldAbs);
 
-            for (boolean mirror : new boolean[]{false, true}) {
-                for (int shift = -1; shift <= 1; shift++) {
-                    // Transform candidate B into A's frame under mirror/shift using A's maxU
-                    java.util.HashMap<WallJoinSlice.Point, String> transformed = new java.util.HashMap<>();
-                    for (WallJoinSlice.Point pb : B) {
-                        int tu = mirror ? (aMaxU - pb.du()) : pb.du();
-                        tu += shift;
-                        WallJoinSlice.Point q = new WallJoinSlice.Point(pb.dy(), tu);
-                        transformed.put(q, candidate.blockIds.get(pb));
+        List<List<WallJoinSlice.Capture>> candidates = new ArrayList<>(orderedMarkers.size());
+        for (BlockPos marker : orderedMarkers) {
+            BlockPos markerAbs = originAbs.offset(marker);
+            boolean isSummon = summonGoldAbs != null && markerAbs.equals(summonGoldAbs);
+            BlockPos overrideAbs = isSummon ? markerAbs.above() : null;
+            BlockState overrideState = isSummon ? pumpkinOverride : null;
+            List<WallJoinSlice.Capture> markerCandidates = new ArrayList<>(2);
+            for (WallJoinSlice.Axis axis : WallJoinSlice.Axis.values()) {
+                WallJoinSlice.captureIgnoring(world, originAbs, voxelsRel, marker, axis,
+                                overrideAbs, overrideState)
+                        .ifPresent(markerCandidates::add);
+            }
+            if (markerCandidates.isEmpty()) {
+                return Validation.error("Gold marker has no connected join slice at rel=" + marker);
+            }
+            candidates.add(markerCandidates);
+        }
+
+        Set<BlockPos> nonGold = new HashSet<>(voxelsRel);
+        nonGold.removeAll(new HashSet<>(goldMarkersRel));
+        Selection best = null;
+        WallJoinSlice bestReference = null;
+        boolean bestIsAmbiguous = false;
+
+        for (List<WallJoinSlice.Capture> baseCandidates : candidates) {
+            for (WallJoinSlice.Capture baseCapture : baseCandidates) {
+                WallJoinSlice reference = baseCapture.slice();
+                List<WallJoinSlice.Axis> selectedAxes = new ArrayList<>(orderedMarkers.size());
+                List<WallJoinSlice.Capture> selectedCaptures = new ArrayList<>(orderedMarkers.size());
+                int totalScore = 0;
+                boolean valid = true;
+
+                for (int markerIndex = 0; markerIndex < orderedMarkers.size(); markerIndex++) {
+                    List<WallJoinSlice.Capture> matches = candidates.get(markerIndex).stream()
+                            .filter(candidate -> reference.matches(candidate.slice()))
+                            .toList();
+                    if (matches.isEmpty()) {
+                        valid = false;
+                        break;
                     }
 
-                    int missing = 0;
-                    int idMismatch = 0;
-                    for (WallJoinSlice.Point pa : A) {
-                        String bId = transformed.get(pa);
-                        if (bId == null) { missing++; if (missing > 1) break; }
-                        else {
-                            String aId = canonical.blockIds.get(pa);
-                            if (!java.util.Objects.equals(aId, bId)) { idMismatch++; break; }
+                    WallJoinSlice.Capture chosen = null;
+                    int chosenScore = Integer.MAX_VALUE;
+                    boolean tied = false;
+                    for (WallJoinSlice.Capture candidate : matches) {
+                        int score = axisScore(candidate, markerIndex, orderedMarkers, nonGold);
+                        if (score < chosenScore) {
+                            chosen = candidate;
+                            chosenScore = score;
+                            tied = false;
+                        } else if (score == chosenScore && chosen != null
+                                && chosen.slice().axis != candidate.slice().axis) {
+                            tied = true;
                         }
                     }
-                    // Accept either exact match (missing==0) or exactly one missing (the pumpkin hole)
-                    if (!((missing == 0 || missing == 1) && idMismatch == 0)) continue;
-
-                    // Ensure no extras in transformed candidate that aren't in A
-                    boolean extra = false;
-                    for (WallJoinSlice.Point q : transformed.keySet()) {
-                        if (!A.contains(q)) { extra = true; break; }
+                    if (tied) {
+                        valid = false;
+                        break;
                     }
-                    if (!extra) return true;
+                    selectedAxes.add(chosen.slice().axis);
+                    selectedCaptures.add(chosen);
+                    totalScore += chosenScore;
+                }
+
+                if (valid && (best == null || totalScore < best.score())) {
+                    best = new Selection(selectedAxes, selectedCaptures, totalScore);
+                    bestReference = reference;
+                    bestIsAmbiguous = false;
+                } else if (valid && best != null && totalScore == best.score()
+                        && !best.axes().equals(selectedAxes)) {
+                    bestIsAmbiguous = true;
                 }
             }
         }
+
+        if (best == null || bestReference == null || bestIsAmbiguous) {
+            return Validation.error(buildFailureMessage(orderedMarkers, candidates));
+        }
+
+        int maxU = bestReference.points.stream().mapToInt(WallJoinSlice.Point::du).max().orElse(0);
+        return new Validation(bestReference.signature(), bestReference.axis, maxU + 1,
+                bestReference.isSymmetric(), bestReference, best.axes(), best.captures(), null);
+    }
+
+    private static BlockState inferPumpkinOverride(Level world, BlockPos originAbs,
+                                                   List<BlockPos> markers,
+                                                   @org.jetbrains.annotations.Nullable BlockPos summonGoldAbs) {
+        if (summonGoldAbs == null) return null;
+        for (BlockPos marker : markers) {
+            BlockPos markerAbs = originAbs.offset(marker);
+            if (markerAbs.equals(summonGoldAbs)) continue;
+            BlockState candidate = world.getBlockState(markerAbs.above());
+            if (!candidate.isAir() && !candidate.is(Blocks.SNOW)
+                    && !candidate.is(Blocks.GOLD_BLOCK)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static int axisScore(WallJoinSlice.Capture capture, int markerIndex,
+                                 List<BlockPos> markers, Set<BlockPos> nonGold) {
+        WallJoinSlice.Axis axis = capture.slice().axis;
+        Direction negative = axis == WallJoinSlice.Axis.X_THICK ? Direction.WEST : Direction.NORTH;
+        Direction positive = axis == WallJoinSlice.Axis.X_THICK ? Direction.EAST : Direction.SOUTH;
+        boolean touchesNegative = touchesOutside(capture.componentVoxels(), nonGold, negative);
+        boolean touchesPositive = touchesOutside(capture.componentVoxels(), nonGold, positive);
+        int sideCount = (touchesNegative ? 1 : 0) + (touchesPositive ? 1 : 0);
+        int expectedSides = markerIndex == 0 || markerIndex == markers.size() - 1 ? 1 : 2;
+
+        BlockPos marker = markers.get(markerIndex);
+        int normalStrength = 0;
+        if (markerIndex > 0) {
+            normalStrength += normalDistance(marker, markers.get(markerIndex - 1), axis);
+        }
+        if (markerIndex + 1 < markers.size()) {
+            normalStrength += normalDistance(marker, markers.get(markerIndex + 1), axis);
+        }
+        return Math.abs(sideCount - expectedSides) * 10_000 - normalStrength;
+    }
+
+    private static boolean touchesOutside(Set<BlockPos> component, Set<BlockPos> nonGold,
+                                          Direction direction) {
+        for (BlockPos voxel : component) {
+            BlockPos neighbor = voxel.relative(direction);
+            if (!component.contains(neighbor) && nonGold.contains(neighbor)) return true;
+        }
         return false;
+    }
+
+    private static int normalDistance(BlockPos a, BlockPos b, WallJoinSlice.Axis axis) {
+        return axis == WallJoinSlice.Axis.X_THICK
+                ? Math.abs(a.getX() - b.getX())
+                : Math.abs(a.getZ() - b.getZ());
+    }
+
+    private static String buildFailureMessage(List<BlockPos> markers,
+                                              List<List<WallJoinSlice.Capture>> candidates) {
+        StringBuilder message = new StringBuilder(
+                "Could not choose one unambiguous, matching local join at every gold marker:");
+        for (int i = 0; i < markers.size(); i++) {
+            message.append("\n  marker ").append(markers.get(i)).append(':');
+            for (WallJoinSlice.Capture candidate : candidates.get(i)) {
+                message.append(' ').append(candidate.slice().axis)
+                        .append('(').append(candidate.slice().points.size()).append(" blocks)");
+            }
+        }
+        return message.toString();
     }
 }

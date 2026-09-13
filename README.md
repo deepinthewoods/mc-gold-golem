@@ -73,7 +73,87 @@ Mines ores in a specified direction from a start position. Similar to excavation
 ---
 
 ### Gradient Mode
-*Currently not implemented.*
+Material gradients are available in the wall, tower, pyramid, and tree builders.
+
+## Structure Building API
+
+Other server-side mods can load a saved Gold Golem procedural template and build it immediately. The API does not
+spawn a golem, consume inventory, mine blocks, or spread placement across ticks. It loads every target chunk and
+places blocks only into air or replaceable states.
+
+New wall, tower, pyramid, and tree snapshots contain a stable `publicTemplate` payload. A snapshot can be loaded
+directly from its path, or copied into a mod/data pack at:
+
+```text
+data/<namespace>/gold-golem/templates/<path>.json
+```
+
+For example, `other-mod:oak_tower` resolves to
+`data/other-mod/gold-golem/templates/oak_tower.json`.
+
+```java
+import net.minecraft.core.BlockPos;
+import net.minecraft.resources.Identifier;
+import ninja.trek.mc.goldgolem.api.structure.BuildResult;
+import ninja.trek.mc.goldgolem.api.structure.GoldGolemStructures;
+import ninja.trek.mc.goldgolem.api.structure.TowerBuildRequest;
+
+Identifier templateId = Identifier.fromNamespaceAndPath("other-mod", "oak_tower");
+BuildResult result = GoldGolemStructures.loadAndBuild(
+        serverLevel,
+        templateId,
+        new TowerBuildRequest(new BlockPos(100, 72, -40), 24)
+);
+```
+
+Available requests are:
+
+- `WallBuildRequest(guidePoints, maxModules)`: follows an ordered polyline as if a player walked through its points.
+- `TowerBuildRequest(origin, height)`: repeats the captured tower module to a block height of 1–256.
+- `PyramidBuildRequest(origin, height, curvature)`: resamples the tower module with curvature from -100 to 100.
+- `TreeBuildRequest(origin, seed, maxTiles)`: runs deterministic WFC until its frontier ends or the safety cap is hit.
+- `RoomBuildRequest(origin, initialDirection, seed, maxRooms, terrainPolicy)`: creates a small closed room layout.
+
+Large dungeons use a separate two-phase API. Planning is side-effect free and returns local room placements and graph
+statistics; building later aligns the unique entrance marker block to an exact world position. Special-room limits count
+rooms containing a block, rather than the number of copies of that block.
+
+```java
+DungeonGenerationRequest dungeonRequest = DungeonGenerationRequest.builder()
+        .seed(42L)
+        .roomCount(new RoomCountGoal(40, 60, 80))
+        .entranceMarker(ModBlocks.PORTAL_ANCHOR)
+        .bossRule(new DungeonBossRule(ModBlocks.BOSS_MARKER, 20, 4))
+        .addSpecialRoom(new SpecialRoomQuota(Blocks.ENCHANTING_TABLE, 1, 2))
+        .addSpecialRoom(new SpecialRoomQuota(Blocks.ANVIL, 1, 3))
+        .layout(DungeonLayoutProfile.defaults(DungeonLayoutStyle.LOOP_WITH_SPURS))
+        .build();
+
+DungeonPlanResult planned = GoldGolemDungeons.plan(roomTemplate, dungeonRequest);
+if (planned.succeeded()) {
+    DungeonEnvelope envelope = DungeonEnvelope.of(
+            new DungeonEnvelopeLayer(Blocks.DEEPSLATE.defaultBlockState(), 8),
+            new DungeonEnvelopeLayer(Blocks.BEDROCK.defaultBlockState(), 1)
+    );
+    BuildResult built = GoldGolemDungeons.build(
+            serverLevel,
+            planned.plan(),
+            new DungeonPlacement(portalDestination, Direction.NORTH,
+                    RoomTerrainPolicy.REQUIRE_CLEAR, envelope)
+    );
+}
+```
+
+Presets include `LOOP_WITH_SPURS`, `BRANCHING`, `BRAIDED`, `HUB_AND_SPOKE`, `GAUNTLET`, and `ORGANIC`.
+Each preset can override compactness, branchiness, loopiness, dead-end frequency, and critical-path length. Every boss
+socket is connected, and boss routes must reconnect to the entrance-side maze without using the boss room itself.
+
+Captured material-gradient groups are included and sampled with the same world-seeded noise as golem builds. Empty
+gradient slots and mine actions leave that position untouched; the instant API never breaks existing blocks.
+
+Calls must run on the logical server thread. `BuildResult` reports generated and placed blocks, occupied positions that
+were skipped, chunks loaded, diagnostics, and whether tree generation ended naturally or at its cap. The v1 format
+preserves block IDs and block-state properties, but not block entities, inventories, signs, or entities.
 
 ## Summoning Priority
 

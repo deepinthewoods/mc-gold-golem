@@ -1,30 +1,29 @@
 package ninja.trek.mc.goldgolem.net;
 
 import ninja.trek.mc.goldgolem.BuildMode;
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
-
 import java.util.Optional;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
 /**
  * Generic payload for setting group slot in group-based modes (Wall, Tower, Tree).
  * Replaces SetWallGroupSlotC2SPayload, SetTowerGroupSlotC2SPayload, SetTreeGroupSlotC2SPayload.
  */
-public record SetGroupModeSlotC2SPayload(int entityId, BuildMode mode, int group, int slot, Optional<Identifier> block) implements CustomPayload {
-    public static final Id<SetGroupModeSlotC2SPayload> ID = new Id<>(Identifier.of("gold-golem", "set_group_mode_slot"));
+public record SetGroupModeSlotC2SPayload(int entityId, BuildMode mode, int group, int slot, Optional<Identifier> block) implements CustomPacketPayload {
+    public static final Type<SetGroupModeSlotC2SPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "set_group_mode_slot"));
 
-    public static final PacketCodec<RegistryByteBuf, SetGroupModeSlotC2SPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, SetGroupModeSlotC2SPayload::entityId,
+    public static final StreamCodec<RegistryFriendlyByteBuf, SetGroupModeSlotC2SPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, SetGroupModeSlotC2SPayload::entityId,
             BuildMode.PACKET_CODEC, SetGroupModeSlotC2SPayload::mode,
-            PacketCodecs.VAR_INT, SetGroupModeSlotC2SPayload::group,
-            PacketCodecs.VAR_INT, SetGroupModeSlotC2SPayload::slot,
-            PacketCodecs.optional(Identifier.PACKET_CODEC), SetGroupModeSlotC2SPayload::block,
+            ByteBufCodecs.VAR_INT, SetGroupModeSlotC2SPayload::group,
+            ByteBufCodecs.VAR_INT, SetGroupModeSlotC2SPayload::slot,
+            ByteBufCodecs.optional(Identifier.STREAM_CODEC), SetGroupModeSlotC2SPayload::block,
             SetGroupModeSlotC2SPayload::new
     );
 
     @Override
-    public Id<SetGroupModeSlotC2SPayload> getId() { return ID; }
+    public Type<SetGroupModeSlotC2SPayload> type() { return ID; }
 }

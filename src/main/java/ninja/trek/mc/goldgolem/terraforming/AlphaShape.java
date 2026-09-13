@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.terraforming;
 
-import net.minecraft.util.math.BlockPos;
-
 import java.util.*;
+import net.minecraft.core.BlockPos;
 
 /**
  * Alpha shape / concave hull generator for 2D point sets.

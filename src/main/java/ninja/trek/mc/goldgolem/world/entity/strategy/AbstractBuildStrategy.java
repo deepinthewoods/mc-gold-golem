@@ -1,22 +1,19 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.Blocks;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.registry.Registries;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.LightType;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Random;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.Container;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
 
 /**
  * Abstract base class for build strategies with shared navigation,
@@ -51,15 +48,15 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * @param speed Movement speed
      * @param teleportThreshold Ticks before teleporting when stuck
      */
-    protected void navigateToWithStuckDetection(GoldGolemEntity golem, Vec3d target,
+    protected void navigateToWithStuckDetection(GoldGolemEntity golem, Vec3 target,
                                                  double speed, int teleportThreshold) {
         double dx = golem.getX() - target.x;
         double dz = golem.getZ() - target.z;
         double distSq = dx * dx + dz * dz;
 
-        golem.getNavigation().startMovingTo(target.x, target.y, target.z, speed);
+        golem.getNavigation().moveTo(target.x, target.y, target.z, speed);
 
-        if (golem.getNavigation().isIdle() && distSq > 1.0) {
+        if (golem.getNavigation().isDone() && distSq > 1.0) {
             stuckTicks++;
             if (stuckTicks >= teleportThreshold) {
                 teleportWithParticles(golem, target);
@@ -74,21 +71,21 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * Teleport the golem to a target position with portal particle effects.
      * Adds a small Y offset (0.1) to prevent clipping into ground blocks.
      */
-    protected void teleportWithParticles(GoldGolemEntity golem, Vec3d target) {
-        LOGGER.info("Gold Golem stuck detected! Teleporting from {} to {}", golem.getBlockPos(), target);
-        if (golem.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.PORTAL,
+    protected void teleportWithParticles(GoldGolemEntity golem, Vec3 target) {
+        LOGGER.info("Gold Golem stuck detected! Teleporting from {} to {}", golem.blockPosition(), target);
+        if (golem.level() instanceof ServerLevel sw) {
+            sw.sendParticles(ParticleTypes.PORTAL,
                 golem.getX(), golem.getY() + 0.5, golem.getZ(),
                 40, 0.5, 0.5, 0.5, 0.2);
-            sw.spawnParticles(ParticleTypes.PORTAL,
+            sw.sendParticles(ParticleTypes.PORTAL,
                 target.x, target.y + 0.5, target.z,
                 40, 0.5, 0.5, 0.5, 0.2);
         }
         // Add small Y offset (0.1) to ensure golem spawns clearly above the floor
         // and doesn't clip into the ground block causing brief suffocation
-        golem.refreshPositionAndAngles(target.x, target.y + 0.1, target.z,
-            golem.getYaw(), golem.getPitch());
-        golem.setVelocity(0, 0, 0);  // Clear velocity to prevent unexpected movement
+        golem.snapTo(target.x, target.y + 0.1, target.z,
+            golem.getYRot(), golem.getXRot());
+        golem.setDeltaMovement(0, 0, 0);  // Clear velocity to prevent unexpected movement
         golem.getNavigation().stop();
     }
 
@@ -129,10 +126,10 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * Compute ground-level Y for navigation target.
      * Searches downward from the given position to find solid ground.
      */
-    protected double computeGroundTargetY(GoldGolemEntity golem, Vec3d pos) {
-        BlockPos.Mutable mut = new BlockPos.Mutable((int) Math.floor(pos.x), (int) Math.floor(pos.y) + 2, (int) Math.floor(pos.z));
+    protected double computeGroundTargetY(GoldGolemEntity golem, Vec3 pos) {
+        BlockPos.MutableBlockPos mut = new BlockPos.MutableBlockPos((int) Math.floor(pos.x), (int) Math.floor(pos.y) + 2, (int) Math.floor(pos.z));
         for (int i = 0; i < 10; i++) {
-            if (!golem.getEntityWorld().getBlockState(mut).isAir()) {
+            if (!golem.level().getBlockState(mut).isAir()) {
                 return mut.getY() + 1;
             }
             mut.setY(mut.getY() - 1);
@@ -245,35 +242,35 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * @return true if a torch was placed
      */
     protected boolean tryPlaceTorchInDarkArea() {
-        if (entity == null || entity.getEntityWorld().isClient()) return false;
+        if (entity == null || entity.level().isClientSide()) return false;
 
         // Check if we have torches
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
         int torchSlot = findTorchSlot(inventory);
         if (torchSlot == -1) return false;
 
         // Pick a random position within scan radius
-        BlockPos center = entity.getBlockPos();
+        BlockPos center = entity.blockPosition();
         int dx = random.nextInt(TORCH_SCAN_RADIUS * 2 + 1) - TORCH_SCAN_RADIUS;
         int dy = random.nextInt(5) - 2; // -2 to +2 vertical range
         int dz = random.nextInt(TORCH_SCAN_RADIUS * 2 + 1) - TORCH_SCAN_RADIUS;
-        BlockPos checkPos = center.add(dx, dy, dz);
+        BlockPos checkPos = center.offset(dx, dy, dz);
 
         // Check if this is a valid torch placement position
         if (!isValidTorchPlacement(checkPos)) return false;
 
         // Check light level (block light only, not sky light for underground mining)
-        int lightLevel = entity.getEntityWorld().getLightLevel(LightType.BLOCK, checkPos);
+        int lightLevel = entity.level().getBrightness(LightLayer.BLOCK, checkPos);
         if (lightLevel > 0) return false;
 
         // Place the torch
-        entity.getEntityWorld().setBlockState(checkPos, Blocks.TORCH.getDefaultState());
+        entity.level().setBlockAndUpdate(checkPos, Blocks.TORCH.defaultBlockState());
 
         // Consume torch from inventory
-        ItemStack torchStack = inventory.getStack(torchSlot);
-        torchStack.decrement(1);
+        ItemStack torchStack = inventory.getItem(torchSlot);
+        torchStack.shrink(1);
         if (torchStack.isEmpty()) {
-            inventory.setStack(torchSlot, ItemStack.EMPTY);
+            inventory.setItem(torchSlot, ItemStack.EMPTY);
         }
 
         // Trigger hand animation
@@ -287,9 +284,9 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * Find a slot containing torches in the inventory.
      * @return slot index or -1 if no torches found
      */
-    private int findTorchSlot(Inventory inventory) {
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+    private int findTorchSlot(Container inventory) {
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (!stack.isEmpty() && stack.getItem() == Items.TORCH) {
                 return i;
             }
@@ -302,14 +299,14 @@ public abstract class AbstractBuildStrategy implements BuildStrategy {
      * Must be air with a solid block below.
      */
     private boolean isValidTorchPlacement(BlockPos pos) {
-        var world = entity.getEntityWorld();
+        var world = entity.level();
 
         // Must be air
         if (!world.getBlockState(pos).isAir()) return false;
 
         // Must have solid block below
-        BlockPos below = pos.down();
+        BlockPos below = pos.below();
         var belowState = world.getBlockState(below);
-        return belowState.isSolidBlock(world, below);
+        return belowState.isRedstoneConductor(world, below);
     }
 }

@@ -1,12 +1,12 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.List;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 
 /**
  * Utility class for validating network payload fields.
@@ -113,6 +113,6 @@ public final class PayloadValidator {
             return false;
         }
         Identifier id = Identifier.tryParse(blockId);
-        return id != null && Registries.BLOCK.containsId(id);
+        return id != null && BuiltInRegistries.BLOCK.containsKey(id);
     }
 }

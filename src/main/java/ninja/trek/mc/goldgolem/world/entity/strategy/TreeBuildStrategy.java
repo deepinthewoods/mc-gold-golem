@@ -1,20 +1,9 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.particle.ParticleTypes;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.registry.Registries;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.tree.TreeDefinition;
 import ninja.trek.mc.goldgolem.tree.TreeModule;
+import ninja.trek.mc.goldgolem.tree.TreeScanner;
 import ninja.trek.mc.goldgolem.tree.TreeTile;
 import ninja.trek.mc.goldgolem.tree.TreeTileCache;
 import ninja.trek.mc.goldgolem.tree.TreeTileExtractor;
@@ -27,6 +16,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 /**
  * Strategy for Tree building mode.
@@ -47,6 +48,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         CACHED,
         FAILED
     }
+
+    // Phase state machine for partial structure integration
+    private enum TreePhase { NORMAL, MINING_GOLD, BUILDING }
 
     // E6: Resource recovery check cooldown (in ticks)
     private static final int RESOURCE_CHECK_COOLDOWN = 100; // 5 seconds
@@ -74,6 +78,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     // Gradient mining helper for mine-action slots
     private final GradientMiningHelper gradientMiner = new GradientMiningHelper();
 
+    // Partial structure integration state
+    private TreePhase treePhase = TreePhase.NORMAL;
+    private Set<BlockPos> partialScanGoldPositions = new HashSet<>();
+    private BlockPos partialScanOrigin = null;
+    private Deque<BlockPos> goldMineQueue = new ArrayDeque<>();
+
     @Override
     public BuildMode getMode() {
         return BuildMode.TREE;
@@ -93,7 +103,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         tickTreeMode(golem, owner);
     }
 
@@ -110,7 +120,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         // E4: Save cache state as string instead of boolean
         nbt.putString("CacheState", cacheState.name());
         nbt.putBoolean("WaitingForInventory", treeWaitingForInventory);
@@ -127,20 +137,38 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         // Save planner state
         if (planner != null) {
-            NbtCompound plannerNbt = new NbtCompound();
+            CompoundTag plannerNbt = new CompoundTag();
             planner.writeNbt(plannerNbt);
             nbt.put("Planner", plannerNbt);
         }
 
         // Save gradient groups
         groups.writeToNbt(nbt, "Groups");
+
+        // Save partial scan state
+        nbt.putString("TreePhase", treePhase.name());
+        if (partialScanOrigin != null) {
+            nbt.putInt("PartialOriginX", partialScanOrigin.getX());
+            nbt.putInt("PartialOriginY", partialScanOrigin.getY());
+            nbt.putInt("PartialOriginZ", partialScanOrigin.getZ());
+        }
+        if (!partialScanGoldPositions.isEmpty()) {
+            int[] coords = new int[partialScanGoldPositions.size() * 3];
+            int i = 0;
+            for (BlockPos pos : partialScanGoldPositions) {
+                coords[i++] = pos.getX();
+                coords[i++] = pos.getY();
+                coords[i++] = pos.getZ();
+            }
+            nbt.putIntArray("PartialGoldPositions", coords);
+        }
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
+    public void readNbt(CompoundTag nbt) {
         // E4: Load cache state from string, with backward compatibility for boolean
         if (nbt.contains("CacheState")) {
-            String stateStr = nbt.getString("CacheState", CacheState.NOT_STARTED.name());
+            String stateStr = nbt.getStringOr("CacheState", CacheState.NOT_STARTED.name());
             try {
                 cacheState = CacheState.valueOf(stateStr);
             } catch (IllegalArgumentException e) {
@@ -148,19 +176,19 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             }
         } else if (nbt.contains("TilesCached")) {
             // Backward compatibility: convert old boolean to new enum
-            cacheState = nbt.getBoolean("TilesCached", false) ? CacheState.CACHED : CacheState.NOT_STARTED;
+            cacheState = nbt.getBooleanOr("TilesCached", false) ? CacheState.CACHED : CacheState.NOT_STARTED;
         }
-        treeWaitingForInventory = nbt.getBoolean("WaitingForInventory", false);
-        tileBlocksLoaded = nbt.getBoolean("TileBlocksLoaded", false);
+        treeWaitingForInventory = nbt.getBooleanOr("WaitingForInventory", false);
+        tileBlocksLoaded = nbt.getBooleanOr("TileBlocksLoaded", false);
         // E6: Load resource check cooldown
-        resourceCheckCooldown = nbt.getInt("ResourceCheckCooldown", 0);
+        resourceCheckCooldown = nbt.getIntOr("ResourceCheckCooldown", 0);
 
         // Load current tile origin
         if (nbt.contains("TileOriginX")) {
             currentTileOrigin = new BlockPos(
-                nbt.getInt("TileOriginX", 0),
-                nbt.getInt("TileOriginY", 0),
-                nbt.getInt("TileOriginZ", 0)
+                nbt.getIntOr("TileOriginX", 0),
+                nbt.getIntOr("TileOriginY", 0),
+                nbt.getIntOr("TileOriginZ", 0)
             );
         }
         if (planner != null) {
@@ -169,6 +197,41 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         // Load gradient groups
         groups.readFromNbt(nbt, "Groups");
+
+        // Load partial scan state
+        if (nbt.contains("TreePhase")) {
+            try {
+                treePhase = TreePhase.valueOf(nbt.getStringOr("TreePhase", TreePhase.NORMAL.name()));
+            } catch (IllegalArgumentException e) {
+                treePhase = TreePhase.NORMAL;
+            }
+        }
+        if (nbt.contains("PartialOriginX")) {
+            partialScanOrigin = new BlockPos(
+                nbt.getIntOr("PartialOriginX", 0),
+                nbt.getIntOr("PartialOriginY", 0),
+                nbt.getIntOr("PartialOriginZ", 0)
+            );
+        }
+        partialScanGoldPositions.clear();
+        if (nbt.contains("PartialGoldPositions")) {
+            int[] coords = nbt.getIntArray("PartialGoldPositions").orElseGet(() -> new int[0]);
+            for (int i = 0; i + 2 < coords.length; i += 3) {
+                partialScanGoldPositions.add(new BlockPos(coords[i], coords[i + 1], coords[i + 2]));
+            }
+        }
+        // Reconstruct gold mine queue for MINING_GOLD phase
+        goldMineQueue.clear();
+        if (treePhase == TreePhase.MINING_GOLD && entity != null) {
+            for (BlockPos pos : partialScanGoldPositions) {
+                if (entity.level().getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
+                    goldMineQueue.add(pos);
+                }
+            }
+            if (goldMineQueue.isEmpty()) {
+                treePhase = TreePhase.BUILDING;
+            }
+        }
     }
 
     @Override
@@ -202,9 +265,15 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         tileBlocksLoaded = false;
         currentTileOrigin = null;
         currentTileBlocks.clear();
+        minePositions.clear();
         if (planner != null) {
             planner.clear();
         }
+        // Clear partial scan state
+        treePhase = TreePhase.NORMAL;
+        partialScanGoldPositions.clear();
+        partialScanOrigin = null;
+        goldMineQueue.clear();
     }
 
     // ========== Getters ==========
@@ -250,30 +319,87 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
     }
 
     @Override
-    public void writeLegacyNbt(WriteView view) {
+    public void writeLegacyNbt(ValueOutput view) {
         view.putBoolean("TreeWaitingForInventory", treeWaitingForInventory);
         if (planner != null) {
-            planner.writeView(view.get("TreePlanner"));
+            planner.writeView(view.child("TreePlanner"));
+        }
+        // Partial scan persistence
+        view.putString("TreePhase", treePhase.name());
+        if (partialScanOrigin != null) {
+            view.putInt("PartialOriginX", partialScanOrigin.getX());
+            view.putInt("PartialOriginY", partialScanOrigin.getY());
+            view.putInt("PartialOriginZ", partialScanOrigin.getZ());
+        }
+        if (!partialScanGoldPositions.isEmpty()) {
+            int[] coords = new int[partialScanGoldPositions.size() * 3];
+            int i = 0;
+            for (BlockPos pos : partialScanGoldPositions) {
+                coords[i++] = pos.getX();
+                coords[i++] = pos.getY();
+                coords[i++] = pos.getZ();
+            }
+            view.putIntArray("PartialGoldPositions", coords);
         }
     }
 
     @Override
-    public void readLegacyNbt(ReadView view) {
-        treeWaitingForInventory = view.getBoolean("TreeWaitingForInventory", false);
+    public void readLegacyNbt(ValueInput view) {
+        treeWaitingForInventory = view.getBooleanOr("TreeWaitingForInventory", false);
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
-            view.getOptionalReadView("TreePlanner").ifPresent(planner::readView);
+            view.child("TreePlanner").ifPresent(planner::readView);
+        }
+        // Load partial scan state
+        String phaseStr = view.getStringOr("TreePhase", TreePhase.NORMAL.name());
+        try {
+            treePhase = TreePhase.valueOf(phaseStr);
+        } catch (IllegalArgumentException e) {
+            treePhase = TreePhase.NORMAL;
+        }
+        int ox = view.getIntOr("PartialOriginX", Integer.MIN_VALUE);
+        if (ox != Integer.MIN_VALUE) {
+            partialScanOrigin = new BlockPos(ox,
+                view.getIntOr("PartialOriginY", 0),
+                view.getIntOr("PartialOriginZ", 0));
+        }
+        partialScanGoldPositions.clear();
+        int[] coords = view.getIntArray("PartialGoldPositions").orElseGet(() -> new int[0]);
+        for (int i = 0; i + 2 < coords.length; i += 3) {
+            partialScanGoldPositions.add(new BlockPos(coords[i], coords[i + 1], coords[i + 2]));
+        }
+        // Reconstruct gold mine queue
+        goldMineQueue.clear();
+        if (treePhase == TreePhase.MINING_GOLD && entity != null) {
+            for (BlockPos pos : partialScanGoldPositions) {
+                if (entity.level().getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
+                    goldMineQueue.add(pos);
+                }
+            }
+            if (goldMineQueue.isEmpty()) {
+                treePhase = TreePhase.BUILDING;
+            }
         }
     }
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
         }
+
+        // Check if golem is standing on gold block → start partial scan
+        if (entity != null && !entity.level().isClientSide()) {
+            BlockPos belowFeet = entity.blockPosition().below();
+            if (entity.level().getBlockState(belowFeet).is(Blocks.GOLD_BLOCK)) {
+                startPartialScan(player, belowFeet);
+                return FeedResult.STARTED;
+            }
+        }
+
         return FeedResult.STARTED;
     }
 
@@ -282,9 +408,119 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         treeWaitingForInventory = false;
     }
 
+    // ========== Partial Scan ==========
+
+    private void startPartialScan(Player player, BlockPos goldPos) {
+        if (entity.getTreeModules().isEmpty()) return;
+
+        TreeScanner.PartialScanResult result = TreeScanner.scanPartial(
+            entity.level(), goldPos, player);
+        if (!result.ok()) {
+            LOGGER.warn("Partial scan failed: {}", result.error());
+            return;
+        }
+
+        // Reset WFC state (keep tile cache and modules)
+        treeWFCBuilder = null;
+        cacheState = CacheState.NOT_STARTED;
+        tileBlocksLoaded = false;
+        currentTileOrigin = null;
+        currentTileBlocks.clear();
+        minePositions.clear();
+        if (planner != null) planner.clear();
+
+        // Store scan results
+        partialScanGoldPositions = result.goldPositions();
+        partialScanOrigin = goldPos;
+
+        // Mine gold first if golem has a tool, otherwise go straight to building
+        if (golemHasTool() && !partialScanGoldPositions.isEmpty()) {
+            treePhase = TreePhase.MINING_GOLD;
+            goldMineQueue = new ArrayDeque<>(partialScanGoldPositions);
+        } else {
+            treePhase = TreePhase.BUILDING;
+        }
+
+        // Ensure building is active
+        entity.setBuildingPaths(true);
+    }
+
+    private boolean golemHasTool() {
+        if (entity == null) return false;
+        var inventory = entity.getInventory();
+        BlockState goldState = Blocks.GOLD_BLOCK.defaultBlockState();
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            var stack = inventory.getItem(i);
+            if (!stack.isEmpty() && stack.getDestroySpeed(goldState) > 1.0f) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // ========== Gold Mining Phase ==========
+
+    private void tickGoldMining(GoldGolemEntity golem) {
+        if (planner == null) {
+            planner = new PlacementPlanner(golem);
+        }
+
+        // If currently mining a block, tick the miner
+        if (gradientMiner.isMining()) {
+            boolean done = gradientMiner.tickMining(golem, isLeftHandActive());
+            if (done) {
+                gradientMiner.reset(golem);
+                // Remove from queue — block is now mined
+            }
+            return;
+        }
+
+        // If queue is empty, transition to building
+        if (goldMineQueue.isEmpty()) {
+            treePhase = TreePhase.BUILDING;
+            planner.clear();
+            tileBlocksLoaded = false;
+            return;
+        }
+
+        // Load gold positions into planner if needed
+        if (planner.isComplete()) {
+            List<BlockPos> remaining = new ArrayList<>();
+            // Only queue positions that are still gold blocks
+            for (BlockPos pos : goldMineQueue) {
+                if (golem.level().getBlockState(pos).is(Blocks.GOLD_BLOCK)) {
+                    remaining.add(pos);
+                }
+            }
+            goldMineQueue = new ArrayDeque<>(remaining);
+            if (remaining.isEmpty()) {
+                treePhase = TreePhase.BUILDING;
+                planner.clear();
+                tileBlocksLoaded = false;
+                return;
+            }
+            planner.setBlocks(remaining, pos ->
+                !golem.level().getBlockState(pos).is(Blocks.GOLD_BLOCK));
+        }
+
+        // Tick planner — callback starts mining instead of placing
+        PlacementPlanner.TickResult result = planner.tick((pos, nextPos) -> {
+            goldMineQueue.remove(pos);
+            gradientMiner.startMining(pos);
+            return false; // mining happens over subsequent ticks
+        });
+
+        if (result == PlacementPlanner.TickResult.COMPLETED) {
+            // All gold mined or skipped
+            treePhase = TreePhase.BUILDING;
+            planner.clear();
+            tileBlocksLoaded = false;
+        }
+    }
+
     // ========== Main tick logic ==========
 
-    private void tickTreeMode(GoldGolemEntity golem, PlayerEntity owner) {
+    private void tickTreeMode(GoldGolemEntity golem, Player owner) {
         // Tree mode: WFC-based building that follows player with nuggets
         if (!golem.isBuildingPaths()) return;
 
@@ -300,6 +536,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         if (treeModules.isEmpty() || treeOrigin == null) return;
 
+        // Handle gold mining phase before any WFC/building logic
+        if (treePhase == TreePhase.MINING_GOLD) {
+            tickGoldMining(golem);
+            return;
+        }
+
         // E6: If waiting for inventory, check periodically if resources are available
         if (isWaitingForResources()) {
             resourceCheckCooldown--;
@@ -313,9 +555,9 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             }
 
             // Show thunder cloud particles periodically
-            if (golem.age % 20 == 0) {
-                if (golem.getEntityWorld() instanceof ServerWorld sw) {
-                    sw.spawnParticles(ParticleTypes.CLOUD,
+            if (golem.tickCount % 20 == 0) {
+                if (golem.level() instanceof ServerLevel sw) {
+                    sw.sendParticles(ParticleTypes.CLOUD,
                         golem.getX(), golem.getY() + 2.0, golem.getZ(),
                         6, 0.4, 0.2, 0.4, 0.02);
                 }
@@ -327,27 +569,25 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         // Cache tiles if not already done
         if (cacheState != CacheState.CACHED || treeTileCache == null) {
             try {
-                // Build stop blocks set (air, gold, ground types)
-                Set<net.minecraft.block.Block> stopBlocks = new HashSet<>();
-                stopBlocks.add(Blocks.GOLD_BLOCK);
-                if (owner != null) {
-                    BlockPos playerGround = owner.getBlockPos().down();
-                    BlockState gs = golem.getEntityWorld().getBlockState(playerGround);
-                    net.minecraft.block.Block groundType = gs.getBlock();
-                    if (groundType == Blocks.GRASS_BLOCK ||
-                        groundType == Blocks.DIRT ||
-                        groundType == Blocks.DIRT_PATH) {
-                        stopBlocks.add(Blocks.GRASS_BLOCK);
-                        stopBlocks.add(Blocks.DIRT);
-                        stopBlocks.add(Blocks.DIRT_PATH);
-                    }
+                // Build ground blocks set from persisted ground type
+                Set<Block> groundBlocks = new HashSet<>();
+                String groundId = golem.getTreeGroundBlockId();
+                if (groundId != null) {
+                    groundBlocks.add(Blocks.GRASS_BLOCK);
+                    groundBlocks.add(Blocks.DIRT);
+                    groundBlocks.add(Blocks.DIRT_PATH);
                 }
 
-                // Extract tiles using current preset
-                TreeDefinition def = new TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds);
+                // Build stop blocks set (air, gold, ground types)
+                Set<Block> stopBlocks = new HashSet<>();
+                stopBlocks.add(Blocks.GOLD_BLOCK);
+                stopBlocks.addAll(groundBlocks);
+
+                // Extract tiles using current preset (groundBlockId flows through TreeDefinition)
+                TreeDefinition def = new TreeDefinition(treeOrigin, treeModules, treeUniqueBlockIds, groundId);
                 var stored = golem.getTreeModuleBlockStates();
                 treeTileCache = TreeTileExtractor.extract(
-                    golem.getEntityWorld(), def, treeTilingPreset, treeOrigin,
+                    golem.level(), def, treeTilingPreset, treeOrigin,
                     (stored != null && !stored.isEmpty()) ? stored : null);
                 cacheState = CacheState.CACHED;
 
@@ -357,11 +597,16 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
                     return;
                 }
 
-                // Initialize WFC builder at golem's current position (only if new)
+                // Initialize WFC builder (only if new)
                 if (treeWFCBuilder == null) {
-                    Random random = new Random(golem.getUuid().getMostSignificantBits());
+                    Random random = new Random(golem.getUUID().getMostSignificantBits());
+                    BlockPos wfcStart = (treePhase == TreePhase.BUILDING && partialScanOrigin != null)
+                        ? partialScanOrigin : golem.blockPosition();
+                    Set<BlockPos> overrides = (treePhase == TreePhase.BUILDING)
+                        ? partialScanGoldPositions : Collections.emptySet();
                     treeWFCBuilder = new TreeWFCBuilder(
-                        treeTileCache, golem.getEntityWorld(), golem.getBlockPos(), stopBlocks, random);
+                        treeTileCache, golem.level(), wfcStart, stopBlocks,
+                        groundBlocks, random, overrides);
                 }
 
             } catch (OutOfMemoryError e) {
@@ -414,17 +659,17 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
             // Use block checker to skip already-correct blocks
             planner.setBlocks(allPositions, pos -> {
                 if (minePositions.contains(pos)) {
-                    return golem.getEntityWorld().getBlockState(pos).isAir(); // already mined
+                    return golem.level().getBlockState(pos).isAir(); // already mined
                 }
                 BlockState expected = currentTileBlocks.get(pos);
                 if (expected == null) return true; // Skip if no expected state
-                BlockState current = golem.getEntityWorld().getBlockState(pos);
+                BlockState current = golem.level().getBlockState(pos);
                 return current.getBlock() == expected.getBlock();
             });
 
             // Set up exclusion zone filter (inverted pyramid above golem)
             planner.setBlockFilter(pos -> {
-                BlockPos golemFeet = golem.getBlockPos();
+                BlockPos golemFeet = golem.blockPosition();
                 int dy = pos.getY() - golemFeet.getY();
                 if (dy <= 0) return false;
                 int dxAbs = Math.abs(pos.getX() - golemFeet.getX());
@@ -435,13 +680,13 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
             // Set up neighbor scorer
             planner.setBlockScorer(pos -> {
-                var world = golem.getEntityWorld();
+                var world = golem.level();
                 int neighbors = 0;
                 if (!world.getBlockState(pos.north()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.south()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.east()).isAir()) neighbors++;
                 if (!world.getBlockState(pos.west()).isAir()) neighbors++;
-                if (!world.getBlockState(pos.down()).isAir()) neighbors++;
+                if (!world.getBlockState(pos.below()).isAir()) neighbors++;
                 return neighbors;
             });
 
@@ -451,6 +696,10 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         // No current tile, check if done
         if (currentTileOrigin == null) {
             if (treeWFCBuilder != null && treeWFCBuilder.isFinished() && !treeWFCBuilder.hasPendingBlocks()) {
+                // Reset partial scan state on completion
+                treePhase = TreePhase.NORMAL;
+                partialScanGoldPositions.clear();
+                partialScanOrigin = null;
                 golem.setBuildingPaths(false);
             }
             return;
@@ -519,14 +768,24 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         for (int dx = 0; dx < tileSize; dx++) {
             for (int dy = 0; dy < tileSize; dy++) {
                 for (int dz = 0; dz < tileSize; dz++) {
-                    BlockPos placePos = tileOriginPos.add(dx, dy, dz);
+                    BlockPos placePos = tileOriginPos.offset(dx, dy, dz);
                     BlockState targetState = tile.getBlock(dx, dy, dz);
 
                     // Skip air blocks
                     if (targetState.isAir()) continue;
 
-                    // Don't overwrite existing non-air blocks
-                    if (!golem.getEntityWorld().getBlockState(placePos).isAir()) continue;
+                    // Skip ground marker positions (ground already exists)
+                    if (targetState == TreeTileExtractor.GROUND_MARKER) continue;
+
+                    // Don't overwrite existing non-air blocks (except gold from partial scan)
+                    if (!golem.level().getBlockState(placePos).isAir()) {
+                        if (partialScanGoldPositions.contains(placePos)
+                                && golem.level().getBlockState(placePos).is(Blocks.GOLD_BLOCK)) {
+                            // Allow overwriting unmined gold blocks from partial scan
+                        } else {
+                            continue;
+                        }
+                    }
 
                     // Check if gradient maps to a mine action
                     if (isTreeGradientMineAction(golem, targetState, placePos)) {
@@ -560,7 +819,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         if (stateToPlace == null) return false;
 
         // Consume from inventory
-        String blockIdToConsume = Registries.BLOCK.getId(stateToPlace.getBlock()).toString();
+        String blockIdToConsume = BuiltInRegistries.BLOCK.getKey(stateToPlace.getBlock()).toString();
         if (!golem.consumeBlockFromInventory(blockIdToConsume)) {
             // No blocks in inventory - mark as depleted and waiting
             golem.handleMissingBuildingBlock();
@@ -568,12 +827,12 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         }
 
         // Place the block
-        golem.getEntityWorld().setBlockState(pos, stateToPlace, 3);
+        golem.level().setBlock(pos, stateToPlace, 3);
         currentTileBlocks.remove(pos);
 
         // Spawn particles
-        if (golem.getEntityWorld() instanceof ServerWorld sw) {
-            sw.spawnParticles(ParticleTypes.HAPPY_VILLAGER,
+        if (golem.level() instanceof ServerLevel sw) {
+            sw.sendParticles(ParticleTypes.HAPPY_VILLAGER,
                 pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
                 3, 0.3, 0.3, 0.3, 0.0);
         }
@@ -586,7 +845,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
     private BlockState sampleTreeGradient(GoldGolemEntity golem, BlockState originalState, BlockPos pos) {
         // Get block ID
-        String blockId = Registries.BLOCK.getId(originalState.getBlock()).toString();
+        String blockId = BuiltInRegistries.BLOCK.getKey(originalState.getBlock()).toString();
 
         // Find the gradient group for this block
         Integer groupIdx = golem.getTreeBlockGroup().get(blockId);
@@ -630,8 +889,8 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
 
         Identifier id = Identifier.tryParse(sampledBlockId);
         if (id == null) return null;
-        net.minecraft.block.Block sampledBlock = Registries.BLOCK.get(id);
-        return sampledBlock.getDefaultState();
+        net.minecraft.world.level.block.Block sampledBlock = BuiltInRegistries.BLOCK.getValue(id);
+        return sampledBlock.defaultBlockState();
     }
 
     /**
@@ -639,7 +898,7 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
      * Uses the same sampling logic as sampleTreeGradient but only checks the result.
      */
     private boolean isTreeGradientMineAction(GoldGolemEntity golem, BlockState originalState, BlockPos pos) {
-        String blockId = Registries.BLOCK.getId(originalState.getBlock()).toString();
+        String blockId = BuiltInRegistries.BLOCK.getKey(originalState.getBlock()).toString();
         Integer groupIdx = golem.getTreeBlockGroup().get(blockId);
         if (groupIdx == null || groupIdx >= golem.getTreeGroupSlots().size()) return false;
 
@@ -676,16 +935,16 @@ public class TreeBuildStrategy extends AbstractBuildStrategy {
         // Gather required block IDs
         Set<String> requiredBlockIds = new HashSet<>();
         for (BlockState state : currentTileBlocks.values()) {
-            requiredBlockIds.add(Registries.BLOCK.getId(state.getBlock()).toString());
+            requiredBlockIds.add(BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
         }
 
         // Check if we have at least one of the required blocks in inventory
         var inventory = golem.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            var stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            var stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
-            if (stack.getItem() instanceof net.minecraft.item.BlockItem bi) {
-                String stackId = Registries.BLOCK.getId(bi.getBlock()).toString();
+            if (stack.getItem() instanceof net.minecraft.world.item.BlockItem bi) {
+                String stackId = BuiltInRegistries.BLOCK.getKey(bi.getBlock()).toString();
                 if (requiredBlockIds.contains(stackId)) {
                     return true;
                 }

@@ -1,8 +1,7 @@
 package ninja.trek.mc.goldgolem.util;
 
-import net.minecraft.nbt.NbtCompound;
-
 import java.util.*;
+import net.minecraft.nbt.CompoundTag;
 
 /**
  * Manages gradient groups for block replacement in building modes.
@@ -202,7 +201,7 @@ public class GradientGroupManager {
     /**
      * Write group data to NBT with a prefix.
      */
-    public void writeToNbt(NbtCompound nbt, String prefix) {
+    public void writeToNbt(CompoundTag nbt, String prefix) {
         // Save group count
         nbt.putInt(prefix + "GroupCount", groupSlots.size());
 
@@ -234,11 +233,11 @@ public class GradientGroupManager {
     /**
      * Read group data from NBT with a prefix.
      */
-    public void readFromNbt(NbtCompound nbt, String prefix) {
+    public void readFromNbt(CompoundTag nbt, String prefix) {
         clear();
 
         // Read group count
-        int groupCount = nbt.getInt(prefix + "GroupCount", 0);
+        int groupCount = nbt.getIntOr(prefix + "GroupCount", 0);
 
         // Read each group's data
         for (int g = 0; g < groupCount; g++) {
@@ -246,20 +245,20 @@ public class GradientGroupManager {
 
             String[] slots = new String[GRADIENT_SIZE];
             groupSlots.add(slots);
-            groupWindows.add(nbt.getFloat(gPrefix + "Window", 1.0f));
-            groupNoiseScales.add(nbt.getInt(gPrefix + "NoiseScale", 1));
+            groupWindows.add(nbt.getFloatOr(gPrefix + "Window", 1.0f));
+            groupNoiseScales.add(nbt.getIntOr(gPrefix + "NoiseScale", 1));
 
             // Read slots
             for (int s = 0; s < GRADIENT_SIZE; s++) {
-                slots[s] = nbt.getString(gPrefix + "Slot" + s, "");
+                slots[s] = nbt.getStringOr(gPrefix + "Slot" + s, "");
             }
         }
 
         // Read block-to-group mappings
-        int mapCount = nbt.getInt(prefix + "BlockMapCount", 0);
+        int mapCount = nbt.getIntOr(prefix + "BlockMapCount", 0);
         for (int i = 0; i < mapCount; i++) {
-            String key = nbt.getString(prefix + "BlockMapKey" + i, "");
-            int val = nbt.getInt(prefix + "BlockMapVal" + i, 0);
+            String key = nbt.getStringOr(prefix + "BlockMapKey" + i, "");
+            int val = nbt.getIntOr(prefix + "BlockMapVal" + i, 0);
             if (!key.isEmpty()) {
                 blockGroups.put(key, val);
             }

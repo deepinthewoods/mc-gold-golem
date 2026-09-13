@@ -1,12 +1,11 @@
 package ninja.trek.mc.goldgolem.net;
 
-import net.minecraft.network.RegistryByteBuf;
-import net.minecraft.network.codec.PacketCodec;
-import net.minecraft.network.codec.PacketCodecs;
-import net.minecraft.network.packet.CustomPayload;
-import net.minecraft.util.Identifier;
-
 import java.util.List;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.codec.ByteBufCodecs;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
+import net.minecraft.resources.Identifier;
 
 /**
  * Server-to-client payload for syncing terraforming mode state.
@@ -23,7 +22,7 @@ public record SyncTerraformingS2CPayload(
         List<String> verticalGradient,
         List<String> horizontalGradient,
         List<String> slopedGradient
-) implements CustomPayload {
+) implements CustomPacketPayload {
 
     private static final int GRADIENT_SIZE = 9;
 
@@ -33,23 +32,23 @@ public record SyncTerraformingS2CPayload(
         slopedGradient = PayloadValidator.validateListSize(slopedGradient, GRADIENT_SIZE, "slopedGradient");
     }
 
-    public static final Id<SyncTerraformingS2CPayload> ID = new Id<>(Identifier.of("gold-golem", "sync_terraforming"));
+    public static final Type<SyncTerraformingS2CPayload> ID = new Type<>(Identifier.fromNamespaceAndPath("gold-golem", "sync_terraforming"));
 
-    public static final PacketCodec<RegistryByteBuf, SyncTerraformingS2CPayload> CODEC = PacketCodec.tuple(
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::entityId,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::scanRadius,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::verticalWindow,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::horizontalWindow,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::slopedWindow,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::verticalScale,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::horizontalScale,
-            PacketCodecs.VAR_INT, SyncTerraformingS2CPayload::slopedScale,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), SyncTerraformingS2CPayload::verticalGradient,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), SyncTerraformingS2CPayload::horizontalGradient,
-            PacketCodecs.STRING.collect(PacketCodecs.toList()), SyncTerraformingS2CPayload::slopedGradient,
+    public static final StreamCodec<RegistryFriendlyByteBuf, SyncTerraformingS2CPayload> CODEC = StreamCodec.composite(
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::entityId,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::scanRadius,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::verticalWindow,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::horizontalWindow,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::slopedWindow,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::verticalScale,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::horizontalScale,
+            ByteBufCodecs.VAR_INT, SyncTerraformingS2CPayload::slopedScale,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), SyncTerraformingS2CPayload::verticalGradient,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), SyncTerraformingS2CPayload::horizontalGradient,
+            ByteBufCodecs.STRING_UTF8.apply(ByteBufCodecs.list()), SyncTerraformingS2CPayload::slopedGradient,
             SyncTerraformingS2CPayload::new
     );
 
     @Override
-    public Id<SyncTerraformingS2CPayload> getId() { return ID; }
+    public Type<SyncTerraformingS2CPayload> type() { return ID; }
 }

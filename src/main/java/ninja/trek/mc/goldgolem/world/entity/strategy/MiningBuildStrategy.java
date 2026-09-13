@@ -1,27 +1,26 @@
 package ninja.trek.mc.goldgolem.world.entity.strategy;
 
-import net.minecraft.block.BlockState;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.inventory.Inventory;
-import net.minecraft.item.ItemStack;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.registry.Registries;
-import net.minecraft.storage.ReadView;
-import net.minecraft.storage.WriteView;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
 import ninja.trek.mc.goldgolem.BuildMode;
 import ninja.trek.mc.goldgolem.OreMiningMode;
 import ninja.trek.mc.goldgolem.world.entity.GoldGolemEntity;
-import net.minecraft.enchantment.EnchantmentHelper;
-import net.minecraft.enchantment.Enchantments;
-import net.minecraft.registry.RegistryKeys;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
 import java.util.Set;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.Container;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 /**
  * Strategy for Mining mode.
@@ -69,7 +68,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void tick(GoldGolemEntity golem, PlayerEntity owner) {
+    public void tick(GoldGolemEntity golem, Player owner) {
         if (entity == null) return;
         tickMiningMode();
     }
@@ -101,7 +100,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     protected void onBlockBroken(BlockPos pos, boolean isLeftHand, BlockState brokenState) {
         pendingOres.remove(pos);
 
-        String blockId = Registries.BLOCK.getId(brokenState.getBlock()).toString();
+        String blockId = BuiltInRegistries.BLOCK.getKey(brokenState.getBlock()).toString();
         if (isOreBlock(blockId)) {
             mineOreSurroundings(pos);
         }
@@ -154,7 +153,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     // ==================== NBT Serialization ====================
 
     @Override
-    public void writeNbt(NbtCompound nbt) {
+    public void writeNbt(CompoundTag nbt) {
         if (chestPos != null) {
             nbt.putInt("ChestX", chestPos.getX());
             nbt.putInt("ChestY", chestPos.getY());
@@ -182,34 +181,34 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void readNbt(NbtCompound nbt) {
+    public void readNbt(CompoundTag nbt) {
         if (nbt.contains("ChestX")) {
-            chestPos = new BlockPos(nbt.getInt("ChestX", 0), nbt.getInt("ChestY", 0), nbt.getInt("ChestZ", 0));
+            chestPos = new BlockPos(nbt.getIntOr("ChestX", 0), nbt.getIntOr("ChestY", 0), nbt.getIntOr("ChestZ", 0));
         } else {
             chestPos = null;
         }
         if (nbt.contains("Dir")) {
             try {
-                direction = Direction.valueOf(nbt.getString("Dir", "NORTH"));
+                direction = Direction.valueOf(nbt.getStringOr("Dir", "NORTH"));
             } catch (IllegalArgumentException ignored) {
                 direction = null;
             }
         }
         if (nbt.contains("StartX")) {
-            startPos = new BlockPos(nbt.getInt("StartX", 0), nbt.getInt("StartY", 0), nbt.getInt("StartZ", 0));
+            startPos = new BlockPos(nbt.getIntOr("StartX", 0), nbt.getIntOr("StartY", 0), nbt.getIntOr("StartZ", 0));
         } else {
             startPos = null;
         }
-        branchDepth = nbt.getInt("BranchDepth", 16);
-        branchSpacing = nbt.getInt("BranchSpacing", 3);
-        tunnelHeight = nbt.getInt("TunnelHeight", 2);
-        primaryProgress = nbt.getInt("PrimaryProgress", 0);
-        currentBranch = nbt.getInt("CurrentBranch", -1);
-        branchLeft = nbt.getBoolean("BranchLeft", true);
-        branchProgress = nbt.getInt("BranchProgress", 0);
-        returningToChest = nbt.getBoolean("ReturningToChest", false);
-        idleAtChest = nbt.getBoolean("IdleAtChest", false);
-        oreMiningMode = OreMiningMode.fromOrdinal(nbt.getInt("OreMiningMode", 0));
+        branchDepth = nbt.getIntOr("BranchDepth", 16);
+        branchSpacing = nbt.getIntOr("BranchSpacing", 3);
+        tunnelHeight = nbt.getIntOr("TunnelHeight", 2);
+        primaryProgress = nbt.getIntOr("PrimaryProgress", 0);
+        currentBranch = nbt.getIntOr("CurrentBranch", -1);
+        branchLeft = nbt.getBooleanOr("BranchLeft", true);
+        branchProgress = nbt.getIntOr("BranchProgress", 0);
+        returningToChest = nbt.getBooleanOr("ReturningToChest", false);
+        idleAtChest = nbt.getBooleanOr("IdleAtChest", false);
+        oreMiningMode = OreMiningMode.fromOrdinal(nbt.getIntOr("OreMiningMode", 0));
         readBaseMiningNbt(nbt);
     }
 
@@ -227,7 +226,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void writeLegacyNbt(WriteView view) {
+    public void writeLegacyNbt(ValueOutput view) {
         if (chestPos != null) {
             view.putInt("MiningChestX", chestPos.getX());
             view.putInt("MiningChestY", chestPos.getY());
@@ -257,17 +256,17 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public void readLegacyNbt(ReadView view) {
+    public void readLegacyNbt(ValueInput view) {
         if (view.contains("MiningChestX")) {
             chestPos = new BlockPos(
-                view.getInt("MiningChestX", 0),
-                view.getInt("MiningChestY", 0),
-                view.getInt("MiningChestZ", 0)
+                view.getIntOr("MiningChestX", 0),
+                view.getIntOr("MiningChestY", 0),
+                view.getIntOr("MiningChestZ", 0)
             );
         } else {
             chestPos = null;
         }
-        String miningDir = view.getString("MiningDir", null);
+        String miningDir = view.getStringOr("MiningDir", null);
         if (miningDir != null) {
             try {
                 direction = Direction.valueOf(miningDir);
@@ -277,24 +276,24 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
         }
         if (view.contains("MiningStartX")) {
             startPos = new BlockPos(
-                view.getInt("MiningStartX", 0),
-                view.getInt("MiningStartY", 0),
-                view.getInt("MiningStartZ", 0)
+                view.getIntOr("MiningStartX", 0),
+                view.getIntOr("MiningStartY", 0),
+                view.getIntOr("MiningStartZ", 0)
             );
         } else {
             startPos = null;
         }
-        branchDepth = view.getInt("MiningBranchDepth", 16);
-        branchSpacing = view.getInt("MiningBranchSpacing", 3);
-        tunnelHeight = view.getInt("MiningTunnelHeight", 2);
-        primaryProgress = view.getInt("MiningPrimaryProgress", 0);
-        currentBranch = view.getInt("MiningCurrentBranch", -1);
-        branchLeft = view.getBoolean("MiningBranchLeft", true);
-        branchProgress = view.getInt("MiningBranchProgress", 0);
-        returningToChest = view.getBoolean("MiningReturningToChest", false);
-        idleAtChest = view.getBoolean("MiningIdleAtChest", false);
-        oreMiningMode = OreMiningMode.fromOrdinal(view.getInt("MiningOreMiningMode", 0));
-        String block = view.getString("MiningBuildingBlock", null);
+        branchDepth = view.getIntOr("MiningBranchDepth", 16);
+        branchSpacing = view.getIntOr("MiningBranchSpacing", 3);
+        tunnelHeight = view.getIntOr("MiningTunnelHeight", 2);
+        primaryProgress = view.getIntOr("MiningPrimaryProgress", 0);
+        currentBranch = view.getIntOr("MiningCurrentBranch", -1);
+        branchLeft = view.getBooleanOr("MiningBranchLeft", true);
+        branchProgress = view.getIntOr("MiningBranchProgress", 0);
+        returningToChest = view.getBooleanOr("MiningReturningToChest", false);
+        idleAtChest = view.getBooleanOr("MiningIdleAtChest", false);
+        oreMiningMode = OreMiningMode.fromOrdinal(view.getIntOr("MiningOreMiningMode", 0));
+        String block = view.getStringOr("MiningBuildingBlock", null);
         buildingBlockType = (block != null && !block.isEmpty()) ? block : null;
     }
 
@@ -304,7 +303,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     @Override
-    public FeedResult handleFeedInteraction(PlayerEntity player) {
+    public FeedResult handleFeedInteraction(Player player) {
         if (isWaitingForResources()) {
             setWaitingForResources(false);
             return FeedResult.RESUMED;
@@ -336,7 +335,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             double dz = entity.getZ() - (startPos.getZ() + 0.5);
             double distSq = dx * dx + dz * dz;
             if (distSq > 4.0) {
-                entity.getNavigation().startMovingTo(startPos.getX() + 0.5,
+                entity.getNavigation().moveTo(startPos.getX() + 0.5,
                     startPos.getY(), startPos.getZ() + 0.5, 1.0);
             } else {
                 entity.getNavigation().stop();
@@ -370,10 +369,10 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
         double distSq = dx * dx + dz * dz;
 
         if (distSq > 4.0) {
-            entity.getNavigation().startMovingTo(startPos.getX() + 0.5,
+            entity.getNavigation().moveTo(startPos.getX() + 0.5,
                 startPos.getY(), startPos.getZ() + 0.5, 1.1);
 
-            if (entity.getNavigation().isIdle() && distSq > 16.0) {
+            if (entity.getNavigation().isDone() && distSq > 16.0) {
                 stuckTicks++;
                 if (stuckTicks >= 60) {
                     teleportToStart();
@@ -399,12 +398,12 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
         tryPlaceTorchInDarkArea();
 
         // Get targets for each hand independently
-        if (leftTarget == null || entity.getEntityWorld().getBlockState(leftTarget).isAir()) {
+        if (leftTarget == null || entity.level().getBlockState(leftTarget).isAir()) {
             leftTarget = getNextMiningTarget();
             leftBreakProgress = 0;
             leftSwingTick = 0;
         }
-        if (rightTarget == null || entity.getEntityWorld().getBlockState(rightTarget).isAir()) {
+        if (rightTarget == null || entity.level().getBlockState(rightTarget).isAir()) {
             rightTarget = getNextMiningTargetExcluding(leftTarget);
             rightBreakProgress = 0;
             rightSwingTick = 0;
@@ -416,63 +415,67 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             return;
         }
 
-        // Navigate toward the closest target
+        // Compute distances to targets
         BlockPos navTarget = leftTarget != null ? leftTarget : rightTarget;
-        if (leftTarget != null && rightTarget != null) {
-            // Navigate to midpoint if both targets exist
-            double midX = (leftTarget.getX() + rightTarget.getX()) / 2.0 + 0.5;
-            double midY = Math.min(leftTarget.getY(), rightTarget.getY());
-            double midZ = (leftTarget.getZ() + rightTarget.getZ()) / 2.0 + 0.5;
-            entity.getNavigation().startMovingTo(midX, midY, midZ, 1.1);
-        } else {
-            entity.getNavigation().startMovingTo(navTarget.getX() + 0.5, navTarget.getY(), navTarget.getZ() + 0.5, 1.1);
-        }
-
-        // Mine with left hand if in range
+        double leftDistSq = Double.MAX_VALUE;
         if (leftTarget != null) {
             double ldx = entity.getX() - (leftTarget.getX() + 0.5);
             double ldy = entity.getY() - leftTarget.getY();
             double ldz = entity.getZ() - (leftTarget.getZ() + 0.5);
-            double lDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
-            if (lDistSq <= 25.0) {
-                mineBlockWithHand(leftTarget, true);
-            }
+            leftDistSq = ldx * ldx + ldy * ldy + ldz * ldz;
         }
-
-        // Mine with right hand if in range
+        double rightDistSq = Double.MAX_VALUE;
         if (rightTarget != null) {
             double rdx = entity.getX() - (rightTarget.getX() + 0.5);
             double rdy = entity.getY() - rightTarget.getY();
             double rdz = entity.getZ() - (rightTarget.getZ() + 0.5);
-            double rDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
-            if (rDistSq <= 25.0) {
-                mineBlockWithHand(rightTarget, false);
-            }
+            rightDistSq = rdx * rdx + rdy * rdy + rdz * rdz;
         }
 
-        // Stuck detection
-        BlockPos primaryTarget = leftTarget != null ? leftTarget : rightTarget;
-        if (primaryTarget != null) {
-            double pdx = entity.getX() - (primaryTarget.getX() + 0.5);
-            double pdy = entity.getY() - primaryTarget.getY();
-            double pdz = entity.getZ() - (primaryTarget.getZ() + 0.5);
-            double pDistSq = pdx * pdx + pdy * pdy + pdz * pdz;
-            if (entity.getNavigation().isIdle() && pDistSq > 16.0) {
-                stuckTicks++;
-                if (stuckTicks >= 60) {
-                    teleportToStart();
-                    stuckTicks = 0;
-                    leftTarget = null;
-                    rightTarget = null;
-                    leftBreakProgress = 0;
-                    rightBreakProgress = 0;
-                    primaryProgress = 0;
-                    currentBranch = -1;
-                    branchProgress = 0;
-                    pendingOres.clear();
-                }
-            } else {
-                stuckTicks = 0;
+        boolean leftInRange = leftTarget != null && leftDistSq <= 25.0;
+        boolean rightInRange = rightTarget != null && rightDistSq <= 25.0;
+
+        if (leftInRange || rightInRange) {
+            // Already in mining range - stop moving and mine
+            entity.getNavigation().stop();
+            navStuckTicks = 0;
+
+            if (leftInRange) {
+                mineBlockWithHand(leftTarget, true);
+            }
+            if (rightInRange) {
+                mineBlockWithHand(rightTarget, false);
+            }
+        } else {
+            // Not in range - navigate toward a walkable position near the closer target
+            BlockPos closer = navTarget;
+            if (leftTarget != null && rightTarget != null) {
+                closer = leftDistSq <= rightDistSq ? leftTarget : rightTarget;
+            }
+            BlockPos navPos = findNavPositionNear(closer);
+            entity.getNavigation().moveTo(navPos.getX() + 0.5, navPos.getY(), navPos.getZ() + 0.5, 1.1);
+
+            // Check for navigation obstacles (mine through walls, bridge gaps)
+            BlockPos obstacle = checkNavigationObstacle(closer);
+            if (obstacle != null && !obstacle.equals(leftTarget)) {
+                leftTarget = obstacle;
+                leftBreakProgress = 0;
+                leftSwingTick = 0;
+                leftTool = ItemStack.EMPTY;
+            }
+
+            // Fallback teleport if stuck for too long despite obstacle handling
+            // Does NOT reset mining progress - golem retries from start position
+            if (navStuckTicks > 200) {
+                teleportToStart();
+                navStuckTicks = 0;
+                prevNavX = Double.NaN;
+                prevNavZ = Double.NaN;
+                leftTarget = null;
+                rightTarget = null;
+                leftBreakProgress = 0;
+                rightBreakProgress = 0;
+                return;
             }
         }
     }
@@ -487,8 +490,8 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             if (!pendingOres.isEmpty()) {
                 for (BlockPos orePos : pendingOres) {
                     if (!orePos.equals(exclude)) {
-                        BlockState state = entity.getEntityWorld().getBlockState(orePos);
-                        String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+                        BlockState state = entity.level().getBlockState(orePos);
+                        String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
                         if (isOreBlock(blockId) && !state.isAir()) {
                             return orePos;
                         }
@@ -506,10 +509,10 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     private boolean isInventoryFull() {
-        Inventory inventory = entity.getInventory();
+        Container inventory = entity.getInventory();
         int emptySlots = 0;
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) {
                 emptySlots++;
             }
@@ -518,7 +521,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     private void scanForOres() {
-        if (entity.getEntityWorld().isClient()) return;
+        if (entity.level().isClientSide()) return;
 
         // Skip ore scanning entirely if mode is NEVER
         if (oreMiningMode == OreMiningMode.NEVER) {
@@ -526,13 +529,13 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             return;
         }
 
-        BlockPos center = entity.getBlockPos();
+        BlockPos center = entity.blockPosition();
         for (int dx = -3; dx <= 3; dx++) {
             for (int dy = -3; dy <= 3; dy++) {
                 for (int dz = -3; dz <= 3; dz++) {
-                    BlockPos pos = center.add(dx, dy, dz);
-                    BlockState state = entity.getEntityWorld().getBlockState(pos);
-                    String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+                    BlockPos pos = center.offset(dx, dy, dz);
+                    BlockState state = entity.level().getBlockState(pos);
+                    String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
 
                     if (isOreBlock(blockId) && !pendingOres.contains(pos)) {
                         pendingOres.add(pos);
@@ -557,8 +560,8 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             }
 
             BlockPos orePos = pendingOres.iterator().next();
-            BlockState state = entity.getEntityWorld().getBlockState(orePos);
-            String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+            BlockState state = entity.level().getBlockState(orePos);
+            String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
             if (!isOreBlock(blockId) || state.isAir()) {
                 pendingOres.remove(orePos);
                 return getNextMiningTarget();
@@ -573,28 +576,28 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
      * Prefers Silk Touch over Fortune.
      */
     private boolean hasValidEnchantedTool() {
-        Inventory inventory = entity.getInventory();
-        var world = entity.getEntityWorld();
+        Container inventory = entity.getInventory();
+        var world = entity.level();
         if (world == null) return false;
 
-        var registryManager = world.getRegistryManager();
-        var enchantmentRegistry = registryManager.getOrThrow(RegistryKeys.ENCHANTMENT);
+        var registryManager = world.registryAccess();
+        var enchantmentRegistry = registryManager.lookupOrThrow(Registries.ENCHANTMENT);
 
         // Get entries using identifier from registry key
-        var silkTouchEntry = enchantmentRegistry.getEntry(Enchantments.SILK_TOUCH.getValue());
-        var fortuneEntry = enchantmentRegistry.getEntry(Enchantments.FORTUNE.getValue());
+        var silkTouchEntry = enchantmentRegistry.get(Enchantments.SILK_TOUCH.identifier());
+        var fortuneEntry = enchantmentRegistry.get(Enchantments.FORTUNE.identifier());
 
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
             if (stack.isEmpty()) continue;
 
             // Check for Silk Touch
-            if (silkTouchEntry.isPresent() && EnchantmentHelper.getLevel(silkTouchEntry.get(), stack) > 0) {
+            if (silkTouchEntry.isPresent() && EnchantmentHelper.getItemEnchantmentLevel(silkTouchEntry.get(), stack) > 0) {
                 return true;
             }
 
             // Check for Fortune 3+
-            if (fortuneEntry.isPresent() && EnchantmentHelper.getLevel(fortuneEntry.get(), stack) >= 3) {
+            if (fortuneEntry.isPresent() && EnchantmentHelper.getItemEnchantmentLevel(fortuneEntry.get(), stack) >= 3) {
                 return true;
             }
         }
@@ -603,8 +606,8 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
 
     private BlockPos getNextBranchMiningTarget() {
         if (currentBranch == -1) {
-            BlockPos primaryStart = startPos.offset(direction, 1);
-            BlockPos target = primaryStart.offset(direction, primaryProgress);
+            BlockPos primaryStart = startPos.relative(direction, 1);
+            BlockPos target = primaryStart.relative(direction, primaryProgress);
 
             if (primaryProgress > 0 && primaryProgress % branchSpacing == 0) {
                 currentBranch = primaryProgress / branchSpacing;
@@ -613,8 +616,8 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
                 return getNextBranchMiningTarget();
             }
 
-            for (int y = 1; y < tunnelHeight; y++) {
-                BlockPos layerTarget = target.up(y - 1);
+            for (int y = 0; y < tunnelHeight; y++) {
+                BlockPos layerTarget = target.above(y);
                 if (shouldMineBlock(layerTarget)) {
                     return layerTarget;
                 }
@@ -624,11 +627,11 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
             return getNextBranchMiningTarget();
         } else {
             Direction branchDir = getBranchDirection(branchLeft);
-            BlockPos branchStart = startPos.offset(direction, 1 + currentBranch * branchSpacing);
-            BlockPos target = branchStart.offset(branchDir, branchProgress + 1);
+            BlockPos branchStart = startPos.relative(direction, 1 + currentBranch * branchSpacing);
+            BlockPos target = branchStart.relative(branchDir, branchProgress + 1);
 
-            for (int y = 1; y < tunnelHeight; y++) {
-                BlockPos layerTarget = target.up(y - 1);
+            for (int y = 0; y < tunnelHeight; y++) {
+                BlockPos layerTarget = target.above(y);
                 if (shouldMineBlock(layerTarget)) {
                     return layerTarget;
                 }
@@ -663,12 +666,12 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
     }
 
     private boolean shouldMineBlock(BlockPos pos) {
-        BlockState state = entity.getEntityWorld().getBlockState(pos);
-        if (state.isAir() || state.getHardness(entity.getEntityWorld(), pos) < 0) {
+        BlockState state = entity.level().getBlockState(pos);
+        if (state.isAir() || state.getDestroySpeed(entity.level(), pos) < 0) {
             return false;
         }
 
-        String blockId = Registries.BLOCK.getId(state.getBlock()).toString();
+        String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
 
         // Never mine chests (used for storage)
         if (isChestBlock(blockId)) {
@@ -681,7 +684,7 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
         }
 
         // Don't mine non-solid blocks on the floor (flowers, saplings, grass, etc.)
-        if (pos.getY() == startPos.getY() && state.getCollisionShape(entity.getEntityWorld(), pos).isEmpty()) {
+        if (pos.getY() == startPos.getY() && state.getCollisionShape(entity.level(), pos).isEmpty()) {
             return false;
         }
 
@@ -690,10 +693,10 @@ public class MiningBuildStrategy extends BaseMiningStrategy {
 
     private void mineOreSurroundings(BlockPos center) {
         for (Direction dir : Direction.values()) {
-            BlockPos adjacent = center.offset(dir);
-            BlockState state = entity.getEntityWorld().getBlockState(adjacent);
+            BlockPos adjacent = center.relative(dir);
+            BlockState state = entity.level().getBlockState(adjacent);
 
-            if (!state.isAir() && state.getHardness(entity.getEntityWorld(), adjacent) >= 0) {
+            if (!state.isAir() && state.getDestroySpeed(entity.level(), adjacent) >= 0) {
                 if (!pendingOres.contains(adjacent)) {
                     pendingOres.add(adjacent);
                 }
