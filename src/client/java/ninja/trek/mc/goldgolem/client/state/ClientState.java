@@ -22,11 +22,11 @@ public final class ClientState {
     private ClientState() {}
 
     public static void setLines(int entityId, List<Vec3> points, java.util.Optional<Vec3> anchor, boolean noValid) {
-        if (points == null) {
+        if (points == null || (points.isEmpty() && (anchor == null || anchor.isEmpty()) && !noValid)) {
             LINES.remove(entityId);
             return;
         }
-        // Store even empty lists so the renderer can draw previews
+        // Keep empty lists only when they carry an active preview or validation state.
         LINES.put(entityId, new LineData(points, anchor, noValid));
     }
 

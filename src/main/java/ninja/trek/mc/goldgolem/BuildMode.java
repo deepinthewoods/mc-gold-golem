@@ -59,10 +59,10 @@ public enum BuildMode {
     }
 
     /**
-     * Whether a resource-starved golem should return to the position where this build started.
+     * Whether a resource-starved golem should return to its summon position.
      * Digging modes manage their own return and idle behavior.
      */
-    public boolean returnsToBuildStartWhenOutOfBlocks() {
+    public boolean returnsToSummonPositionWhenOutOfBlocks() {
         return switch (this) {
             case PATH, WALL, TOWER, TERRAFORMING, TREE, GRADIENT, PYRAMID, ROOM -> true;
             case MINING, EXCAVATION, TUNNEL -> false;

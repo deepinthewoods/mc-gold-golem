@@ -41,7 +41,8 @@ public class PlacementPlanner {
     private static final boolean DEBUG_COUNTERS = false;
     private static final int MAX_CONSECUTIVE_OVERLAP_DEFERRALS = 6;  // Teleport if we defer this many blocks in a row due to overlap
     private static final int NO_PROGRESS_TELEPORT_TICKS = 30;  // Teleport if no progress toward stand pos in this many ticks
-    private static final int PLACEMENT_TIMEOUT_TICKS = 40;  // Reposition if no block placed in this many ticks (2 seconds)
+    private static final long PLACEMENT_STALL_TIMEOUT_TICKS = 100L;
+    private static final double PLACEMENT_PROGRESS_DISTANCE_SQ = 0.0625;
 
     // Callback interfaces for organic placement
     @FunctionalInterface
@@ -87,7 +88,8 @@ public class PlacementPlanner {
     private static final int MAX_WANDER_TICKS = 30;  // Teleport after this many ticks if pathfinding fails (1.5 seconds)
     private double navBestDistSq = Double.MAX_VALUE;  // Best distance to standPos during current navigation
     private int noProgressTicks = 0;  // Ticks without meaningful progress toward standPos
-    private int ticksSinceLastPlacement = 0;  // Ticks since last successful block placement
+    private Vec3 lastPlacementProgressPosition = null;
+    private long lastPlacementProgressTick = Long.MIN_VALUE;
 
     // Optional filter and scorer for organic placement
     private BlockFilter blockFilter = null;
@@ -243,7 +245,7 @@ public class PlacementPlanner {
         wanderTicks = 0;
         navBestDistSq = Double.MAX_VALUE;
         noProgressTicks = 0;
-        ticksSinceLastPlacement = 0;
+        resetPlacementProgress();
 
         // Filter out blocks that are already correctly placed
         List<BlockPos> toPlace = blocks;
@@ -286,6 +288,8 @@ public class PlacementPlanner {
         if (blocks.isEmpty()) {
             return;
         }
+
+        boolean hadPendingWork = hasPendingWork();
 
         // Filter out blocks that are already correctly placed
         List<BlockPos> toAdd = blocks;
@@ -336,6 +340,9 @@ public class PlacementPlanner {
         }
         while (j < incoming.size()) {
             remainingBlocks.addLast(incoming.get(j++));
+        }
+        if (!hadPendingWork) {
+            resetPlacementProgress();
         }
     }
 
@@ -405,57 +412,13 @@ public class PlacementPlanner {
             return TickResult.WORKING;
         }
 
-        // Periodic diagnostic when golem seems stuck
-        if (ticksSinceLastPlacement > 0 && ticksSinceLastPlacement % 20 == 0) {
-            LOGGER.info("[PlacementDiag] idle={}t pos={} target={} standPos={} navigating={} wander={} remaining={} deferred={} allFiltered={} overlapDef={}",
-                ticksSinceLastPlacement, golem.blockPosition(), currentTarget, currentStandPos,
-                navigatingToStandPos, wanderTarget, remainingBlocks.size(), deferredBlocks.size(),
-                allFilteredTicks, consecutiveOverlapDeferrals);
+        long currentGameTick = golem.level().getGameTime();
+        if (hasPendingWork() && updatePlacementProgressAndCheckForStall(currentGameTick)) {
+            recoverFromPlacementStall();
+            return TickResult.WORKING;
         }
-
-        // Track time since last placement — force navigation if stuck too long
-        ticksSinceLastPlacement++;
-        if (ticksSinceLastPlacement >= PLACEMENT_TIMEOUT_TICKS && wanderTarget == null
-                && (!remainingBlocks.isEmpty() || !deferredBlocks.isEmpty())) {
-            LOGGER.debug("No block placed in {} ticks, forcing reposition (remaining={} deferred={})",
-                ticksSinceLastPlacement, remainingBlocks.size(), deferredBlocks.size());
-            ticksSinceLastPlacement = 0;
-            // Abandon current navigation/target
-            if (currentTarget != null) {
-                remainingBlocks.addFirst(currentTarget);
-                currentTarget = null;
-                currentStandPos = null;
-            }
-            navigatingToStandPos = false;
-            stuckTicks = 0;
-            noProgressTicks = 0;
-            navBestDistSq = Double.MAX_VALUE;
-            lastNavPos = null;
-            flushDeferredToRemaining();
-            pathCache.clear();  // Clear stale path cache so fresh pathfinding occurs
-
-            // Find a stand position for the nearest remaining block and navigate there
-            BlockPos repositionPos = findRepositionStandPos();
-            if (repositionPos == null) {
-                repositionPos = findRandomNearbyPosition(golem.blockPosition(), 8);
-            }
-            if (repositionPos != null) {
-                // Try pathfinding first — the golem can likely walk/jump there
-                boolean navStarted = golem.getNavigation().moveTo(
-                    repositionPos.getX() + 0.5, repositionPos.getY(), repositionPos.getZ() + 0.5, 1.1);
-                if (navStarted) {
-                    LOGGER.debug("Placement timeout: pathfinding to {}", repositionPos);
-                    wanderTarget = repositionPos;
-                    wanderTicks = 0;
-                } else {
-                    // Pathfinding failed — just teleport
-                    LOGGER.debug("Placement timeout: teleporting to {}", repositionPos);
-                    teleportToStandPosition(repositionPos);
-                }
-            } else {
-                // Standard reposition failed — try escalating hole escape
-                tryEscapeHole();
-            }
+        if (!hasPendingWork()) {
+            resetPlacementProgress();
         }
 
         // If wandering to unstick from overlap, keep navigating until arrived or timeout
@@ -811,7 +774,7 @@ public class PlacementPlanner {
                 currentStandPos = null;
                 navigationFailures = 0;
                 consecutiveOverlapDeferrals = 0;  // Reset since we made progress
-                ticksSinceLastPlacement = 0;
+                resetPlacementProgress();
                 return TickResult.PLACED_BLOCK;
             } else {
                 // Couldn't place - defer the block and try another.
@@ -1470,6 +1433,7 @@ public class PlacementPlanner {
      */
     private BlockPos findRepositionStandPos() {
         List<BlockPos> allBlocks = new ArrayList<>();
+        if (currentTarget != null) allBlocks.add(currentTarget);
         for (DeferredBlock db : deferredBlocks) allBlocks.add(db.pos);
         for (BlockPos pos : remainingBlocks) allBlocks.add(pos);
 
@@ -1528,6 +1492,69 @@ public class PlacementPlanner {
         }
 
         return null;
+    }
+
+    private boolean hasPendingWork() {
+        return currentTarget != null || !remainingBlocks.isEmpty() || !deferredBlocks.isEmpty();
+    }
+
+    private boolean updatePlacementProgressAndCheckForStall(long currentGameTick) {
+        Vec3 currentPosition = new Vec3(golem.getX(), golem.getY(), golem.getZ());
+        if (isMeaningfulPlacementMovement(lastPlacementProgressPosition, currentPosition)) {
+            lastPlacementProgressPosition = currentPosition;
+            lastPlacementProgressTick = currentGameTick;
+            return false;
+        }
+        return hasPlacementStalled(currentGameTick, lastPlacementProgressTick);
+    }
+
+    private void resetPlacementProgress() {
+        lastPlacementProgressPosition = new Vec3(golem.getX(), golem.getY(), golem.getZ());
+        lastPlacementProgressTick = golem.level().getGameTime();
+    }
+
+    static boolean isMeaningfulPlacementMovement(Vec3 previousPosition, Vec3 currentPosition) {
+        return previousPosition == null
+                || currentPosition.distanceToSqr(previousPosition) >= PLACEMENT_PROGRESS_DISTANCE_SQ;
+    }
+
+    static boolean hasPlacementStalled(long currentGameTick, long lastProgressTick) {
+        return lastProgressTick != Long.MIN_VALUE
+                && currentGameTick - lastProgressTick >= PLACEMENT_STALL_TIMEOUT_TICKS;
+    }
+
+    private void recoverFromPlacementStall() {
+        LOGGER.info("Placement stalled with no movement or block placement; teleporting to recover");
+        golem.getNavigation().stop();
+        wanderTarget = null;
+        wanderTicks = 0;
+
+        if (currentTarget != null) {
+            if (!remainingBlocks.contains(currentTarget)) {
+                remainingBlocks.addFirst(currentTarget);
+            }
+            currentTarget = null;
+        }
+        currentStandPos = null;
+        navigatingToStandPos = false;
+        stuckTicks = 0;
+        noProgressTicks = 0;
+        navBestDistSq = Double.MAX_VALUE;
+        lastNavPos = null;
+        navigationFailures = 0;
+        flushDeferredToRemaining();
+        pathCache.clear();
+
+        BlockPos recoveryPosition = findRepositionStandPos();
+        if (recoveryPosition == null) {
+            recoveryPosition = findRandomNearbyPosition(golem.blockPosition(), 8);
+        }
+        if (recoveryPosition != null) {
+            teleportToStandPosition(recoveryPosition);
+        } else {
+            tryEscapeHole();
+        }
+        resetPlacementProgress();
     }
 
     /**
@@ -1748,7 +1775,8 @@ public class PlacementPlanner {
         wanderTicks = 0;
         navBestDistSq = Double.MAX_VALUE;
         noProgressTicks = 0;
-        ticksSinceLastPlacement = 0;
+        lastPlacementProgressPosition = null;
+        lastPlacementProgressTick = Long.MIN_VALUE;
         blockFilter = null;
         blockScorer = null;
     }
@@ -1821,7 +1849,7 @@ public class PlacementPlanner {
         wanderTicks = 0;
         navBestDistSq = Double.MAX_VALUE;
         noProgressTicks = 0;
-        ticksSinceLastPlacement = 0;
+        resetPlacementProgress();
 
         int[] remaining = nbt.getIntArray("RemainingBlocks").orElseGet(() -> new int[0]);
         int[] deferred = nbt.getIntArray("DeferredBlocks").orElseGet(() -> new int[0]);
@@ -1892,7 +1920,7 @@ public class PlacementPlanner {
         wanderTicks = 0;
         navBestDistSq = Double.MAX_VALUE;
         noProgressTicks = 0;
-        ticksSinceLastPlacement = 0;
+        resetPlacementProgress();
 
         int[] remaining = view.getIntArray("RemainingBlocks").orElseGet(() -> new int[0]);
         int[] deferred = view.getIntArray("DeferredBlocks").orElseGet(() -> new int[0]);

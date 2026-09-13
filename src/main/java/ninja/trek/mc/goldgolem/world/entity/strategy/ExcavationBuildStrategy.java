@@ -47,11 +47,6 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
     private boolean returningToChest = false;
     private boolean idleAtStart = false;
 
-    // PlacementPlanner for smart movement (reused for mining)
-    private PlacementPlanner planner;
-    private int ticksInAir = 0;
-    private static final int TICKS_IN_AIR_THRESHOLD = 5; // Brief air time is fine
-
     // Movement tracking for return-to-chest stuck detection
     private double lastX = 0, lastZ = 0;
     private int noMovementTicks = 0;
@@ -71,8 +66,6 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
     @Override
     public void initialize(GoldGolemEntity golem) {
         super.initialize(golem);
-        planner = new PlacementPlanner(golem);
-        ticksInAir = 0;
     }
 
     @Override
@@ -169,11 +162,7 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
         idleAtStart = true;
         returningToChest = false;
         resetMiningState();
-        ticksInAir = 0;
         noMovementTicks = 0;
-        if (planner != null) {
-            planner.clear();
-        }
     }
 
     public void startFromIdle() {
@@ -192,11 +181,7 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
         ringProgress = 0;
         returningToChest = false;
         resetMiningState();
-        ticksInAir = 0;
         noMovementTicks = 0;
-        if (planner != null) {
-            planner.clear();
-        }
         // Skip already-completed rings
         skipCompletedRings();
         idleAtStart = false;
@@ -242,11 +227,7 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
         returningToChest = false;
         idleAtStart = false;
         resetMiningState();
-        ticksInAir = 0;
         noMovementTicks = 0;
-        if (planner != null) {
-            planner.clear();
-        }
     }
 
     // ==================== NBT Serialization ====================
@@ -503,6 +484,13 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             return;
         }
 
+        // Select a safe floor material before the first deposit so one stack is
+        // retained for bridging. Build immediately if already standing over air.
+        if (buildingBlockType == null) {
+            buildingBlockType = findBuildingBlockType(true);
+        }
+        placeBlocksUnderFeet();
+
         // State 1: Idle at start (waiting for gold nugget)
         if (idleAtStart) {
             BlockPos waitPos = getDepositWaitPos();
@@ -583,11 +571,6 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
     }
 
     private void tickExcavationActive() {
-        // Reactive floor building - only when falling into deep gap
-        if (needsFloorSupport()) {
-            placeFloorBlocks();
-        }
-
         // Try to place torches in dark areas
         tryPlaceTorchInDarkArea();
 
@@ -628,13 +611,13 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
         }
 
         // Assign targets to each hand if needed
-        if (leftTarget == null || entity.level().getBlockState(leftTarget).isAir()) {
+        if (leftTarget == null || !shouldMineBlock(leftTarget)) {
             leftTarget = getNextBlockFromRing(ringBlocks, null);
             leftBreakProgress = 0;
             leftSwingTick = 0;
             leftTool = ItemStack.EMPTY;
         }
-        if (rightTarget == null || entity.level().getBlockState(rightTarget).isAir()) {
+        if (rightTarget == null || !shouldMineBlock(rightTarget)) {
             rightTarget = getNextBlockFromRing(ringBlocks, leftTarget);
             rightBreakProgress = 0;
             rightSwingTick = 0;
@@ -684,11 +667,17 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
                 closer = leftDistSq <= rightDistSq ? leftTarget : rightTarget;
             }
             BlockPos navPos = findNavPositionNear(closer);
-            entity.getNavigation().moveTo(navPos.getX() + 0.5, navPos.getY(), navPos.getZ() + 0.5, 1.1);
+            boolean pathStarted = entity.getNavigation().moveTo(
+                navPos.getX() + 0.5, navPos.getY(), navPos.getZ() + 0.5, 1.1);
+            if (!pathStarted || navPos.equals(entity.blockPosition())) {
+                // The pathfinder already knows there is no supported route. Extend
+                // the floor now instead of waiting for the stuck timer to expire.
+                tryBuildBridgeToward(closer);
+            }
 
             // Check for navigation obstacles (mine through walls, bridge gaps)
             BlockPos obstacle = checkNavigationObstacle(closer);
-            if (obstacle != null && !obstacle.equals(leftTarget)) {
+            if (obstacle != null && !obstacle.equals(leftTarget) && shouldMineBlock(obstacle)) {
                 leftTarget = obstacle;
                 leftBreakProgress = 0;
                 leftSwingTick = 0;
@@ -714,14 +703,49 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
      * Get the next block to mine from the ring, excluding a specific block.
      */
     private BlockPos getNextBlockFromRing(List<BlockPos> ringBlocks, BlockPos exclude) {
+        BlockPos nearestInRange = null;
+        double nearestInRangeDistSq = Double.MAX_VALUE;
+        BlockPos nearestFallback = null;
+        double nearestFallbackDistSq = Double.MAX_VALUE;
+
         for (BlockPos pos : ringBlocks) {
             if (pos.equals(exclude)) continue;
-            BlockState state = entity.level().getBlockState(pos);
-            if (!state.isAir() && shouldMineBlock(pos)) {
-                return pos;
+            double distSq = distanceToTargetSq(pos);
+            if (distSq < nearestFallbackDistSq) {
+                nearestFallback = pos;
+                nearestFallbackDistSq = distSq;
+            }
+            if (distSq <= 25.0 && distSq < nearestInRangeDistSq) {
+                nearestInRange = pos;
+                nearestInRangeDistSq = distSq;
             }
         }
-        return null;
+
+        // Most ticks have a block in arm's reach; avoid running stand-position
+        // searches across the whole ring unless movement is actually required.
+        if (nearestInRange != null) return nearestInRange;
+
+        BlockPos nearestSupported = null;
+        double nearestSupportedDistSq = Double.MAX_VALUE;
+        for (BlockPos pos : ringBlocks) {
+            if (pos.equals(exclude)) continue;
+            double distSq = distanceToTargetSq(pos);
+            if (distSq < nearestSupportedDistSq && findWalkablePositionNear(pos) != null) {
+                nearestSupported = pos;
+                nearestSupportedDistSq = distSq;
+            }
+        }
+
+        // Work reachable sections first. If the entire remaining edge is over a
+        // void, retain a nearest fallback for the bridge builder to approach.
+        return nearestSupported != null ? nearestSupported : nearestFallback;
+    }
+
+    private double distanceToTargetSq(BlockPos pos) {
+        double dx = entity.getX() - (pos.getX() + 0.5);
+        double dy = entity.getY() - pos.getY();
+        double dz = entity.getZ() - (pos.getZ() + 0.5);
+        return dx * dx + dy * dy + dz * dz;
     }
 
     /**
@@ -742,28 +766,6 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
             }
         }
         return blocks;
-    }
-
-    /**
-     * Check if the golem needs floor support (reactive floor building).
-     * Only returns true when actually falling into a deep gap.
-     */
-    private boolean needsFloorSupport() {
-        if (entity.onGround()) {
-            ticksInAir = 0;
-            return false;
-        }
-
-        ticksInAir++;
-        if (ticksInAir < TICKS_IN_AIR_THRESHOLD) {
-            return false; // Brief air time is fine (jumping, stepping)
-        }
-
-        // Check for deep gap (2+ blocks of air below)
-        BlockPos below = entity.blockPosition().below();
-        BlockPos twoBelow = below.below();
-        return entity.level().getBlockState(below).isAir()
-            && entity.level().getBlockState(twoBelow).isAir();
     }
 
     private boolean isInventoryFull() {
@@ -832,32 +834,6 @@ public class ExcavationBuildStrategy extends BaseMiningStrategy {
     private BlockPos getDepositWaitPos() {
         Direction primary = primaryExcavDir != null ? primaryExcavDir : Direction.SOUTH;
         return startPos.relative(primary, 2);
-    }
-
-    private void placeFloorBlocks() {
-        if (entity.level().isClientSide()) return;
-
-        BlockPos below = entity.blockPosition().below();
-        if (!entity.level().getBlockState(below).isAir()) return;
-
-        if (buildingBlockType == null) {
-            buildingBlockType = findBuildingBlockType(false);
-            if (buildingBlockType == null) {
-                entity.handleMissingBuildingBlock();
-                return;
-            }
-        }
-
-        BlockState state = entity.getBlockStateFromId(buildingBlockType);
-        if (state == null) return;
-
-        if (entity.consumeBlockFromInventory(buildingBlockType)) {
-            entity.level().setBlockAndUpdate(below, state);
-            entity.beginHandAnimation(isLeftHandActive(), below, null);
-            alternateHand();
-        } else {
-            entity.handleMissingBuildingBlock();
-        }
     }
 
     /**

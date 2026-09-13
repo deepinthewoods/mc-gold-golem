@@ -113,7 +113,7 @@ public class LineSeg {
         double pz = len > 1e-4 ? (dirX / len) : 0.0;
 
         int bit = processed.nextClearBit(scanBit);
-        if (bit >= 0 && bit < boundExclusive) {
+        while (bit >= 0 && bit < boundExclusive) {
             int cellIndex = bit / widthSnapshot;
             int jIndex = bit % widthSnapshot;
             int j = jIndex - half;
@@ -159,10 +159,14 @@ public class LineSeg {
                 }
             }
 
-            golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
+            boolean placed = golem.placeOffsetAt(x, y, z, px, pz, widthSnapshot, j, xMajor, travelDir);
             processed.set(bit);
             scanBit = Math.min(Math.max(0, bit + 1), totalBits);
 
+            if (!placed) {
+                bit = processed.nextClearBit(scanBit);
+                continue;
+            }
             return result != null ? result : new BlockPos(bx, groundY != null ? groundY : y0, bz);
         }
         return null;

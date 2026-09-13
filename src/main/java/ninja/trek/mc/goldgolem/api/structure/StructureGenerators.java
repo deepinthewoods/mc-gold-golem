@@ -81,7 +81,7 @@ final class StructureGenerators {
         Map<BlockPos, BlockState> blocks = new LinkedHashMap<>();
         for (int layer = 0; layer < request.height(); layer++) {
             int relativeY = Math.floorMod(layer, template.moduleHeight) + template.minY;
-            int worldY = request.origin().getY() - 1 + layer;
+            int worldY = request.origin().getY() + template.minY + layer;
             for (TowerModuleTemplate.Voxel voxel : template.voxels) {
                 if (voxel.rel.getY() != relativeY) continue;
                 BlockPos position = new BlockPos(

@@ -187,6 +187,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     public void writeLegacyNbt(ValueOutput view) {
         view.putInt("TowerCurrentY", currentLayerY);
         view.putBoolean("TowerLayerInitialized", layerInitialized);
+        view.putInt("TowerTotalHeight", totalHeight);
+        view.putInt("TowerLowestLoadedY", lowestLoadedY);
+        view.putInt("TowerHighestLoadedY", highestLoadedY);
         if (planner != null) {
             planner.writeView(view.child("TowerPlanner"));
         }
@@ -196,12 +199,41 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
     public void readLegacyNbt(ValueInput view) {
         currentLayerY = view.getIntOr("TowerCurrentY", 0);
         layerInitialized = view.getBooleanOr("TowerLayerInitialized", false);
+        totalHeight = view.getIntOr("TowerTotalHeight", entity != null ? entity.getTowerHeight() : 0);
+
+        int savedLowestLoadedY = view.getIntOr("TowerLowestLoadedY", Integer.MIN_VALUE);
+        int savedHighestLoadedY = view.getIntOr("TowerHighestLoadedY", Integer.MIN_VALUE);
+        if (savedLowestLoadedY != Integer.MIN_VALUE && savedHighestLoadedY != Integer.MIN_VALUE) {
+            lowestLoadedY = savedLowestLoadedY;
+            highestLoadedY = savedHighestLoadedY;
+        } else {
+            // Older saves only retained currentLayerY. Reconstruct the same three-layer window
+            // around it instead of reverting the lower bound to zero and feeding the tower again.
+            LayerWindow fallbackWindow = inferLegacyLayerWindow(currentLayerY, layerInitialized, totalHeight);
+            lowestLoadedY = fallbackWindow.lowestLoadedY();
+            highestLoadedY = fallbackWindow.highestLoadedY();
+        }
         if (planner == null && entity != null) {
             planner = new PlacementPlanner(entity);
         }
         if (planner != null) {
             view.child("TowerPlanner").ifPresent(planner::readView);
         }
+    }
+
+    static LayerWindow inferLegacyLayerWindow(int currentLayerY, boolean layerInitialized, int totalHeight) {
+        if (!layerInitialized) {
+            return new LayerWindow(currentLayerY, currentLayerY - 1);
+        }
+
+        int highestPossibleLayer = totalHeight > 0
+                ? totalHeight - 1
+                : currentLayerY + LAYER_WINDOW_SIZE - 1;
+        int highestLoadedY = Math.min(highestPossibleLayer, currentLayerY + LAYER_WINDOW_SIZE - 1);
+        return new LayerWindow(currentLayerY, highestLoadedY);
+    }
+
+    record LayerWindow(int lowestLoadedY, int highestLoadedY) {
     }
 
     // ========== Main tick logic ==========
@@ -318,7 +350,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
             case PLACED_BLOCK:
                 alternateHand();
                 // Check if lowest loaded layer is now complete — slide window up
-                int lowestLoadedWorldY = getBuildBaseY(origin) + lowestLoadedY;
+                int lowestLoadedWorldY = getBuildBaseY(template, origin) + lowestLoadedY;
                 if (!planner.hasBlocksAtY(lowestLoadedWorldY)) {
                     lowestLoadedY++;
                     currentLayerY = lowestLoadedY;
@@ -391,9 +423,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         for (var voxel : template.voxels) {
             int relY = voxel.rel.getY();
             if (relY == relYTarget) {
-                // Layer zero replaces the supporting base block. The requested height therefore
-                // includes that base instead of starting in the air above it.
-                int absoluteY = getBuildBaseY(origin) + layerY;
+                int absoluteY = getBuildBaseY(template, origin) + layerY;
                 BlockPos absPos = new BlockPos(
                         origin.getX() + voxel.rel.getX(),
                         absoluteY,
@@ -436,12 +466,12 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         };
     }
 
-    protected int getBuildBaseY(BlockPos origin) {
-        return origin.getY() - 1;
+    protected int getBuildBaseY(TowerModuleTemplate template, BlockPos origin) {
+        return origin.getY() + template.minY;
     }
 
-    protected int getLayerY(BlockPos origin, BlockPos pos) {
-        return pos.getY() - getBuildBaseY(origin);
+    protected int getLayerY(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
+        return pos.getY() - getBuildBaseY(template, origin);
     }
 
     protected BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
@@ -450,9 +480,9 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
         int moduleHeight = template.moduleHeight;
         if (moduleHeight == 0) return null;
 
-        // Calculate relative position from the footprint and base-inclusive layer zero.
+        // Calculate relative position from the captured template's lowest layer.
         int relX = pos.getX() - origin.getX();
-        int layerY = getLayerY(origin, pos);
+        int layerY = getLayerY(template, origin, pos);
         int relZ = pos.getZ() - origin.getZ();
 
         // Determine Y within module
@@ -553,7 +583,7 @@ public class TowerBuildStrategy extends AbstractBuildStrategy {
 
         // Derive the layer from the position itself. The planner holds several layers at once,
         // so using the moving currentLayerY cursor made a queued block's expected material change.
-        int layerY = getLayerY(origin, pos);
+        int layerY = getLayerY(template, origin, pos);
         layerY = Math.max(0, Math.min(height - 1, layerY));
 
         // Map the full tower height to gradient space [0, G-1].

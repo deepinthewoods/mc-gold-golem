@@ -254,8 +254,15 @@ public class PathBuildStrategy extends AbstractBuildStrategy {
             entity.setTrackStart(null);
             entity.getPendingLines().clear();
             entity.setCurrentLine(null);
+            entity.getPathPendingMines().clear();
+            entity.getPathGradientMiner().reset(entity);
+            entity.getNavigation().stop();
             entity.clearPlacementTracking();
+            sendLinesToClient(entity);
         }
+        stuckTicks = 0;
+        placementTickCounter = 0;
+        waitingForResources = false;
         leftHandActive = false;
     }
 

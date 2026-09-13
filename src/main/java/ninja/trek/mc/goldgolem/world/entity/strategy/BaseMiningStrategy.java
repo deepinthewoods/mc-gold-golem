@@ -13,6 +13,7 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.ShulkerBoxBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -423,10 +424,28 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
     protected void depositInventoryToChest(BlockPos chestPos) {
         if (chestPos == null || entity.level().isClientSide()) return;
 
-        var chestEntity = entity.level().getBlockEntity(chestPos);
-        if (!(chestEntity instanceof Container chestInv)) return;
+        BlockState chestState = entity.level().getBlockState(chestPos);
+        Container chestInv = null;
+        if (chestState.getBlock() instanceof ChestBlock chestBlock) {
+            // A chest block entity exposes only one half. Resolve through ChestBlock
+            // so double chests are presented as their combined 54-slot container.
+            chestInv = ChestBlock.getContainer(chestBlock, chestState, entity.level(), chestPos, true);
+        }
+        if (chestInv == null) {
+            var chestEntity = entity.level().getBlockEntity(chestPos);
+            if (chestEntity instanceof Container container) {
+                chestInv = container;
+            }
+        }
+        if (chestInv == null) return;
 
-        Container inventory = entity.getInventory();
+        depositInventoryToContainer(entity.getInventory(), chestInv);
+    }
+
+    /**
+     * Deposit inventory contents into an already-resolved storage container.
+     */
+    protected void depositInventoryToContainer(Container inventory, Container chestInv) {
         int buildingBlocksKept = 0;
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
@@ -439,7 +458,7 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
             boolean isBuildingBlock = buildingBlockType != null && blockId != null &&
                 blockId.equals(buildingBlockType);
 
-            if (isBuildingBlock && buildingBlocksKept < 64) {
+            if (isBuildingBlock) {
                 int toKeep = Math.min(64 - buildingBlocksKept, stack.getCount());
                 buildingBlocksKept += toKeep;
                 if (stack.getCount() > toKeep) {
@@ -449,7 +468,7 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
                     stack.setCount(toKeep + (remainder.isEmpty() ? 0 : remainder.getCount()));
                     inventory.setItem(i, stack);
                 }
-            } else if (!isBuildingBlock) {
+            } else {
                 ItemStack remainder = transferToInventory(stack, chestInv);
                 if (remainder.isEmpty()) {
                     inventory.setItem(i, ItemStack.EMPTY);
@@ -510,25 +529,7 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
 
         BlockPos below = entity.blockPosition().below();
         if (!entity.level().getBlockState(below).isAir()) return;
-
-        if (buildingBlockType == null) {
-            buildingBlockType = findBuildingBlockType(true);
-            if (buildingBlockType == null) {
-                entity.handleMissingBuildingBlock();
-                return;
-            }
-        }
-
-        BlockState state = entity.getBlockStateFromId(buildingBlockType);
-        if (state == null) return;
-
-        if (entity.consumeBlockFromInventory(buildingBlockType)) {
-            entity.level().setBlockAndUpdate(below, state);
-            entity.beginHandAnimation(isLeftHandActive(), below, null);
-            alternateHand();
-        } else {
-            entity.handleMissingBuildingBlock();
-        }
+        placeBlockAt(below);
     }
 
     // ==================== Navigation Helpers ====================
@@ -545,6 +546,15 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
      * @return A navigable BlockPos, or the golem's own position as fallback
      */
     protected BlockPos findNavPositionNear(BlockPos target) {
+        BlockPos walkable = findWalkablePositionNear(target);
+        return walkable != null ? walkable : entity.blockPosition();
+    }
+
+    /**
+     * Find a supported mining position adjacent to a target, or {@code null}
+     * when the target currently has no walkable position.
+     */
+    protected BlockPos findWalkablePositionNear(BlockPos target) {
         int floorY = entity.blockPosition().getY();
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
@@ -579,7 +589,7 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
             }
         }
 
-        return best != null ? best : entity.blockPosition();
+        return best;
     }
 
     // ==================== Navigation Obstacle Handling ====================
@@ -715,17 +725,28 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
 
         if (buildingBlockType == null) {
             buildingBlockType = findBuildingBlockType(true);
-            if (buildingBlockType == null) return;
         }
+
+        if (tryPlaceSelectedBuildingBlock(pos)) return;
+
+        // The reserved material may have been exhausted while other suitable
+        // blocks were added later. Re-select once before entering resource wait.
+        buildingBlockType = findBuildingBlockType(true);
+        if (tryPlaceSelectedBuildingBlock(pos)) return;
+
+        entity.handleMissingBuildingBlock();
+    }
+
+    private boolean tryPlaceSelectedBuildingBlock(BlockPos pos) {
+        if (buildingBlockType == null) return false;
 
         BlockState state = entity.getBlockStateFromId(buildingBlockType);
-        if (state == null) return;
+        if (state == null || !entity.consumeBlockFromInventory(buildingBlockType)) return false;
 
-        if (entity.consumeBlockFromInventory(buildingBlockType)) {
-            entity.level().setBlockAndUpdate(pos, state);
-            entity.beginHandAnimation(isLeftHandActive(), pos, null);
-            alternateHand();
-        }
+        entity.level().setBlockAndUpdate(pos, state);
+        entity.beginHandAnimation(isLeftHandActive(), pos, null);
+        alternateHand();
+        return true;
     }
 
     /**
@@ -744,9 +765,7 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
             var block = blockItem.getBlock();
             String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
 
-            if (block instanceof ShulkerBoxBlock) continue;
-            if (isGravityBlock(block)) continue;
-            if (excludeOres && isOreBlock(blockId)) continue;
+            if (!isSuitableBuildingBlock(blockItem, blockId, excludeOres)) continue;
 
             return blockId;
         }
@@ -766,14 +785,24 @@ public abstract class BaseMiningStrategy extends AbstractBuildStrategy {
                 var block = innerBi.getBlock();
                 String blockId = BuiltInRegistries.BLOCK.getKey(block).toString();
 
-                if (isGravityBlock(block)) continue;
-                if (excludeOres && isOreBlock(blockId)) continue;
+                if (!isSuitableBuildingBlock(innerBi, blockId, excludeOres)) continue;
 
                 return blockId;
             }
         }
 
         return null;
+    }
+
+    private boolean isSuitableBuildingBlock(BlockItem blockItem, String blockId, boolean excludeOres) {
+        var block = blockItem.getBlock();
+        if (block instanceof ShulkerBoxBlock || isGravityBlock(block)) return false;
+        if (excludeOres && isOreBlock(blockId)) return false;
+
+        // Bridges and emergency floors must actually support the golem. This also
+        // excludes torches, plants, and other BlockItems without full collision.
+        return block.defaultBlockState().isCollisionShapeFullBlock(
+            entity.level(), entity.blockPosition());
     }
 
     // ==================== Block Classification ====================

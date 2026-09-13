@@ -39,9 +39,9 @@ class StructureGeneratorsTest {
                 null, template, new TowerBuildRequest(new BlockPos(10, 64, 10), 5));
 
         assertEquals(5, plan.blocks().size());
-        assertEquals(Blocks.STONE, plan.blocks().get(new BlockPos(10, 63, 10)).getBlock());
-        assertEquals(Blocks.OAK_PLANKS, plan.blocks().get(new BlockPos(10, 64, 10)).getBlock());
-        assertEquals(Blocks.STONE, plan.blocks().get(new BlockPos(10, 67, 10)).getBlock());
+        assertEquals(Blocks.STONE, plan.blocks().get(new BlockPos(10, 64, 10)).getBlock());
+        assertEquals(Blocks.OAK_PLANKS, plan.blocks().get(new BlockPos(10, 65, 10)).getBlock());
+        assertEquals(Blocks.STONE, plan.blocks().get(new BlockPos(10, 68, 10)).getBlock());
         assertFalse(plan.capped());
     }
 
@@ -81,7 +81,7 @@ class StructureGeneratorsTest {
                 null, template, new TowerBuildRequest(new BlockPos(0, 64, 0), 2));
 
         assertEquals(1, plan.blocks().size());
-        assertEquals(Blocks.OAK_PLANKS, plan.blocks().get(new BlockPos(0, 63, 0)).getBlock());
+        assertEquals(Blocks.OAK_PLANKS, plan.blocks().get(new BlockPos(0, 64, 0)).getBlock());
     }
 
     @Test

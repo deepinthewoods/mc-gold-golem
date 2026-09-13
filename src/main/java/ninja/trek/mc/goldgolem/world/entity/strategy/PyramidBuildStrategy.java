@@ -43,8 +43,13 @@ public final class PyramidBuildStrategy extends TowerBuildStrategy {
     @Override
     protected BlockState getTowerBlockStateAt(TowerModuleTemplate template, BlockPos origin, BlockPos pos) {
         if (template == null || origin == null || entity == null) return null;
-        int layerY = getLayerY(origin, pos);
+        int layerY = getLayerY(template, origin, pos);
         return getOrCreatePlan(entity, template, origin, layerY).get(pos);
+    }
+
+    @Override
+    protected int getBuildBaseY(TowerModuleTemplate template, BlockPos origin) {
+        return origin.getY() - 1;
     }
 
     private Map<BlockPos, BlockState> getOrCreatePlan(GoldGolemEntity golem, TowerModuleTemplate template,

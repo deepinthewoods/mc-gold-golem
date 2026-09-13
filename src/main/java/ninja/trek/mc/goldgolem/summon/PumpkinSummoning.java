@@ -25,6 +25,15 @@ public class PumpkinSummoning {
         UseBlockCallback.EVENT.register(PumpkinSummoning::onUseBlock);
     }
 
+    private static GoldGolemEntity createGolemAt(Player player, Level world, BlockPos summonPosition) {
+        GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
+        golem.snapTo(summonPosition.getX() + 0.5, summonPosition.getY(), summonPosition.getZ() + 0.5,
+                player.getYRot(), 0);
+        golem.setOwner(player);
+        golem.setSummonPosition(summonPosition);
+        return golem;
+    }
+
     private static InteractionResult onUseBlock(Player player, Level world, InteractionHand hand, BlockHitResult hit) {
         ItemStack stack = player.getItemInHand(hand);
         if (!(stack.getItem() instanceof BlockItem bi)) return InteractionResult.PASS;
@@ -52,9 +61,7 @@ public class PumpkinSummoning {
         if (desiredName != null && !desiredName.isBlank()) {
             java.nio.file.Path snapshotPath = GoldGolemEntity.findSnapshotPath(desiredName);
             if (snapshotPath != null) {
-                GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-                golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-                golem.setOwner(player);
+                GoldGolemEntity golem = createGolemAt(player, world, below);
                 boolean applied = golem.applySnapshotFromPath((ServerLevel) world, snapshotPath, below, player, desiredName);
                 if (applied) {
                     world.destroyBlock(below, false, player);
@@ -223,9 +230,7 @@ public class PumpkinSummoning {
             BlockPos chest2 = below.relative(chestDirection2);
             BlockPos chest3 = below.relative(chestDirection3);
 
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.TUNNEL);
             golem.setTunnelConfig(chest1, chest2, chest3, emptyDir, below);
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TUNNEL)));
@@ -240,9 +245,7 @@ public class PumpkinSummoning {
             BlockPos chest2 = below.relative(chestDirection2);
 
             // Spawn golem with excavation mode
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.EXCAVATION);
             golem.setExcavationConfig(chest1, chest2, chestDirection1, chestDirection2, below);
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.EXCAVATION)));
@@ -257,9 +260,7 @@ public class PumpkinSummoning {
             net.minecraft.core.Direction miningDir = chestDirection1.getOpposite();
 
             // Spawn golem with mining mode
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.MINING);
             golem.setMiningConfig(chestPos, miningDir, below);
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.MINING)));
@@ -287,10 +288,7 @@ public class PumpkinSummoning {
                 return InteractionResult.FAIL;
             }
             var def = res.def();
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(pyramidOrigin.getX() + 0.5, pyramidOrigin.getY(), pyramidOrigin.getZ() + 0.5,
-                    player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, pyramidOrigin);
             golem.setBuildMode(BuildMode.PYRAMID);
 
             String jsonRel = null;
@@ -334,9 +332,7 @@ public class PumpkinSummoning {
             var def = res.def();
 
             // Spawn golem with terraforming mode
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.TERRAFORMING);
             golem.setTerraformingConfig(def, below);
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.TERRAFORMING)));
@@ -354,9 +350,7 @@ public class PumpkinSummoning {
             if (!player.isCreative()) stack.shrink(1);
             return InteractionResult.SUCCESS;
         } else if (roomMode) {
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.ROOM);
             golem.setRoomCapture(roomScan.definition());
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.ROOM)));
@@ -378,9 +372,7 @@ public class PumpkinSummoning {
             var def = res.def();
 
             // Spawn golem with tree mode
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(secondGoldPos.getX() + 0.5, secondGoldPos.getY(), secondGoldPos.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, secondGoldPos);
             golem.setBuildMode(BuildMode.TREE);
 
             // Persist JSON file under game dir
@@ -462,9 +454,7 @@ public class PumpkinSummoning {
             var def = res.def();
 
             // Spawn golem with tower mode
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(bottomGold.getX() + 0.5, bottomGold.getY(), bottomGold.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, bottomGold);
             golem.setBuildMode(BuildMode.TOWER);
 
             // Persist JSON file under game dir
@@ -529,9 +519,7 @@ public class PumpkinSummoning {
             }
             var def = res.def();
             // Spawn golem with wall mode set
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.WALL);
 
             // Persist JSON file under game dir
@@ -805,9 +793,7 @@ public class PumpkinSummoning {
             }
         } else {
             // Pathing Mode: spawn as before
-            GoldGolemEntity golem = new GoldGolemEntity(GoldGolemEntities.GOLD_GOLEM, (ServerLevel) world);
-            golem.snapTo(below.getX() + 0.5, below.getY(), below.getZ() + 0.5, player.getYRot(), 0);
-            golem.setOwner(player);
+            GoldGolemEntity golem = createGolemAt(player, world, below);
             golem.setBuildMode(BuildMode.PATH);
             golem.setCustomName(Component.literal(GoldGolemEntity.getNextGolemName(BuildMode.PATH)));
             world.destroyBlock(below, false, player);

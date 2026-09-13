@@ -29,6 +29,7 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
@@ -45,8 +46,14 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.BushBlock;
+import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.GrowingPlantBlock;
 import net.minecraft.world.level.block.ShulkerBoxBlock;
+import net.minecraft.world.level.block.VineBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.AttachFace;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.levelgen.synth.SimplexNoise;
@@ -95,6 +102,11 @@ public class GoldGolemEntity extends PathfinderMob {
     private static final int EYE_UPDATE_COOLDOWN_MIN = 5;
     private static final int EYE_UPDATE_COOLDOWN_MAX = 10;
     private static final int FIRE_HAZARD_CHECK_INTERVAL_TICKS = 10;
+    private static final int SUPPLY_CHEST_SEARCH_RADIUS = 8;
+    private static final int SUPPLY_CHEST_SEARCH_INTERVAL_TICKS = 20;
+    private static final double RESOURCE_RETURN_ARRIVAL_DISTANCE_SQ = 16.0;
+    private static final double RESOURCE_RETURN_MIN_DISTANCE_IMPROVEMENT_SQ = 0.0625;
+    private static final int RESOURCE_RETURN_STALL_TICKS = 60;
 
     // Owner cache constants
     private static final int OWNER_CACHE_DURATION = 100; // 5 seconds (100 ticks)
@@ -144,8 +156,11 @@ public class GoldGolemEntity extends PathfinderMob {
 
     // Strategy pattern for build modes
     private BuildStrategy activeStrategy = null;
-    private BlockPos buildStartPosition = null;
+    private BlockPos summonPosition = null;
     private BlockPos resourceWaitAnchor = null;
+    private BlockPos resourceWaitDestination = null;
+    private double resourceReturnBestDistanceSq = Double.MAX_VALUE;
+    private int resourceReturnStallTicks = 0;
     private java.util.UUID timelapseBuildSessionId = null;
     private boolean timelapseBuildAnnounced = false;
     private String timelapseBuildState = "";
@@ -451,14 +466,14 @@ public class GoldGolemEntity extends PathfinderMob {
             activeStrategy.stop(this);
         }
         this.getNavigation().stop();
-        clearBuildReturnState();
+        clearResourceReturnState();
     }
 
     /**
      * Start building with the current strategy.
      */
     public void startBuilding() {
-        prepareBuildReturnState(true);
+        prepareResourceReturnState();
         this.buildingPaths = true;
         this.entityData.set(BUILDING_PATHS, true);
         initializeStrategyForCurrentMode();
@@ -536,20 +551,76 @@ public class GoldGolemEntity extends PathfinderMob {
         return resourceWaitAnchor;
     }
 
-    private void clearBuildReturnState() {
-        buildStartPosition = null;
-        resourceWaitAnchor = null;
+    public void setSummonPosition(BlockPos position) {
+        this.summonPosition = position.immutable();
     }
 
-    private void prepareBuildReturnState(boolean resetStartPosition) {
-        if (!getBuildMode().returnsToBuildStartWhenOutOfBlocks()) {
-            clearBuildReturnState();
+    private static BlockPos readSavedBlockPosition(ValueInput view, String prefix) {
+        if (!view.contains(prefix + "X")) return null;
+        return new BlockPos(
+                view.getIntOr(prefix + "X", 0),
+                view.getIntOr(prefix + "Y", 0),
+                view.getIntOr(prefix + "Z", 0));
+    }
+
+    static BlockPos selectPersistedSummonPosition(BlockPos savedSummonPosition,
+                                                  BlockPos legacyBuildStartPosition) {
+        BlockPos selected = savedSummonPosition != null ? savedSummonPosition : legacyBuildStartPosition;
+        return selected != null ? selected.immutable() : null;
+    }
+
+    private void clearResourceReturnState() {
+        resourceWaitAnchor = null;
+        resourceWaitDestination = null;
+        resetResourceReturnProgress();
+    }
+
+    private void prepareResourceReturnState() {
+        if (!getBuildMode().returnsToSummonPositionWhenOutOfBlocks()) {
+            clearResourceReturnState();
             return;
         }
-        if (resetStartPosition || buildStartPosition == null) {
-            buildStartPosition = this.blockPosition();
+        if (summonPosition == null) {
+            setSummonPosition(this.blockPosition());
         }
-        resourceWaitAnchor = null;
+        clearResourceReturnState();
+    }
+
+    private void resetResourceReturnProgress() {
+        resourceReturnBestDistanceSq = Double.MAX_VALUE;
+        resourceReturnStallTicks = 0;
+    }
+
+    private void resumeBuildingFromSupplyChest() {
+        if (activeStrategy == null) return;
+
+        activeStrategy.setWaitingForResources(false);
+        prepareResourceReturnState();
+        setBuildingPaths(true);
+        startTimelapseBuild(true);
+        initializePlayerTrackingForBuild(true);
+        spawnHearts();
+    }
+
+    private void initializePlayerTrackingForBuild(boolean resumed) {
+        if (activeStrategy == null || !activeStrategy.usesPlayerTracking()) return;
+
+        Vec3 resumePos = null;
+        if (resumed
+                && activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
+            resumePos = wall.getResumeTrackStart();
+        }
+        if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.RoomBuildStrategy room) {
+            resumePos = room.getActiveTrackStart();
+        }
+        this.trackStart = resumePos != null ? resumePos
+                : new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
+        Player owner = getOwnerPlayer();
+        if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
+            ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(),
+                    java.util.Optional.of(this.trackStart), false);
+        }
+        clearPlacementTracking();
     }
 
     public void setWallCapture(java.util.List<String> uniqueIds, net.minecraft.core.BlockPos origin, String jsonPath) {
@@ -1378,6 +1449,12 @@ public class GoldGolemEntity extends PathfinderMob {
         if (data == null) return false;
         ValueInput view = TagValueInput.create(ProblemReporter.DISCARDING, world.registryAccess(), data.nbt());
         readAdditionalSaveData(view);
+        setSummonPosition(summonOrigin);
+        if (isWaitingForResources() && getBuildMode().returnsToSummonPositionWhenOutOfBlocks()) {
+            resourceWaitAnchor = summonPosition;
+            resourceWaitDestination = summonPosition;
+            resetResourceReturnProgress();
+        }
         setOwner(owner);
         if (displayName != null && !displayName.isBlank()) {
             setCustomNameNoSnapshot(Component.literal(displayName));
@@ -1719,7 +1796,7 @@ public class GoldGolemEntity extends PathfinderMob {
     }
 
     public static AttributeSupplier.Builder createAttributes() {
-        return AttributeSupplier.builder()
+        return Mob.createMobAttributes()
                 .add(Attributes.MAX_HEALTH, 20.0)
                 .add(Attributes.MAX_ABSORPTION, 0.0)
                 .add(Attributes.MOVEMENT_SPEED, 0.28)
@@ -1932,19 +2009,102 @@ public class GoldGolemEntity extends PathfinderMob {
     }
 
     private void tickResourceWaitReturn() {
-        if (!getBuildMode().returnsToBuildStartWhenOutOfBlocks()
+        if (!getBuildMode().returnsToSummonPositionWhenOutOfBlocks()
                 || buildingPaths || !isWaitingForResources() || resourceWaitAnchor == null) return;
 
-        double targetX = resourceWaitAnchor.getX() + 0.5;
-        double targetZ = resourceWaitAnchor.getZ() + 0.5;
-        double dx = this.getX() - targetX;
-        double dz = this.getZ() - targetZ;
-        if (dx * dx + dz * dz <= 16.0 || !this.getNavigation().isDone()) return;
+        BlockPos destination = resourceWaitDestination != null ? resourceWaitDestination : resourceWaitAnchor;
+        if (isAtResourceWaitDestination(destination, this.getX(), this.getY(), this.getZ())) {
+            this.getNavigation().stop();
+            resetResourceReturnProgress();
+            if (this.tickCount % SUPPLY_CHEST_SEARCH_INTERVAL_TICKS == 0 && tryResupplyFromSupplyChests()) {
+                resumeBuildingFromSupplyChest();
+            }
+            return;
+        }
+
+        double distanceSq = resourceWaitDistanceSq(destination, this.getX(), this.getY(), this.getZ());
+        if (hasMeaningfulResourceReturnProgress(resourceReturnBestDistanceSq, distanceSq)) {
+            resourceReturnBestDistanceSq = distanceSq;
+            resourceReturnStallTicks = 0;
+        } else {
+            resourceReturnStallTicks++;
+        }
+
+        if (resourceReturnStallTicks >= RESOURCE_RETURN_STALL_TICKS) {
+            BlockPos safeDestination = findSafeResourceWaitPosition(resourceWaitAnchor);
+            if (safeDestination != null) {
+                resourceWaitDestination = safeDestination;
+                this.getNavigation().stop();
+                teleportWithParticles(safeDestination);
+            }
+            resetResourceReturnProgress();
+            return;
+        }
+
+        if (!this.getNavigation().isDone()) return;
 
         // Retry periodically if terrain changes or the first path search fails.
         if (this.tickCount % 20 == 0) {
-            this.getNavigation().moveTo(targetX, resourceWaitAnchor.getY(), targetZ, 0.8);
+            this.getNavigation().moveTo(
+                    destination.getX() + 0.5, destination.getY(), destination.getZ() + 0.5, 0.8);
         }
+    }
+
+    static boolean isAtResourceWaitDestination(BlockPos destination, double x, double y, double z) {
+        return resourceWaitDistanceSq(destination, x, y, z) <= RESOURCE_RETURN_ARRIVAL_DISTANCE_SQ;
+    }
+
+    private static double resourceWaitDistanceSq(BlockPos destination, double x, double y, double z) {
+        double dx = x - (destination.getX() + 0.5);
+        double dy = y - destination.getY();
+        double dz = z - (destination.getZ() + 0.5);
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    static boolean hasMeaningfulResourceReturnProgress(double bestDistanceSq, double currentDistanceSq) {
+        return currentDistanceSq + RESOURCE_RETURN_MIN_DISTANCE_IMPROVEMENT_SQ < bestDistanceSq;
+    }
+
+    private BlockPos findSafeResourceWaitPosition(BlockPos anchor) {
+        for (BlockPos candidate : BlockPos.withinManhattan(
+                anchor, SUPPLY_CHEST_SEARCH_RADIUS, 4, SUPPLY_CHEST_SEARCH_RADIUS)) {
+            if (!this.level().hasChunkAt(candidate)) continue;
+
+            BlockPos groundPos = candidate.below();
+            BlockState groundState = this.level().getBlockState(groundPos);
+            boolean hasGround = groundState.isRedstoneConductor(this.level(), groundPos)
+                    || groundState.entityCanStandOn(this.level(), groundPos, this);
+            if (!hasGround || !this.level().getBlockState(candidate).isAir()) continue;
+            if (this.getBbHeight() > 1.0F && !this.level().getBlockState(candidate.above()).isAir()) continue;
+            return candidate;
+        }
+        return null;
+    }
+
+    private boolean tryResupplyFromSupplyChests() {
+        boolean transferredAny = false;
+        for (BlockPos chestPos : BlockPos.withinManhattan(resourceWaitAnchor, SUPPLY_CHEST_SEARCH_RADIUS,
+                SUPPLY_CHEST_SEARCH_RADIUS, SUPPLY_CHEST_SEARCH_RADIUS)) {
+            if (!isWithinSupplyChestSearchRadius(resourceWaitAnchor, chestPos)) continue;
+            if (!this.level().hasChunkAt(chestPos)) continue;
+
+            BlockState chestState = this.level().getBlockState(chestPos);
+            if (!(chestState.getBlock() instanceof ChestBlock chestBlock)
+                    || !this.level().getBlockState(chestPos.below()).is(Blocks.GOLD_BLOCK)) continue;
+
+            Container supplyInventory = ChestBlock.getContainer(
+                    chestBlock, chestState, this.level(), chestPos, true);
+            if (supplyInventory != null) {
+                transferredAny |= transferSupplyItems(supplyInventory, inventory);
+            }
+        }
+        return transferredAny;
+    }
+
+    static boolean isWithinSupplyChestSearchRadius(BlockPos anchor, BlockPos candidate) {
+        long dx = candidate.getX() - anchor.getX();
+        long dz = candidate.getZ() - anchor.getZ();
+        return dx * dx + dz * dz <= SUPPLY_CHEST_SEARCH_RADIUS * SUPPLY_CHEST_SEARCH_RADIUS;
     }
 
     private void updateRandomEyeMovement() {
@@ -2179,24 +2339,28 @@ public class GoldGolemEntity extends PathfinderMob {
         int bz = Mth.floor(pos.z);
         int y0 = Mth.floor(pos.y);
         var world = this.level();
-        Integer groundY = null;
+        Double surfaceY = null;
         for (int yy = y0 + 3; yy >= y0 - 8; yy--) {
             BlockPos test = new BlockPos(bx, yy, bz);
             var st = world.getBlockState(test);
-            if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) { groundY = yy; break; }
+            var collisionShape = st.getCollisionShape(world, test);
+            if (!collisionShape.isEmpty()) {
+                surfaceY = yy + collisionShape.max(Direction.Axis.Y);
+                break;
+            }
         }
-        if (groundY == null) return pos.y;
+        if (surfaceY == null) return pos.y;
         // ensure stand space (two blocks of air above ground)
-        int ty = groundY + 1;
+        int ty = Mth.ceil(surfaceY);
         for (int up = 0; up <= 3; up++) {
             BlockPos p1 = new BlockPos(bx, ty + up, bz);
             BlockPos p2 = new BlockPos(bx, ty + up + 1, bz);
             var s1 = world.getBlockState(p1);
             var s2 = world.getBlockState(p2);
             boolean passable = s1.isAir() && s2.isAir();
-            if (passable) return ty + up;
+            if (passable) return surfaceY + up;
         }
-        return groundY + 1.0;
+        return surfaceY;
     }
 
     /**
@@ -2231,7 +2395,27 @@ public class GoldGolemEntity extends PathfinderMob {
 
     // Mining methods have been moved to MiningBuildStrategy
 
-    private ItemStack transferToInventory(ItemStack stack, net.minecraft.world.Container targetInv) {
+    static boolean transferSupplyItems(Container supplyInventory, Container targetInventory) {
+        boolean transferredAny = false;
+        for (int slot = 0; slot < supplyInventory.getContainerSize(); slot++) {
+            ItemStack supplyStack = supplyInventory.getItem(slot);
+            if (supplyStack.isEmpty()) continue;
+
+            int originalCount = supplyStack.getCount();
+            ItemStack remainder = transferToInventory(supplyStack.copy(), targetInventory);
+            if (remainder.getCount() == originalCount) continue;
+
+            supplyInventory.setItem(slot, remainder);
+            transferredAny = true;
+        }
+        if (transferredAny) {
+            supplyInventory.setChanged();
+            targetInventory.setChanged();
+        }
+        return transferredAny;
+    }
+
+    private static ItemStack transferToInventory(ItemStack stack, Container targetInv) {
         if (stack.isEmpty()) return ItemStack.EMPTY;
 
         // Try to merge with existing stacks first
@@ -2258,7 +2442,7 @@ public class GoldGolemEntity extends PathfinderMob {
             }
         }
 
-        // Chest is full, return remainder
+        // Target inventory is full, return the remainder.
         return stack;
     }
 
@@ -2279,6 +2463,17 @@ public class GoldGolemEntity extends PathfinderMob {
             pos.getX() + 1.0, pos.getY() + 1.0, pos.getZ() + 1.0
         );
         return golemBox.intersects(blockBox);
+    }
+
+    /** Check the actual collision shape, allowing non-colliding decorations at the golem's feet. */
+    private boolean wouldBlockOverlapSelf(BlockPos pos, BlockState state) {
+        var golemBox = this.getBoundingBox();
+        for (var box : state.getCollisionShape(this.level(), pos).toAabbs()) {
+            if (golemBox.intersects(box.move(pos))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isOreBlock(String blockId) {
@@ -2686,10 +2881,10 @@ public class GoldGolemEntity extends PathfinderMob {
         if (timelapseBuildSessionId != null) {
             view.putString("TimelapseBuildSession", timelapseBuildSessionId.toString());
         }
-        if (buildStartPosition != null) {
-            view.putInt("BuildStartX", buildStartPosition.getX());
-            view.putInt("BuildStartY", buildStartPosition.getY());
-            view.putInt("BuildStartZ", buildStartPosition.getZ());
+        if (summonPosition != null) {
+            view.putInt("SummonX", summonPosition.getX());
+            view.putInt("SummonY", summonPosition.getY());
+            view.putInt("SummonZ", summonPosition.getZ());
         }
         if (resourceWaitAnchor != null) {
             view.putInt("ResourceWaitX", resourceWaitAnchor.getX());
@@ -2942,14 +3137,9 @@ public class GoldGolemEntity extends PathfinderMob {
             timelapseBuildSessionId = null;
         }
         timelapseBuildAnnounced = false;
-        if (view.contains("BuildStartX")) {
-            this.buildStartPosition = new BlockPos(
-                    view.getIntOr("BuildStartX", 0),
-                    view.getIntOr("BuildStartY", 0),
-                    view.getIntOr("BuildStartZ", 0));
-        } else {
-            this.buildStartPosition = null;
-        }
+        BlockPos savedSummonPosition = readSavedBlockPosition(view, "Summon");
+        BlockPos legacyBuildStartPosition = readSavedBlockPosition(view, "BuildStart");
+        this.summonPosition = selectPersistedSummonPosition(savedSummonPosition, legacyBuildStartPosition);
         if (view.contains("ResourceWaitX")) {
             this.resourceWaitAnchor = new BlockPos(
                     view.getIntOr("ResourceWaitX", 0),
@@ -2958,6 +3148,8 @@ public class GoldGolemEntity extends PathfinderMob {
         } else {
             this.resourceWaitAnchor = null;
         }
+        this.resourceWaitDestination = this.resourceWaitAnchor;
+        resetResourceReturnProgress();
         this.pathWidth = Math.max(1, Math.min(9, view.getIntOr("PathWidth", this.pathWidth)));
         this.gradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("GradWindow", this.gradientWindow)));
         this.stepGradientWindow = Math.max(0.0f, Math.min(9.0f, view.getFloatOr("StepWindow", this.stepGradientWindow)));
@@ -3538,7 +3730,7 @@ public class GoldGolemEntity extends PathfinderMob {
 
                 switch (result) {
                     case STARTED, RESUMED -> {
-                        prepareBuildReturnState(result == BuildStrategy.FeedResult.STARTED);
+                        prepareResourceReturnState();
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
                         startTimelapseBuild(result == BuildStrategy.FeedResult.RESUMED);
@@ -3547,25 +3739,7 @@ public class GoldGolemEntity extends PathfinderMob {
                         if (result == BuildStrategy.FeedResult.RESUMED) {
                             sp.sendOverlayMessage(Component.literal("[Gold Golem] Resuming!"));
                         }
-                        // Path/Wall/Tower modes need trackStart initialization
-                        if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
-                            // For wall mode RESUMED, resume from last module endpoint
-                            Vec3 resumePos = null;
-                            if (result == BuildStrategy.FeedResult.RESUMED
-                                    && activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.WallBuildStrategy wall) {
-                                resumePos = wall.getResumeTrackStart();
-                            }
-                            if (activeStrategy instanceof ninja.trek.mc.goldgolem.world.entity.strategy.RoomBuildStrategy room) {
-                                resumePos = room.getActiveTrackStart();
-                            }
-                            this.trackStart = resumePos != null ? resumePos
-                                    : new Vec3(this.getX(), this.getY() + 0.05, this.getZ());
-                            var owner = getOwnerPlayer();
-                            if (owner instanceof net.minecraft.server.level.ServerPlayer spOwner) {
-                                ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.of(this.trackStart), false);
-                            }
-                            clearPlacementTracking();
-                        }
+                        initializePlayerTrackingForBuild(result == BuildStrategy.FeedResult.RESUMED);
                     }
                     case ALREADY_ACTIVE -> {
                         sp.sendOverlayMessage(Component.literal("[Gold Golem] Already active!"));
@@ -3573,7 +3747,7 @@ public class GoldGolemEntity extends PathfinderMob {
                     }
                     case NOT_HANDLED -> {
                         // Default behavior: just start building
-                        prepareBuildReturnState(true);
+                        prepareResourceReturnState();
                         this.buildingPaths = true;
                         this.entityData.set(BUILDING_PATHS, true);
                         startTimelapseBuild(false);
@@ -3630,10 +3804,13 @@ public class GoldGolemEntity extends PathfinderMob {
             }
 
             // Common cleanup for path-tracking modes
-            clearBuildReturnState();
+            clearResourceReturnState();
             this.trackStart = null;
             this.pendingLines.clear();
             this.currentLine = null;
+            this.getNavigation().stop();
+            clearHandAnimation(true);
+            clearHandAnimation(false);
             // Clear client lines
             if (attacker instanceof net.minecraft.server.level.ServerPlayer spOwner) {
                 ninja.trek.mc.goldgolem.net.ServerNet.sendLines(spOwner, this.getId(), java.util.List.of(), java.util.Optional.empty(), false);
@@ -3758,18 +3935,24 @@ public class GoldGolemEntity extends PathfinderMob {
         }
         pauseTimelapseBuild();
         this.getNavigation().stop();
-        if (getBuildMode().returnsToBuildStartWhenOutOfBlocks()) {
-            if (buildStartPosition == null) {
-                buildStartPosition = this.blockPosition();
+        if (getBuildMode().returnsToSummonPositionWhenOutOfBlocks()) {
+            if (summonPosition == null) {
+                setSummonPosition(this.blockPosition());
             }
-            resourceWaitAnchor = buildStartPosition;
+            resourceWaitAnchor = summonPosition;
+            resourceWaitDestination = resourceWaitAnchor;
+            resourceReturnBestDistanceSq = resourceWaitDistanceSq(
+                    resourceWaitDestination, this.getX(), this.getY(), this.getZ());
+            resourceReturnStallTicks = 0;
             this.getNavigation().moveTo(
-                    resourceWaitAnchor.getX() + 0.5,
-                    resourceWaitAnchor.getY(),
-                    resourceWaitAnchor.getZ() + 0.5,
+                    resourceWaitDestination.getX() + 0.5,
+                    resourceWaitDestination.getY(),
+                    resourceWaitDestination.getZ() + 0.5,
                     0.8);
         } else {
             resourceWaitAnchor = null;
+            resourceWaitDestination = null;
+            resetResourceReturnProgress();
         }
         spawnAngry();
         if (activeStrategy != null && activeStrategy.usesPlayerTracking()) {
@@ -3801,7 +3984,8 @@ public class GoldGolemEntity extends PathfinderMob {
     }
 
     // Place a single offset column at the given center x/z for strip index j
-    public void placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.core.Direction travelDir) {
+    public boolean placeOffsetAt(double x, double y, double z, double px, double pz, int stripWidth, int j, boolean xMajor, net.minecraft.core.Direction travelDir) {
+        boolean placed = false;
         int w = Math.max(1, Math.min(9, stripWidth));
         var world = this.level();
         double ox = x + px * j;
@@ -3813,58 +3997,60 @@ public class GoldGolemEntity extends PathfinderMob {
         for (int yy = y0 + 1; yy >= y0 - 6; yy--) {
             BlockPos test = new BlockPos(bx, yy, bz);
             var st = world.getBlockState(test);
-            if (!st.isAir() && st.isCollisionShapeFullBlock(world, test)) { groundY = yy; break; }
+            if (!st.getCollisionShape(world, test).isEmpty()) { groundY = yy; break; }
         }
-        if (groundY == null) return;
+        if (groundY == null) return false;
         int gIdx = sampleGradientIndex(w, j, bx, groundY, bz, getGradientNoiseScaleMain());
-        if (gIdx < 0) return;
-        String id = gradient[gIdx] == null ? "" : gradient[gIdx];
-        if (id.isEmpty()) return;
+        String id = gIdx < 0 || gradient[gIdx] == null ? "" : gradient[gIdx];
+        // An empty main slot leaves the ground intact; surface and step rows still run.
+        net.minecraft.world.level.block.Block block = null;
+        if (!id.isEmpty()) {
 
-        // Check for mine action in main gradient
-        if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(id)) {
-            // Mine the surface block at this column
+            // Check for mine action in main gradient
+            if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(id)) {
+                // Mine the surface block at this column
+                for (int dy = -1; dy <= 1; dy++) {
+                    BlockPos rp = new BlockPos(bx, groundY + dy, bz);
+                    var rs = world.getBlockState(rp);
+                    if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue;
+                    BlockPos ap = rp.above();
+                    var as2 = world.getBlockState(ap);
+                    if (as2.isCollisionShapeFullBlock(world, ap)) continue;
+                    enqueuePathMine(rp);
+                    break;
+                }
+                return false; // don't process surface/step when main is mine
+            }
+
+            var ident = net.minecraft.resources.Identifier.tryParse(id);
+            if (ident == null) return false;
+            block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
+            if (block == null) return false;
+            // Replace only exposed surface within a 3-block vertical window
             for (int dy = -1; dy <= 1; dy++) {
                 BlockPos rp = new BlockPos(bx, groundY + dy, bz);
                 var rs = world.getBlockState(rp);
-                if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue;
+                if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue; // must be solid
                 BlockPos ap = rp.above();
-                var as2 = world.getBlockState(ap);
-                if (as2.isCollisionShapeFullBlock(world, ap)) continue;
-                enqueuePathMine(rp);
-                break;
-            }
-            return; // don't process surface/step when main is mine
-        }
+                var as = world.getBlockState(ap);
+                if (as.isCollisionShapeFullBlock(world, ap)) continue; // not surface if blocked above
+                if (rs.is(block)) break; // already desired block at surface
+                long key = rp.asLong();
+                if (!recordPlaced(key)) break;
+                // Prevent placing blocks inside self to avoid suffocation damage
+                if (wouldBlockOverlapSelf(rp)) {
+                    unrecordPlaced(key);
+                    break;
+                }
+                if (!consumeBlockFromInventory(id)) {
+                    unrecordPlaced(key);
+                    handleMissingBuildingBlock();
+                    return placed;
+                }
+                placed |= world.setBlock(rp, block.defaultBlockState(), 3);
 
-        var ident = net.minecraft.resources.Identifier.tryParse(id);
-        if (ident == null) return;
-        var block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(ident);
-        if (block == null) return;
-        // Replace only exposed surface within a 3-block vertical window
-        for (int dy = -1; dy <= 1; dy++) {
-            BlockPos rp = new BlockPos(bx, groundY + dy, bz);
-            var rs = world.getBlockState(rp);
-            if (rs.isAir() || !rs.isCollisionShapeFullBlock(world, rp)) continue; // must be solid
-            BlockPos ap = rp.above();
-            var as = world.getBlockState(ap);
-            if (as.isCollisionShapeFullBlock(world, ap)) continue; // not surface if blocked above
-            if (rs.is(block)) break; // already desired block at surface
-            long key = rp.asLong();
-            if (!recordPlaced(key)) break;
-            // Prevent placing blocks inside self to avoid suffocation damage
-            if (wouldBlockOverlapSelf(rp)) {
-                unrecordPlaced(key);
-                break;
+                break; // only one placement per column
             }
-            if (!consumeBlockFromInventory(id)) {
-                unrecordPlaced(key);
-                handleMissingBuildingBlock();
-                return;
-            }
-            world.setBlock(rp, block.defaultBlockState(), 3);
-
-            break; // only one placement per column
         }
 
         // Surface gradient placement (decorations on top of ground surface)
@@ -3876,7 +4062,12 @@ public class GoldGolemEntity extends PathfinderMob {
             Integer topY = null;
             for (int yy = groundY + 4; yy >= groundY - 4; yy--) {
                 BlockPos tp = new BlockPos(bx, yy, bz);
-                if (world.getBlockState(tp).isCollisionShapeFullBlock(world, tp)) { topY = yy; break; }
+                var support = world.getBlockState(tp);
+                // Include slabs and other partial surfaces instead of reaching through them to solid ground.
+                if (!support.canBeReplaced() && !support.getCollisionShape(world, tp).isEmpty()) {
+                    topY = yy;
+                    break;
+                }
             }
             if (topY != null) {
                 BlockPos abovePos = new BlockPos(bx, topY + 1, bz);
@@ -3891,7 +4082,7 @@ public class GoldGolemEntity extends PathfinderMob {
                                 BlockPos surfaceBlock = new BlockPos(bx, topY, bz);
                                 BlockState surfState = world.getBlockState(surfaceBlock);
                                 if (surfState.is(net.minecraft.world.level.block.Blocks.GRASS_BLOCK) || surfState.is(net.minecraft.world.level.block.Blocks.DIRT)) {
-                                    world.setBlock(surfaceBlock, net.minecraft.world.level.block.Blocks.DIRT_PATH.defaultBlockState(), 3);
+                                    placed |= world.setBlock(surfaceBlock, net.minecraft.world.level.block.Blocks.DIRT_PATH.defaultBlockState(), 3);
                                 } else {
                                     // Not grass/dirt: queue for mining
                                     enqueuePathMine(surfaceBlock);
@@ -3900,17 +4091,27 @@ public class GoldGolemEntity extends PathfinderMob {
                                 var sIdent = net.minecraft.resources.Identifier.tryParse(sid);
                                 if (sIdent != null) {
                                     var sBlock = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(sIdent);
-                                    if (sBlock != null) {
-                                        long surfKey = abovePos.asLong();
-                                        if (recordPlaced(surfKey)) {
-                                            if (wouldBlockOverlapSelf(abovePos)) {
-                                                unrecordPlaced(surfKey);
-                                            } else if (!consumeBlockFromInventory(sid)) {
-                                                unrecordPlaced(surfKey);
-                                                handleMissingBuildingBlock();
-                                                return;
-                                            } else {
-                                                world.setBlock(abovePos, sBlock.defaultBlockState(), 3);
+                                    if (sBlock != null && !aboveState.is(sBlock)
+                                            && (aboveState.canBeReplaced() || isSurfaceVegetation(aboveState))
+                                            && !world.getBlockState(abovePos.below()).is(sBlock)) {
+                                        // Surface attachments belong on the floor, not the default wall face.
+                                        var placeState = sBlock.defaultBlockState();
+                                        if (placeState.hasProperty(BlockStateProperties.ATTACH_FACE)) {
+                                            placeState = placeState.setValue(BlockStateProperties.ATTACH_FACE,
+                                                    AttachFace.FLOOR);
+                                        }
+                                        // Check support and collision before recording or spending inventory.
+                                        if (placeState.canSurvive(world, abovePos)
+                                                && !wouldBlockOverlapSelf(abovePos, placeState)) {
+                                            long surfKey = abovePos.asLong();
+                                            if (recordPlaced(surfKey)) {
+                                                if (!consumeBlockFromInventory(sid)) {
+                                                    unrecordPlaced(surfKey);
+                                                    handleMissingBuildingBlock();
+                                                    return placed;
+                                                } else {
+                                                    placed |= world.setBlock(abovePos, placeState, 3);
+                                                }
                                             }
                                         }
                                     }
@@ -3953,14 +4154,14 @@ public class GoldGolemEntity extends PathfinderMob {
                             if (ninja.trek.mc.goldgolem.util.GradientSlotUtil.isMineAction(sid)) {
                                 // Step is air, mine the block below it (ground)
                                 enqueuePathMine(new BlockPos(bx, groundY, bz));
-                                return;
+                                return placed;
                             }
                             var sIdent = net.minecraft.resources.Identifier.tryParse(sid);
                             if (sIdent != null) {
                                 var sBlock = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(sIdent);
                                 if (sBlock != null) {
                                     // Avoid double consumption if step block equals base block
-                                    if (sBlock.asItem() == block.asItem()) return;
+                                    if (block != null && sBlock.asItem() == block.asItem()) return placed;
                                     long key2 = stepPos.asLong();
                                     if (recordPlaced(key2)) {
                                         var placeState = sBlock.defaultBlockState();
@@ -3976,14 +4177,14 @@ public class GoldGolemEntity extends PathfinderMob {
                                         // Prevent placing blocks inside self to avoid suffocation damage
                                         if (wouldBlockOverlapSelf(stepPos)) {
                                             unrecordPlaced(key2);
-                                            return;
+                                            return placed;
                                         }
                                         if (!consumeBlockFromInventory(sid)) {
                                             unrecordPlaced(key2);
                                             handleMissingBuildingBlock();
-                                            return;
+                                            return placed;
                                         }
-                                        world.setBlock(stepPos, placeState, 3);
+                                        placed |= world.setBlock(stepPos, placeState, 3);
                                     }
                                 }
                             }
@@ -3992,6 +4193,13 @@ public class GoldGolemEntity extends PathfinderMob {
                 }
             }
         }
+        return placed;
+    }
+
+    private static boolean isSurfaceVegetation(BlockState state) {
+        return state.getBlock() instanceof BushBlock
+                || state.getBlock() instanceof GrowingPlantBlock
+                || state.getBlock() instanceof VineBlock;
     }
 
     public void placeStripAt(double x, double y, double z, double px, double pz) {
